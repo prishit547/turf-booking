@@ -74,12 +74,14 @@ if not DEBUG:
 
 INSTALLED_APPS = [
     'jazzmin',
+    'daphne',  # must precede django.contrib.staticfiles per Channels docs, so it can hijack runserver
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -90,6 +92,7 @@ INSTALLED_APPS = [
     'user_profile',
     'boxes',
     'bookings',
+    'owner_dashboard',
     'user_dashboard',
     'chatbot',
 ]
@@ -124,6 +127,10 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'BookMyBox.wsgi.application'
+# ASGI is now the primary application (Channels/WebSocket support for the
+# slot reservation feature); WSGI is kept for tooling (e.g. collectstatic)
+# that still expects it.
+ASGI_APPLICATION = 'BookMyBox.asgi.application'
 
 
 # Database
@@ -298,17 +305,48 @@ GEMINI_API_KEY = env('GEMINI_API_KEY', '')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# FileBasedCache is shared across worker processes on a single machine,
-# unlike Django's default LocMemCache (which is per-process and would let
-# the chatbot rate limiter be bypassed by simply hitting a different
-# gunicorn worker). For a genuine multi-machine deployment, switch to Redis
-# (django-redis) — not done here since it requires new infrastructure.
+# Redis is now real infrastructure (added for the slot reservation/wait-queue
+# feature), so the cache backend upgrades from FileBasedCache to RedisCache —
+# this was already anticipated by the comment that used to live here.
+# One physical Redis instance, split by logical DB index so cache eviction,
+# pub/sub channel-layer traffic, Celery broker traffic, and reservation
+# hold/queue state (bookings/reservation.py) can never collide with each other:
+#   /0 cache   /1 channel layer   /2 celery broker+results   /3 reservation state
+REDIS_URL = env('REDIS_URL', 'redis://localhost:6379')
+
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
-        'LOCATION': BASE_DIR / 'django_cache',
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': f'{REDIS_URL}/0',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
     }
 }
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [f'{REDIS_URL}/1'],
+        },
+    },
+}
+
+# Celery — used to schedule one-shot hold-expiry checks for the slot
+# reservation queue (bookings/tasks.py). No periodic/beat schedule needed;
+# each hold schedules its own single apply_async(eta=...) check.
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', f'{REDIS_URL}/2')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', f'{REDIS_URL}/2')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Dedicated logical DB for reservation hold/queue state (bookings/reservation.py) —
+# kept separate from the Django cache DB so cache eviction policy can never
+# touch reservation keys.
+REDIS_RESERVATION_URL = env('REDIS_RESERVATION_URL', f'{REDIS_URL}/3')
 
 LOGGING = {
     'version': 1,

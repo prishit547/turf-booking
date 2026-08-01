@@ -1,0 +1,8 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # No persistence volume: hold/queue state is intentionally ephemeral —
+    # losing it on a restart just means in-flight reservations reset, which
+    # bookings/tasks.py's expiry checks already handle defensively.
