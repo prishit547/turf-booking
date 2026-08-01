@@ -4,7 +4,7 @@ import { motion, useScroll, useTransform } from 'framer-motion';
 import { Eye, EyeOff, Mail, Lock, ArrowRight, Sparkles } from 'lucide-react';
 import { useAuth } from '../api.jsx';
 import GoogleLoginButton from '../components/common/GoogleLoginButton.jsx';
-import { animations, gradientText, shadows, glassMorphism } from '../utils/animations';
+import { animations, gradientText, shadows } from '../utils/animations';
 import { EnhancedButton, EnhancedCard, EnhancedInput } from '../components/common/EnhancedComponents';
 
 const Login = () => {
@@ -328,7 +328,7 @@ const Login = () => {
               transition={{ delay: 1.6, duration: 0.6 }}
             >
               <p className="text-gray-600 dark:text-gray-300">
-                Don't have an account?{' '}
+                Don&apos;t have an account?{' '}
                 <Link
                   to="/signup"
                   className="font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"

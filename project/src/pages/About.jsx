@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { Target, Users, Award, Zap, Heart, Shield, Sparkles, Star, ArrowRight } from 'lucide-react'
-import { animations, gradientText, shadows, glassMorphism, useScrollAnimation } from '../utils/animations'
+import { animations, gradientText, useScrollAnimation } from '../utils/animations'
 import { EnhancedButton, EnhancedCard, EnhancedBadge } from '../components/common/EnhancedComponents'
 import useCountAnimation from '../hooks/useCountAnimation'
 import { Link } from 'react-router-dom'
@@ -123,14 +123,14 @@ const About = () => {
               whileHover={{ scale: 1.05 }}
             >
               <Sparkles size={20} />
-              <span className="font-semibold">India's #1 Sports Booking Platform</span>
+              <span className="font-semibold">India&apos;s #1 Sports Booking Platform</span>
             </motion.div>
             
             <h1 className={`text-5xl lg:text-7xl font-bold mb-8 ${gradientText}`}>
               About BookMyBox
             </h1>
             <p className="text-xl lg:text-2xl text-gray-600 dark:text-gray-300 leading-relaxed mb-12">
-              We're revolutionizing how people discover, book, and enjoy sports facilities. 
+              We&apos;re revolutionizing how people discover, book, and enjoy sports facilities.
               Our platform connects sports enthusiasts with premium venues across India, 
               making it easier than ever to play your favorite sport.
             </p>
@@ -210,7 +210,7 @@ const About = () => {
               Why Choose BookMyBox?
             </h2>
             <p className="text-xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto">
-              We're more than just a booking platform. We're your partner in making sports accessible and enjoyable.
+              We&apos;re more than just a booking platform. We&apos;re your partner in making sports accessible and enjoyable.
             </p>
           </motion.div>
 
@@ -220,7 +220,7 @@ const About = () => {
             initial="initial"
             whileInView="animate"
           >
-            {features.map((feature, index) => (
+            {features.map((feature) => (
               <motion.div
                 key={feature.title}
                 variants={animations.staggerItem}
@@ -274,7 +274,7 @@ const About = () => {
             initial="initial"
             whileInView="animate"
           >
-            {team.map((member, index) => (
+            {team.map((member) => (
               <motion.div
                 key={member.name}
                 variants={animations.staggerItem}
@@ -341,7 +341,7 @@ const About = () => {
                   In 2025, we set out to solve this problem by creating a platform that would make sports booking as easy as ordering food online. We started with a handful of cricket boxes in Mumbai and have since expanded to over 500 facilities across 50+ cities.
                 </p>
                 <p className="text-lg">
-                  Today, BookMyBox is India's leading sports facility booking platform, trusted by thousands of players and facility owners. But we're just getting started – our vision is to make sports accessible to every Indian, in every city, at every skill level.
+                  Today, BookMyBox is India&apos;s leading sports facility booking platform, trusted by thousands of players and facility owners. But we&apos;re just getting started – our vision is to make sports accessible to every Indian, in every city, at every skill level.
                 </p>
               </div>
               
@@ -432,7 +432,7 @@ const About = () => {
               Ready to Play?
             </h2>
             <p className="text-xl lg:text-2xl opacity-90 mb-12 leading-relaxed">
-              Whether you're a player looking for your next game or a facility owner wanting to reach more customers, we're here to help you succeed.
+              Whether you&apos;re a player looking for your next game or a facility owner wanting to reach more customers, we&apos;re here to help you succeed.
             </p>
             
             <motion.div 

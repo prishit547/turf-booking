@@ -6,10 +6,11 @@ const BookingContext = createContext();
 
 const bookingReducer = (state, action) => {
     switch (action.type) {
-        case 'SET_BOOKINGS':
+        case 'SET_BOOKINGS': {
             // Ensure payload is always an array
             const newBookings = Array.isArray(action.payload) ? action.payload : [];
             return { ...state, bookings: newBookings, error: null };
+        }
         case 'ADD_BOOKING':
             // Ensure state.bookings is an array before spreading
             return { ...state, bookings: Array.isArray(state.bookings) ? [...state.bookings, action.payload] : [action.payload], error: null };

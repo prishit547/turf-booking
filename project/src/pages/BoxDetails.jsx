@@ -69,7 +69,7 @@ const BoxDetails = () => {
                 const res = await api.get('/dashboard/favorites/');
                 const favs = res.data || [];
                 setIsFavorite(favs.some(fav => fav.id === box.id));
-            } catch (e) {
+            } catch {
                 // Ignore error
             }
         };
@@ -118,7 +118,7 @@ const BoxDetails = () => {
             toast.success('Added to favorites!');
             setIsFavorite(true);
             window.dispatchEvent(new Event('favorite-added'));
-        } catch (err) {
+        } catch {
             toast.error('Could not add to favorites');
         } finally {
             setFavoriteLoading(false);

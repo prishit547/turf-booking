@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Mail, Phone, MapPin, Clock, Send, MessageCircle, Sparkles, ArrowRight, CheckCircle, AlertCircle } from 'lucide-react';
 import emailjs from '@emailjs/browser';
-import { animations, gradientText, shadows, glassMorphism, useScrollAnimation } from '../utils/animations';
+import { animations, gradientText, useScrollAnimation } from '../utils/animations';
 import { EnhancedButton, EnhancedCard, EnhancedInput, EnhancedBadge } from '../components/common/EnhancedComponents';
 
 const Contact = () => {
@@ -210,14 +210,14 @@ const Contact = () => {
               whileHover={{ scale: 1.05 }}
             >
               <MessageCircle size={20} />
-              <span className="font-semibold">We're Here to Help</span>
+              <span className="font-semibold">We&apos;re Here to Help</span>
             </motion.div>
             
             <h1 className={`text-5xl lg:text-7xl font-bold mb-8 ${gradientText}`}>
               Get in Touch
             </h1>
             <p className="text-xl lg:text-2xl text-gray-600 dark:text-gray-300 leading-relaxed">
-              Have questions? We'd love to hear from you. Send us a message and we'll respond as soon as possible.
+              Have questions? We&apos;d love to hear from you. Send us a message and we&apos;ll respond as soon as possible.
             </p>
           </motion.div>
         </div>
@@ -237,7 +237,7 @@ const Contact = () => {
             initial="initial"
             whileInView="animate"
           >
-            {contactInfo.map((info, index) => (
+            {contactInfo.map((info) => (
               <motion.div
                 key={info.title}
                 variants={animations.staggerItem}
@@ -513,7 +513,7 @@ const Contact = () => {
                     { days: 'Monday - Friday', hours: '8:00 AM - 6:00 PM' },
                     { days: 'Saturday', hours: '9:00 AM - 4:00 PM' },
                     { days: 'Sunday', hours: 'Closed' }
-                  ].map((schedule, index) => (
+                  ].map((schedule) => (
                     <motion.div 
                       key={schedule.days}
                       className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg"
@@ -544,7 +544,7 @@ const Contact = () => {
                     { title: 'Frequently Asked Questions', href: '#faq' },
                     { title: 'Support Center', href: 'mailto:support@bookmybox.com' },
                     { title: 'Partner with Us', href: '#contact-form' },
-                  ].map((link, index) => (
+                  ].map((link) => (
                     <motion.a
                       key={link.title}
                       href={link.href}

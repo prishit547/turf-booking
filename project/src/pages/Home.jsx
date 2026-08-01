@@ -1,14 +1,14 @@
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Star, Users, MapPin, Play, Shield, Zap, Heart, Trophy, Clock, Target } from 'lucide-react'
+import { ArrowRight, Star, Users, MapPin, Play, Shield, Zap, Heart, Trophy, Target } from 'lucide-react'
 import { useBox } from '../context/BoxContext'
 import Loader from '../components/common/Loader'
 import Chatbot from '../components/common/Chatbot'
 import { useAuth } from '../api.jsx'
 import useCountAnimation from '../hooks/useCountAnimation'
-import { animations, gradientText, shadows, useScrollAnimation, glassMorphism } from '../utils/animations'
-import { EnhancedButton, EnhancedCard, EnhancedStatsCard } from '../components/common/EnhancedComponents'
+import { animations, gradientText, shadows, useScrollAnimation } from '../utils/animations'
+import { EnhancedButton, EnhancedCard } from '../components/common/EnhancedComponents'
 import { MEDIA_BASE_URL } from '../api'
 
 const Home = () => {
@@ -307,7 +307,7 @@ const Home = () => {
             whileInView="animate"
             viewport={{ once: true }}
           >
-            {sports.map((sport, index) => (
+            {sports.map((sport) => (
               <motion.div
                 key={sport.name}
                 variants={animations.staggerItem}
@@ -582,7 +582,7 @@ const Home = () => {
               whileInView="animate"
               viewport={{ once: true }}
             >
-              {popularBoxes.map((box, index) => (
+              {popularBoxes.map((box) => (
                 <motion.div
                   key={box.id}
                   variants={animations.staggerItem}

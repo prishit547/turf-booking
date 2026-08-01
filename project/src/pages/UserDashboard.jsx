@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useAuth, api } from '../api.jsx'; // Import 'api' from your Auth context file
 import { useBooking } from '../context/BookingContext';
 import { parseBookingDateTime } from '../utils/date';
@@ -21,21 +21,18 @@ import {
   Target,
   Activity,
   BarChart3,
-  Sparkles,
-  Star,
-  MapPin
+  Sparkles
 } from 'lucide-react';
 
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement } from 'chart.js';
-import { Doughnut, Line, Bar } from 'react-chartjs-2';
 import {
   EnhancedSportDistribution,
   BookingActivityChart,
   PeakHoursChart,
   MonthlySpendingChart,
 } from '../components/common/AdvancedCharts';
-import { animations, gradientText, shadows, glassMorphism, useScrollAnimation } from '../utils/animations';
-import { EnhancedButton, EnhancedCard, EnhancedBadge } from '../components/common/EnhancedComponents';
+import { animations } from '../utils/animations';
+import { EnhancedButton, EnhancedCard } from '../components/common/EnhancedComponents';
 import Badge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
 
@@ -209,133 +206,6 @@ const UserDashboard = () => {
   };
 
 
-  // --- Chart Data & Options ---
-  const doughnutData = {
-    labels: analyticsData?.sport_distribution?.map(item => item.sport) || ['No Data'],
-    datasets: [{
-      data: analyticsData?.sport_distribution?.map(item => item.percentage) || [100],
-      backgroundColor: analyticsData?.sport_distribution?.length > 0 ? ['#4CAF50', '#2196F3', '#FFC107', '#9C27B0', '#00BCD4'] : ['#cccccc'],
-      hoverOffset: 4
-    }]
-  };
-
-  const lineData = {
-    labels: analyticsData?.monthly_spending?.map(item => item.month) || [],
-    datasets: [{
-      label: 'Monthly Spending (₹)',
-      data: analyticsData?.monthly_spending?.map(item => item.total_spent) || [],
-      borderColor: 'rgb(16, 185, 129)',
-      tension: 0.1,
-      fill: false,
-    }]
-  };
-
-  const barData = {
-    labels: analyticsData?.activity_by_day?.map(item => item.day_of_week) || [],
-    datasets: [{
-      label: 'Hours Played',
-      data: analyticsData?.activity_by_day?.map(item => item.total_hours) || [],
-      backgroundColor: 'rgba(75, 192, 192, 0.6)',
-      borderColor: 'rgba(75, 192, 192, 1)',
-      borderWidth: 1,
-    }]
-  };
-
-
-  const doughnutOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'right',
-        labels: {
-          usePointStyle: true,
-          font: {
-            size: 14,
-          },
-          color: '#374151',
-        },
-      },
-      tooltip: {
-        callbacks: {
-          label: function (context) {
-            let label = context.label || '';
-            if (label) {
-              label += ': ';
-            }
-            if (context.parsed !== null) {
-              label += context.parsed + '%';
-            }
-            return label;
-          },
-        },
-      },
-    },
-  };
-
-  const lineChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'top',
-      },
-      title: {
-        display: true,
-        text: 'Monthly Spending',
-      },
-    },
-    scales: {
-      x: {
-        grid: {
-          display: false,
-        },
-      },
-      y: {
-        beginAtZero: true,
-        grid: {
-          color: '#e5e7eb',
-        },
-        ticks: {
-          callback: function (value) {
-            return '₹' + value;
-          },
-        },
-      },
-    },
-  };
-
-  const barChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: false,
-      },
-      title: {
-        display: true,
-        text: 'Activity by Day of Week',
-      },
-    },
-    scales: {
-      x: {
-        grid: {
-          display: false,
-        },
-      },
-      y: {
-        beginAtZero: true,
-        grid: {
-          color: '#e5e7eb',
-        },
-        title: {
-          display: true,
-          text: 'Hours Played',
-        },
-      },
-    },
-  };
-
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
@@ -485,7 +355,7 @@ const UserDashboard = () => {
                 </div>
                 <div className="bg-green-50 dark:bg-green-900/30 p-4 sm:p-6 rounded-lg shadow flex flex-col sm:flex-row items-center sm:justify-between gap-2 sm:gap-0">
                   <div className="text-center sm:text-left">
-                    <p className="text-xs sm:text-sm font-medium text-green-600 dark:text-green-400">This Month's Bookings</p>
+                    <p className="text-xs sm:text-sm font-medium text-green-600 dark:text-green-400">This Month&apos;s Bookings</p>
                     <p className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mt-1">
                       {analyticsLoading ? '...' : (analyticsData?.this_month_bookings || 0)}
                     </p>
@@ -614,7 +484,7 @@ const UserDashboard = () => {
                 <div className="text-center py-10 text-red-500">Error: {error}</div>
               ) : bookings.length === 0 ? (
                 <div className="text-center py-10 bg-gray-50 rounded-lg shadow-sm">
-                  <p className="text-lg text-gray-600 mb-4">You don't have any bookings yet.</p>
+                  <p className="text-lg text-gray-600 mb-4">You don&apos;t have any bookings yet.</p>
                   <button
                     onClick={() => navigate('/boxes')}
                     className="px-6 py-3 bg-primary-600 text-white rounded-lg shadow-md hover:bg-primary-700 transition-colors duration-200 text-lg"
@@ -852,7 +722,7 @@ const UserDashboard = () => {
                         loading={analyticsLoading}
                       />
                       <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">
-                        When you're most active during the week
+                        When you&apos;re most active during the week
                       </div>
                     </div>
 
@@ -1046,7 +916,7 @@ const UserDashboard = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {favoriteBoxes.filter(Boolean).map((fav, idx) => {
+                  {favoriteBoxes.filter(Boolean).map((fav) => {
                     // Use flat structure as per backend response
                     return (
                       <div key={fav.id} className="bg-white p-6 rounded-lg shadow flex flex-col justify-between border border-gray-200 hover:shadow-md transition-shadow duration-150">

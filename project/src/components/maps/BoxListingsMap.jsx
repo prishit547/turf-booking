@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { motion } from 'framer-motion';
-import { MapPin, Navigation, Star, DollarSign, AlertCircle, Search, X, Users } from 'lucide-react';
+import { MapPin, Navigation, Star, DollarSign, Search, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import 'leaflet/dist/leaflet.css';

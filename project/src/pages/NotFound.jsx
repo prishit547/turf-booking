@@ -1,9 +1,8 @@
-import React from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Home, Search, ArrowLeft, Sparkles } from 'lucide-react';
+import { Home, Search, Sparkles } from 'lucide-react';
 import { EnhancedButton } from '../components/common/EnhancedComponents';
-import { animations, gradientText, glassMorphism } from '../utils/animations';
+import { gradientText, glassMorphism } from '../utils/animations';
 
 const NotFound = () => {
     return (
@@ -130,8 +129,8 @@ const NotFound = () => {
                         transition={{ delay: 0.6 }}
                         className="text-lg text-gray-600 dark:text-gray-300 mb-8 leading-relaxed"
                     >
-                        The page you're looking for seems to have wandered off the field. 
-                        Let's get you back to booking amazing sports facilities!
+                        The page you&apos;re looking for seems to have wandered off the field.
+                        Let&apos;s get you back to booking amazing sports facilities!
                     </motion.p>
 
                     {/* Suggestions */}
@@ -142,7 +141,7 @@ const NotFound = () => {
                         className="mb-8"
                     >
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                            Here's what you can do:
+                            Here&apos;s what you can do:
                         </h3>
                         <div className="grid gap-3 text-left">
                             <div className="flex items-center text-gray-600 dark:text-gray-300">
