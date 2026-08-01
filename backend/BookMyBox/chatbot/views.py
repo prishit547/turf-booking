@@ -3,12 +3,12 @@ import uuid
 
 import google.generativeai as genai
 from django.views.decorators.http import require_http_methods
-from django.core.cache import cache
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from BookMyBox.rate_limit import check_rate_limit
 from .models import ChatConversation, ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -94,12 +94,7 @@ def _get_rate_limit_key(user):
 
 def _check_rate_limit(user, limit=20, window=60):
     """Return True if the user is within the rate limit."""
-    key = _get_rate_limit_key(user)
-    current = cache.get(key, 0)
-    if current >= limit:
-        return False
-    cache.set(key, current + 1, timeout=window)
-    return True
+    return check_rate_limit(_get_rate_limit_key(user), limit, window)
 
 
 @api_view(['POST'])

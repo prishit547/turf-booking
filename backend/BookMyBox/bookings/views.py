@@ -11,11 +11,19 @@ from django.utils import timezone
 from datetime import datetime, timedelta, time, date
 from django.conf import settings
 
+from BookMyBox.rate_limit import check_rate_limit
 from . import broadcasting, reservation
 from .models import Booking
 from .serializers import BookingSerializer
 from .tasks import expire_hold_task, promote_and_broadcast
 from boxes.models import Box
+
+# Deliberately tighter than the chatbot's 20/60s: a reserve() call claims a
+# real contended resource (or a queue slot for one), not just a chat
+# message, so there's less legitimate reason to call it rapidly — a user
+# comparing a few time slots in a row is still well within this budget.
+RESERVE_RATE_LIMIT = 10
+RESERVE_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 class BookingWriteError(Exception):
@@ -186,6 +194,18 @@ class BookingViewSet(viewsets.ModelViewSet):
         contended slot (short-lived hold, time to confirm) or join its FIFO
         wait queue. See bookings/reservation.py for the Redis mechanics —
         this view only does the DB pre-check and schedules the hold's expiry."""
+        # Checked before any other work, same as the chatbot's rate limiter —
+        # reject cheaply rather than doing validation/Redis work for a
+        # request we're going to refuse anyway. Without this, nothing stops
+        # a user from spamming holds across many boxes to grief other users
+        # (hold, let it sit until TTL, repeat).
+        rate_limit_key = f"reserve_ratelimit_user_{request.user.id}"
+        if not check_rate_limit(rate_limit_key, RESERVE_RATE_LIMIT, RESERVE_RATE_LIMIT_WINDOW_SECONDS):
+            return Response(
+                {'detail': "You're reserving slots too quickly. Please wait a moment and try again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         parsed = self._validate_booking_request(request.data)
 
         # Cheap read-only pre-check: if a real booking already covers this

@@ -9,6 +9,7 @@ locking behavior that TransactionTestCase's real-commit semantics expose.
 from concurrent.futures import ThreadPoolExecutor
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TransactionTestCase
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -79,6 +80,56 @@ class ReserveTests(ReserveConfirmFlowTestCase):
         )
         response = self.client_b.post('/api/bookings/reserve/', self._reserve_payload(), format='json')
         self.assertEqual(response.status_code, 409)
+
+
+class ReserveRateLimitTests(ReserveConfirmFlowTestCase):
+    """The rate limit lives in the default Django cache (Redis DB /0, see
+    settings.py), a separate logical DB from reservation.py's hold/queue
+    state (/3) — needs its own clearing so these tests don't interfere
+    with each other or leak into other test runs."""
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
+
+    def test_blocked_after_exceeding_the_limit_in_the_window(self):
+        payload = self._reserve_payload()
+        for _ in range(10):
+            response = self.client_a.post('/api/bookings/reserve/', payload, format='json')
+            self.assertNotEqual(response.status_code, 429)
+
+        response = self.client_a.post('/api/bookings/reserve/', payload, format='json')
+        self.assertEqual(response.status_code, 429)
+        self.assertIn('too quickly', response.data['detail'])
+
+    def test_scoped_per_user_not_global(self):
+        payload = self._reserve_payload()
+        for _ in range(10):
+            self.client_a.post('/api/bookings/reserve/', payload, format='json')
+        blocked = self.client_a.post('/api/bookings/reserve/', payload, format='json')
+        self.assertEqual(blocked.status_code, 429)
+
+        # user_a being rate-limited doesn't affect user_b — a different
+        # slot so user_b isn't just getting queued behind user_a's hold.
+        other_slot = dict(payload, startTime='11:00')
+        allowed = self.client_b.post('/api/bookings/reserve/', other_slot, format='json')
+        self.assertNotEqual(allowed.status_code, 429)
+
+    def test_does_not_block_the_direct_create_endpoint(self):
+        # The rate limit is specifically on reserve() (the contended-slot
+        # path) — the plain, non-contended create() endpoint is unaffected.
+        payload = self._reserve_payload()
+        for _ in range(11):
+            self.client_a.post('/api/bookings/reserve/', payload, format='json')
+
+        response = self.client_a.post('/api/bookings/', {
+            'boxId': self.box.id, 'date': '2030-01-16', 'startTime': '10:00', 'duration': 1,
+        }, format='json')
+        self.assertNotEqual(response.status_code, 429)
 
 
 class ConfirmTests(ReserveConfirmFlowTestCase):
