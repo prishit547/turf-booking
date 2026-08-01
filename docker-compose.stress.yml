@@ -7,12 +7,24 @@
 # test, read the results).
 #
 # Allocation (sums to 2.0 CPU / ~1.75GB, leaving headroom for OS/Docker
-# daemon overhead a real 2GB VM would also lose to the host):
-#   backend (Daphne/Django): 1.0 cpu / 768m  — the actual app under test
-#   celery_worker:           0.3 cpu / 256m
-#   db (postgres):           0.5 cpu / 512m
-#   redis:                   0.1 cpu / 128m
-#   frontend (nginx):        0.1 cpu / 64m
+# daemon overhead a real 2GB VM would also lose to the host).
+#
+# Went through two rebalancing passes:
+#  1. First pass gave backend more CPU (funded by trimming db/redis/frontend,
+#     which had spare capacity) since backend was the bottleneck. That alone
+#     helped CPU-bound work, but backend also switched to 2 worker processes
+#     in this same round — which, combined with DB_CONN_MAX_AGE=0 (each
+#     request opens a fresh Postgres connection), doubled concurrent
+#     connection churn against a db container that pass had just given LESS
+#     CPU. Non-cached, DB-heavy endpoints (booked_slots, dashboard_analytics)
+#     measurably got worse, not better.
+#  2. This pass gives db back more room than backend keeps, since it's now
+#     serving twice the concurrent connection attempts it was tuned for.
+#   backend (gunicorn+uvicorn, 2 workers): 1.2 cpu / 700m
+#   db (postgres):                         0.5 cpu / 512m
+#   celery_worker:                         0.15 cpu / 320m
+#   redis:                                 0.1 cpu / 128m
+#   frontend (nginx):                      0.05 cpu / 64m
 services:
   db:
     cpus: 0.5
@@ -21,11 +33,11 @@ services:
     cpus: 0.1
     mem_limit: 128m
   backend:
-    cpus: 1.0
-    mem_limit: 768m
+    cpus: 1.2
+    mem_limit: 700m
   celery_worker:
-    cpus: 0.3
-    mem_limit: 256m
+    cpus: 0.15
+    mem_limit: 320m
   frontend:
-    cpus: 0.1
+    cpus: 0.05
     mem_limit: 64m

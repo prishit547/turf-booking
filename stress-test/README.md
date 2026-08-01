@@ -41,6 +41,15 @@ LLM API here without it costing real money per request.
 ## Last results
 
 See the report shared alongside this tooling for the full write-up. Two real bugs and one real
-perf issue were found and fixed this way, all now in the main codebase — see the comments above
-`DATABASES` and `SECURE_PROXY_SSL_HEADER`/`SECURE_SSL_REDIRECT` in `settings.py`,
-`get_permissions()` in `bookings/views.py`, and `get_queryset()` in `boxes/views.py`.
+perf issue were found and fixed in the first pass — see the comments above `DATABASES` and
+`SECURE_PROXY_SSL_HEADER`/`SECURE_SSL_REDIRECT` in `settings.py`, `get_permissions()` in
+`bookings/views.py`, and `get_queryset()` in `boxes/views.py`.
+
+A second pass (multi-worker gunicorn+uvicorn, Redis response caching on the hot public box
+endpoints, and a resource rebalance — see `docker-entrypoint.sh`, `PUBLIC_BOX_CACHE_TTL` in
+`boxes/views.py`, and the comments in `docker-compose.stress.yml`) roughly doubled sustained
+mixed-traffic throughput at realistic concurrency (50-150 users). It's not a uniform win: two
+non-cached, DB-heavy endpoints (`booked_slots`, `dashboard_analytics`) got measurably *slower*
+in isolation, because doubling worker processes doubles concurrent Postgres connection churn
+under `DB_CONN_MAX_AGE=0` — a real tradeoff, not a bug, documented in `docker-compose.stress.yml`
+and worth knowing before assuming "more workers" is free.

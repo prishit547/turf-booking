@@ -61,21 +61,38 @@ alongside Django, not just one WSGI process:
    -d redis` (see the `docker-compose.yml` at the repo root).
 2. **An ASGI server**, not `gunicorn BookMyBox.wsgi:application` — the app
    now serves WebSocket traffic (`/ws/bookings/slot/...`) alongside normal
-   HTTP, which WSGI can't do. `daphne` is included in `requirements.txt`:
+   HTTP, which WSGI can't do. `docker-entrypoint.sh` (the Docker deployment's
+   default, see below) runs multiple worker processes via gunicorn+uvicorn:
    ```bash
-   daphne -b 0.0.0.0 -p 8000 BookMyBox.asgi:application
+   gunicorn BookMyBox.asgi:application -k uvicorn.workers.UvicornWorker \
+     --workers 2 --bind 0.0.0.0:8000 --timeout 60
    ```
-   (`gunicorn -k uvicorn.workers.UvicornWorker BookMyBox.asgi:application`
-   is an equally valid alternative if you'd rather keep gunicorn as the
-   process supervisor — either works, Daphne was chosen here since it's
-   Channels' own reference server.)
+   A single ASGI process is one Python process on one core — a stress test
+   found the backend GIL/CPU-saturated with throughput completely flat
+   regardless of concurrency (10 through 150 concurrent users all got the
+   same ~25-30 requests/sec). Multiple worker processes let concurrent
+   requests actually run in parallel instead of all queueing behind one
+   process; verified this roughly doubled sustained throughput at realistic
+   concurrency (50-150 users) with no loss of WebSocket functionality
+   (uvicorn's ASGI3 implementation handles the same websocket scope Channels
+   needs). `daphne -b 0.0.0.0 -p 8000 BookMyBox.asgi:application` (single
+   process, still in `requirements.txt`) remains a valid alternative if
+   you'd rather keep Daphne as the process supervisor — Channels' own
+   reference server — at the cost of that concurrency ceiling.
 3. **A Celery worker** — schedules and fires the one-shot hold-expiry checks
    that make the wait-queue cascade (a hold expires -> the next queued user
    is promoted -> their own expiry gets scheduled -> ...). No Celery Beat/
    periodic schedule is needed, just a running worker:
    ```bash
-   celery -A BookMyBox worker -l info
+   celery -A BookMyBox worker -l info --concurrency=2
    ```
+   The explicit `--concurrency` matters: Celery's prefork pool defaults to
+   `multiprocessing.cpu_count()`, which reads the *host's* CPU count, not a
+   container's cgroup limit — a stress test found it forking 8 worker
+   processes (the test host's core count) inside a container capped at a
+   fraction of one core, each a full Django process, sitting at the memory
+   limit for no throughput benefit. Set it to roughly the CPU actually
+   allocated to the container.
 
 This is a real operational complexity increase over the previous
 single-process WSGI setup — three processes instead of one, plus a Redis
@@ -86,8 +103,9 @@ cascade behavior without some out-of-request-cycle scheduling mechanism.
 ## Docker deployment
 
 `docker-compose.prod.yml` (repo root) packages the whole stack described
-above — Postgres, Redis, the Django backend (Daphne), a Celery worker, and
-the React frontend (built and served by nginx) — into six services. This is
+above — Postgres, Redis, the Django backend (gunicorn+uvicorn), a Celery
+worker, and the React frontend (built and served by nginx) — into six
+services. This is
 separate from the root `docker-compose.yml`, which only runs a disposable
 local Redis for day-to-day dev.
 
@@ -142,6 +160,16 @@ A few things worth knowing about how this compose file is put together:
   DNS-resolved IP for the old `backend` container and return 502s until
   `frontend` is restarted too. Recreating the whole stack together (as
   the command above does) doesn't hit this.
+- **The public box endpoints (`list`/`retrieve`/`featured`/`popular` on
+  `PublicBoxViewSet`) are response-cached for `PUBLIC_BOX_CACHE_TTL` seconds**
+  (`boxes/views.py`, default 15s) via Django's Redis-backed cache — a stress
+  test found them the most-hit read endpoints, and caching cut their latency
+  roughly 3-5x. This means a newly-approved or newly-edited box can take up
+  to that TTL to show up publicly; bounded staleness already used elsewhere
+  in this app (the frontend polls `booked_slots` every 30s for the same
+  reason). `nearby` is deliberately not cached — its cache key would be the
+  exact lat/lng query string, and real GPS coordinates are high-cardinality
+  enough that caching it would mostly consume cache space without hits.
 
 ## Environment checklist before deploying
 
@@ -153,6 +181,15 @@ A few things worth knowing about how this compose file is put together:
 - `REDIS_URL` set to your production Redis instance (see above — required
   now, not optional, for cache/channel-layer/Celery/reservation state)
 - `GEMINI_API_KEY` / `GOOGLE_CLIENT_ID` set if those features are needed in production
+- `WEB_CONCURRENCY` / `CELERY_CONCURRENCY` sized to the CPU actually
+  allocated to their containers (see "Process model" above) — both default
+  to 2, which is tuned for `docker-compose.stress.yml`'s specific profile,
+  not a universal number.
+- `DB_CONN_MAX_AGE` — 0 is the safe default for constrained/default-tuned
+  Postgres (see the comment above `DATABASES` in `settings.py`); raise it
+  only once you've either tuned Postgres's `max_connections` for the
+  connection volume `WEB_CONCURRENCY` worker processes will generate, or
+  put a pooler (PgBouncer) in front of it.
 
 ## Known limitations (intentionally out of scope for this pass)
 

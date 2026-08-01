@@ -8,6 +8,8 @@ from rest_framework import filters as drf_filters
 from django.db import models
 from django.utils import timezone
 from django.core.files.storage import default_storage
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 import math
 
 from .models import Box, Review
@@ -42,10 +44,30 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+# Response cache TTL for the public box endpoints below. Short enough that
+# a newly-approved or newly-edited box shows up quickly, long enough to
+# absorb the bulk of repeat traffic — a stress test found box listing/detail
+# to be the most-hit read endpoints and, even after fixing their N+1 query,
+# still meaningfully CPU/DB cost on a resource-constrained deployment.
+# Bounded staleness here is an accepted tradeoff already used elsewhere in
+# this app (the frontend polls booked_slots every 30s for the same reason).
+PUBLIC_BOX_CACHE_TTL = 15
+
+
+@method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL), name='list')
+@method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL), name='retrieve')
 class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
     """
     This viewset provides PUBLIC read-only access to approved boxes.
     It handles listing, retrieving, searching, and nearby functionality.
+
+    list/retrieve/featured/popular are cached (see PUBLIC_BOX_CACHE_TTL) —
+    all four return identical content regardless of who's asking (BoxSerializer
+    has no per-user fields, and permission_classes here only gates writes, not
+    reads), so caching by URL is safe. nearby is deliberately NOT cached: its
+    cache key would be the exact lat/lng query string, and real GPS
+    coordinates are high-cardinality enough that caching it would mostly
+    just consume cache space without ever getting a hit.
     """
     queryset = Box.objects.filter(status='approved').order_by('id')
     serializer_class = BoxSerializer
@@ -71,6 +93,7 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
     # --- ADDED THE TWO MISSING ACTIONS BELOW ---
 
     @action(detail=False, methods=['get'])
+    @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL))
     def featured(self, request):
         """
         This new function creates the /api/boxes/featured/ URL.
@@ -80,11 +103,12 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         # If your field is named differently, please change the filter below.
         # For example, if it's called 'is_premium', change to .filter(is_premium=True)
         featured_boxes = self.get_queryset().filter(is_featured=True)
-        
+
         serializer = self.get_serializer(featured_boxes, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
+    @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL))
     def popular(self, request):
         """
         This new function creates the /api/boxes/popular/ URL.
