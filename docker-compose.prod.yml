@@ -1,0 +1,103 @@
+# Full containerized stack for deployment: Postgres, Redis, the Django
+# backend (served over ASGI by Daphne, since the reservation feature needs
+# WebSockets), a Celery worker for the hold-expiry cascade, and the React
+# frontend built and served by nginx (which also proxies /api, /admin, /ws,
+# /media, /static to the backend — see frontend/nginx.conf).
+#
+# This is separate from the root docker-compose.yml, which only runs a
+# disposable local Redis for day-to-day dev (see README.md/DEPLOYMENT.md).
+#
+# Usage:
+#   cp .env.docker.example .env.docker   # fill in real secrets first
+#   docker compose -f docker-compose.prod.yml --env-file .env.docker up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: ./backend/BookMyBox
+    command: ["migrate"]
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build: ./backend/BookMyBox
+    command: ["web"]
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  celery_worker:
+    build: ./backend/BookMyBox
+    command: ["worker"]
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+        VITE_EMAILJS_SERVICE_ID: ${VITE_EMAILJS_SERVICE_ID}
+        VITE_EMAILJS_TEMPLATE_ID: ${VITE_EMAILJS_TEMPLATE_ID}
+        VITE_EMAILJS_PUBLIC_KEY: ${VITE_EMAILJS_PUBLIC_KEY}
+    ports:
+      - "80:80"
+    volumes:
+      - static_volume:/usr/share/nginx/static:ro
+      - media_volume:/usr/share/nginx/media:ro
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  static_volume:
+  media_volume:

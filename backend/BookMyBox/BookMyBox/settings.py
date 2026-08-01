@@ -62,7 +62,23 @@ if DEBUG and any(
 # (DEBUG=True) so plain http://localhost workflows aren't broken by forced
 # HTTPS redirects or secure-only cookies.
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    # This app is always deployed behind a reverse proxy (nginx in
+    # docker-compose.prod.yml, or an equivalent in front of it) that talks
+    # plain HTTP to Daphne — Django's own connection is never "secure" by
+    # itself. Without telling Django which header carries the proxy's real
+    # scheme, SECURE_SSL_REDIRECT below 301-redirects every single request
+    # to https, including ones that arrived as http with nothing behind
+    # them terminating TLS: a redirect loop / dead end. Trust the proxy's
+    # X-Forwarded-Proto instead (nginx sets this from its own $scheme, so
+    # it correctly reflects whether TLS was actually terminated upstream).
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # Defaults on (secure-by-default for a "real" production deploy sitting
+    # behind a TLS-terminating load balancer/ingress). docker-compose.prod.yml
+    # ships no TLS termination of its own (that needs a real domain + cert,
+    # out of scope here — see DEPLOYMENT.md), so its .env.docker explicitly
+    # sets this to False; a deployment that does add TLS in front of it
+    # should leave this at its default True.
+    SECURE_SSL_REDIRECT = env('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 3600  # start conservative; raise once HTTPS is confirmed stable

@@ -34,6 +34,10 @@ npm run dev
   an index — a couple are flagged as stale, read that first).
 - `docker-compose.yml` — a disposable local Redis instance for the backend
   (`docker compose up -d redis`).
+- `docker-compose.prod.yml` — the full containerized stack for deployment
+  (Postgres, Redis, backend, Celery worker, and the frontend built and
+  served by nginx). See the "Docker deployment" section in
+  [`backend/BookMyBox/DEPLOYMENT.md`](backend/BookMyBox/DEPLOYMENT.md).
 - `.github/workflows/ci.yml` — lints/tests both subsystems on push (backend
   Django tests against a Redis service container; frontend lint, vitest,
   and a production build).

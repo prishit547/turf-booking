@@ -83,6 +83,66 @@ dependency. It's the cost of the reservation feature actually working
 correctly under contention; there isn't a way to get the hold/queue/
 cascade behavior without some out-of-request-cycle scheduling mechanism.
 
+## Docker deployment
+
+`docker-compose.prod.yml` (repo root) packages the whole stack described
+above — Postgres, Redis, the Django backend (Daphne), a Celery worker, and
+the React frontend (built and served by nginx) — into six services. This is
+separate from the root `docker-compose.yml`, which only runs a disposable
+local Redis for day-to-day dev.
+
+```bash
+cp .env.docker.example .env.docker   # fill in real SECRET_KEY, POSTGRES_PASSWORD, etc.
+docker compose -f docker-compose.prod.yml --env-file .env.docker up --build -d
+```
+
+**Verified against this exact compose file**: all 40+ migrations apply
+cleanly against a real `postgres:16-alpine` container; the Django cache
+round-trips through the `redis` service; a full reserve → queue → confirm
+cycle correctly holds a slot, queues a second user at position 1, writes a
+`Confirmed` `Booking` row to Postgres on confirm, and drains the queued
+user's Redis entry; the Celery worker receives and would fire the
+scheduled `expire_hold_task`.
+
+A few things worth knowing about how this compose file is put together:
+
+- **`migrate` is its own one-shot service**, not something `backend`/
+  `celery_worker` do on startup — they both `depends_on: migrate:
+  condition: service_completed_successfully`, so migrations run exactly
+  once instead of racing between containers.
+- **Static and media files are shared volumes**, mounted into both
+  `backend` (which writes them) and `frontend`'s nginx (which serves them
+  directly at `/static/` and `/media/` — see `frontend/nginx.conf`). This
+  isn't just a performance choice: `static(settings.MEDIA_URL, ...)` in
+  `urls.py` is a no-op when `DEBUG=False` (Django's own default), so
+  nginx serving `/media/` directly from the volume is what actually makes
+  uploaded images reachable in this deployment, not a Django route. (The
+  media-storage caveat below still applies — this is disk inside the
+  Docker host, not durable object storage.)
+- **The frontend is built with `VITE_API_BASE_URL=/api`** (relative, not
+  absolute) so it calls the same origin nginx is serving from, which nginx
+  then proxies to `backend:8000` — see the `/api/`, `/admin/`, and `/ws/`
+  `location` blocks in `frontend/nginx.conf`. This sidesteps CORS
+  entirely for the deployed stack. Vite inlines `VITE_*` vars at build
+  time, so if you need a different value, rebuild the `frontend` image
+  (`--build-arg`), don't just change env at runtime.
+- **`SECURE_SSL_REDIRECT` defaults to `True` whenever `DEBUG=False`** (see
+  `settings.py`), which is correct once something in front of this stack
+  actually terminates TLS — but `frontend/nginx.conf` as shipped only
+  listens on plain `:80`, with no certs (that needs a real domain, out of
+  scope here, same reasoning as the media-storage caveat below). Left at
+  its default, the app would 301-redirect every request to an `https://`
+  nothing serves, making the whole stack unreachable — confirmed by
+  hitting exactly this during verification. `.env.docker.example`
+  explicitly sets `SECURE_SSL_REDIRECT=False` for that reason. If you put
+  a real TLS terminator (a cloud load balancer, managed ingress, or nginx
+  with real certs) in front of this stack, remove that override.
+- **If you recreate `backend` alone** (e.g. `up --build backend`) **while
+  `frontend` keeps running**, nginx can end up holding a stale
+  DNS-resolved IP for the old `backend` container and return 502s until
+  `frontend` is restarted too. Recreating the whole stack together (as
+  the command above does) doesn't hit this.
+
 ## Environment checklist before deploying
 
 - `DEBUG=False`

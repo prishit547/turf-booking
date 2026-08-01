@@ -21,3 +21,6 @@ backend/BookMyBox/media/
 # Redis/Celery local state
 *.rdb
 celerybeat-schedule
+
+# Docker deployment secrets (see .env.docker.example)
+.env.docker
