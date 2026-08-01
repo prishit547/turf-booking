@@ -362,7 +362,7 @@ Final State:
 
 ### Optimistic Locking Pattern
 
-**File:** `project/src/pages/BoxDetails.jsx`
+**File:** `frontend/src/pages/BoxDetails.jsx`
 
 ```jsx
 const confirmBooking = async () => {

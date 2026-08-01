@@ -1,7 +1,7 @@
 # Docs index
 
 Historical project documentation, collected here from a previous location
-at the repo root (and one from `project/`). Written at various points
+at the repo root (and one from `frontend/`). Written at various points
 earlier in the project's history — **treat anything describing current
 behavior with caution and verify against the actual code**, not all of it
 has kept pace with later changes (two are flagged explicitly below).

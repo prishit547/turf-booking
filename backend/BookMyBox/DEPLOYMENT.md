@@ -111,7 +111,7 @@ cascade behavior without some out-of-request-cycle scheduling mechanism.
   per-box-per-day interval trees in Redis to close this gap; not needed for
   v1 since the frontend only ever offers a fixed set of hourly slot buttons,
   making identical-signature collision the dominant real-world case.
-- **JWT stored in `localStorage`, not an httpOnly cookie** (`project/src/api.jsx`):
+- **JWT stored in `localStorage`, not an httpOnly cookie** (`frontend/src/api.jsx`):
   flagged, not fixed. XSS-exposed by design of the current auth model. The
   real fix (backend cookie-based SimpleJWT config, CSRF token handling for
   mutating requests, CORS `credentials: 'include'` on the frontend, and —
@@ -123,7 +123,7 @@ cascade behavior without some out-of-request-cycle scheduling mechanism.
   already introduced enough new moving parts (Redis, Celery, Channels) in
   one pass.
 - **`react-router-dom` is one major version behind on security patches**
-  (`project/package.json`): the installed `6.30.4` is the newest 6.x
+  (`frontend/package.json`): the installed `6.30.4` is the newest 6.x
   release, but the two CVEs `npm audit` flags for it (an open-redirect via
   backslash in `<Link>`/`useNavigate`, and an SSR `deserializeErrors`
   constructor-injection issue) are only patched in `7.18.0+`. The SSR issue

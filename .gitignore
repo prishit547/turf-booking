@@ -12,7 +12,7 @@ backend/BookMyBox/media/
 *.pyc
 *.pyo
 
-# Frontend build/deps are handled by project/.gitignore
+# Frontend build/deps are handled by frontend/.gitignore
 # (node_modules/, dist/, .env — kept there so the frontend subtree stays self-contained)
 
 # Playwright MCP tool-output snapshots (not source)

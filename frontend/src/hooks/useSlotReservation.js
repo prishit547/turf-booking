@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from '../api.jsx';
 
 // Mirrors API_BASE_URL exactly (this app talks to the backend via an
-// absolute URL, not Vite's dev proxy — see project/.env's VITE_API_BASE_URL)
+// absolute URL, not Vite's dev proxy — see frontend/.env's VITE_API_BASE_URL)
 // but swapped to a ws(s):// scheme and with the /api suffix dropped, since
 // the Channels route lives at /ws/bookings/slot/... on the same host.
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api\/?$/, '');
