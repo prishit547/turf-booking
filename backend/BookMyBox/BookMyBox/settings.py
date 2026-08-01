@@ -154,10 +154,22 @@ ASGI_APPLICATION = 'BookMyBox.asgi.application'
 
 # DATABASE_URL drives this: e.g. "postgresql://user:pass@host:5432/dbname" for
 # production, or the default sqlite URL below for zero-config local development.
+#
+# DB_CONN_MAX_AGE defaults to Django's old "persistent connections" value
+# (600s), but under Daphne/ASGI each concurrent request can end up opening
+# its own connection rather than sharing one the way a single-threaded WSGI
+# worker would — a stress test against docker-compose.prod.yml's default
+# Postgres (max_connections=100) reproducibly exhausted every connection
+# slot under ~30-50 concurrent DB-touching requests, and because the stale
+# connections don't expire for 600s, the outage didn't self-heal even after
+# load stopped (not even `psql` could connect). Set DB_CONN_MAX_AGE=0 (or a
+# low value) for deployments on constrained/default-tuned Postgres like this
+# one, so connections close after each request instead of accumulating; a
+# real fix at higher scale is a pooler (PgBouncer) in front of Postgres.
 DATABASES = {
     'default': dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        conn_max_age=int(env('DB_CONN_MAX_AGE', '600')),
     )
 }
 

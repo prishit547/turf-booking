@@ -362,10 +362,17 @@ class BookingViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
     def get_permissions(self):
+        # This unconditionally overrides every action's own @action(...,
+        # permission_classes=...) below, which is why booked_slots (meant
+        # to be public — real anonymous users check slot availability
+        # before ever logging in) needs its own branch here instead of
+        # falling into the catch-all IsAuthenticated default.
         if self.action in ['list', 'retrieve']:
             self.permission_classes = [IsAuthenticated]
-        elif self.action in ['destroy']:
+        elif self.action == 'destroy':
             self.permission_classes = [IsAdminUser]
-        else: 
+        elif self.action == 'booked_slots':
+            self.permission_classes = []
+        else:
             self.permission_classes = [IsAuthenticated]
         return super().get_permissions()

@@ -55,10 +55,18 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = ['name']  # Only search by name field
     ordering_fields = ['price', 'rating', 'name', 'id']
     ordering = ['id']  # Default ordering
-    
+
     def get_queryset(self):
-        """Ensure we always return only approved boxes with stable ordering"""
-        return Box.objects.filter(status='approved').order_by('id')
+        """Ensure we always return only approved boxes with stable ordering.
+
+        prefetch_related('reviews') matters here specifically because
+        BoxSerializer nests the full review list on every box — without it,
+        every action built on this queryset (list/retrieve/featured/popular/
+        nearby) does one extra reviews query per box serialized, which a
+        stress test measured as the dominant cost of listing 100 boxes
+        (~925ms p50, vs ~220ms to retrieve a single box).
+        """
+        return Box.objects.filter(status='approved').order_by('id').prefetch_related('reviews')
 
     # --- ADDED THE TWO MISSING ACTIONS BELOW ---
 

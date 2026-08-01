@@ -13,6 +13,10 @@ day-to-day.
   script exists for it (unclear whether boxes were seeded some other way,
   e.g. via the admin, or via a script that was since lost) — kept as-is
   rather than guessed at.
+- `seed_stress_test.py` — not historical, actively used. Seeds a
+  load-test-scale dataset (100 boxes, 55 users, ~300 bookings, all
+  `stress_*@loadtest.local`) for `stress-test/loadtest.py` — see
+  `stress-test/README.md` at the repo root.
 
 ## Running
 

@@ -1,0 +1,31 @@
+# Resource-limit overlay for load-testing docker-compose.prod.yml under a
+# simulated 2 vCPU / 2 GB VM (a cheap VPS tier) — not part of the real
+# deployment config (docker-compose.prod.yml has no limits of its own), a
+# tool for reproducing stress-test/loadtest.py's results.
+# Usage: docker compose -f docker-compose.prod.yml -f docker-compose.stress.yml ...
+# See stress-test/README.md for the full workflow (seed data, run the load
+# test, read the results).
+#
+# Allocation (sums to 2.0 CPU / ~1.75GB, leaving headroom for OS/Docker
+# daemon overhead a real 2GB VM would also lose to the host):
+#   backend (Daphne/Django): 1.0 cpu / 768m  — the actual app under test
+#   celery_worker:           0.3 cpu / 256m
+#   db (postgres):           0.5 cpu / 512m
+#   redis:                   0.1 cpu / 128m
+#   frontend (nginx):        0.1 cpu / 64m
+services:
+  db:
+    cpus: 0.5
+    mem_limit: 512m
+  redis:
+    cpus: 0.1
+    mem_limit: 128m
+  backend:
+    cpus: 1.0
+    mem_limit: 768m
+  celery_worker:
+    cpus: 0.3
+    mem_limit: 256m
+  frontend:
+    cpus: 0.1
+    mem_limit: 64m
