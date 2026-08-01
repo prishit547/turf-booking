@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { ToastContainer } from 'react-toastify';
@@ -6,20 +7,30 @@ import { ThemeProvider } from './context/ThemeContext';
 import Header from './components/common/Header';
 import Footer from './components/common/Footer';
 import ScrollToTop from './components/common/ScrollToTop';
-import Home from './pages/Home';
-import Login from './pages/Login';
-import Signup from './pages/Signup';
-import OnboardingPage from './pages/OnboardingPage';
-import BoxListings from './pages/BoxListings';
-import BoxDetails from './pages/BoxDetails';
-import UserDashboard from './pages/UserDashboard';
-import OwnerDashboard from './pages/OwnerDashboard';
-import AdminDashboard from './pages/AdminDashboard';
-import Profile from './pages/Profile';
-import About from './pages/About';
-import Contact from './pages/Contact';
-import NotFound from './pages/NotFound';
+import Loader from './components/common/Loader';
 import { useAuth } from './api.jsx'; // Correct path and extension
+
+// Route-level code splitting: each page becomes its own chunk, fetched on
+// first navigation instead of all being bundled into one ~1.2MB entry file.
+const Home = lazy(() => import('./pages/Home'));
+const Login = lazy(() => import('./pages/Login'));
+const Signup = lazy(() => import('./pages/Signup'));
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
+const BoxListings = lazy(() => import('./pages/BoxListings'));
+const BoxDetails = lazy(() => import('./pages/BoxDetails'));
+const UserDashboard = lazy(() => import('./pages/UserDashboard'));
+const OwnerDashboard = lazy(() => import('./pages/OwnerDashboard'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
+const Profile = lazy(() => import('./pages/Profile'));
+const About = lazy(() => import('./pages/About'));
+const Contact = lazy(() => import('./pages/Contact'));
+const NotFound = lazy(() => import('./pages/NotFound'));
+
+const RouteFallback = () => (
+  <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center transition-colors duration-200">
+    <Loader text="Loading..." />
+  </div>
+);
 
 const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { user, isAuthenticated, loading } = useAuth();
@@ -49,6 +60,7 @@ function App() {
         <ScrollToTop />
         <Header />
         <AnimatePresence mode="wait">
+          <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
@@ -104,6 +116,7 @@ function App() {
             {/* Catch-all route for 404 errors */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </Suspense>
         </AnimatePresence>
         <Footer />
       </div>
