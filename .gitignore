@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Backend (Django)
+backend/BookMyBox/.env
+backend/BookMyBox/db.sqlite3
+backend/BookMyBox/django_cache/
+backend/BookMyBox/staticfiles/
+backend/BookMyBox/media/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Frontend build/deps are handled by project/.gitignore
+# (node_modules/, dist/, .env — kept there so the frontend subtree stays self-contained)
+
+# Playwright MCP tool-output snapshots (not source)
+.playwright-mcp/
+
+# Redis/Celery local state
+*.rdb
+celerybeat-schedule
