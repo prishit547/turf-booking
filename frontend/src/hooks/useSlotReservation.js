@@ -23,6 +23,9 @@ export function useSlotReservation({
     // (e.g. the HTTP reserve() response) so the UI doesn't flash "idle"
     // for the brief moment before the socket's own resync push arrives.
     initialStatus, initialPosition, initialExpiresAt,
+    // Needed to tell "I was promoted" apart from "someone else was" — see
+    // the 'promoted' case below, this isn't optional decoration.
+    currentUserId,
 }) {
     const [state, setState] = useState(() =>
         initialStatus
@@ -49,8 +52,30 @@ export function useSlotReservation({
             const message = JSON.parse(event.data);
             switch (message.type) {
                 case 'held':
-                case 'promoted':
+                    // Only ever sent as part of this connection's own resync
+                    // (see bookings/consumers.py's _send_resync) — never
+                    // broadcast to other clients, so no identity check needed.
                     setState({ status: 'held', position: null, expiresAt: message.expires_at });
+                    break;
+                case 'promoted':
+                    // 'promoted' is broadcast to everyone watching this slot
+                    // (see bookings/broadcasting.py), not just the person who
+                    // got promoted — every other still-queued client would
+                    // receive this same event. Without this check, all of
+                    // them would show "you have the slot!" simultaneously.
+                    // new_holder_user_id arrives as a string (Redis-backed),
+                    // so compare as strings regardless of currentUserId's type.
+                    if (String(message.new_holder_user_id) === String(currentUserId)) {
+                        setState({ status: 'held', position: null, expiresAt: message.expires_at });
+                    } else {
+                        // Someone ahead of us in the queue just left it —
+                        // we're one position closer, still queued.
+                        setState((prev) =>
+                            prev.status === 'queued' && prev.position != null
+                                ? { ...prev, position: Math.max(1, prev.position - 1) }
+                                : prev
+                        );
+                    }
                     break;
                 case 'queued':
                     setState({ status: 'queued', position: message.position, expiresAt: null });
@@ -70,7 +95,7 @@ export function useSlotReservation({
             socket.close();
             socketRef.current = null;
         };
-    }, [enabled, boxId, date, startTime, duration, holdToken, accessToken]);
+    }, [enabled, boxId, date, startTime, duration, holdToken, accessToken, currentUserId]);
 
     useEffect(() => {
         if (state.status !== 'held' || !state.expiresAt) {

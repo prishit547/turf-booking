@@ -64,7 +64,7 @@ describe('useSlotReservation', () => {
     expect(result.current.expiresAt).toBe(12345)
   })
 
-  it('transitions to held on a held/promoted message and counts down', () => {
+  it('transitions to held on a held message and counts down', () => {
     const nowSeconds = Date.now() / 1000
     const { result } = renderHook(() => useSlotReservation({ ...baseProps, enabled: true }))
 
@@ -79,6 +79,41 @@ describe('useSlotReservation', () => {
       vi.advanceTimersByTime(5000)
     })
     expect(result.current.secondsRemaining).toBeLessThanOrEqual(5)
+  })
+
+  it('transitions to held on a promoted message naming this user', () => {
+    const nowSeconds = Date.now() / 1000
+    const { result } = renderHook(() =>
+      useSlotReservation({ ...baseProps, enabled: true, currentUserId: 42 })
+    )
+
+    act(() => {
+      FakeWebSocket.instances[0].emit({ type: 'promoted', new_holder_user_id: '42', expires_at: nowSeconds + 10 })
+    })
+
+    expect(result.current.status).toBe('held')
+  })
+
+  it('does not steal held status when a promoted message names someone else, and decrements position instead', () => {
+    // 'promoted' is broadcast to everyone watching the slot, not just the
+    // person who got promoted — every other still-queued client receives
+    // this same event too. Without the identity check, they'd all
+    // incorrectly flip to "held".
+    const { result } = renderHook(() =>
+      useSlotReservation({ ...baseProps, enabled: true, currentUserId: 42 })
+    )
+
+    act(() => {
+      FakeWebSocket.instances[0].emit({ type: 'queued', position: 3 })
+    })
+    expect(result.current.status).toBe('queued')
+
+    act(() => {
+      FakeWebSocket.instances[0].emit({ type: 'promoted', new_holder_user_id: '99', expires_at: 12345 })
+    })
+
+    expect(result.current.status).toBe('queued')
+    expect(result.current.position).toBe(2)
   })
 
   it('transitions to queued with a position', () => {

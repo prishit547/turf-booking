@@ -52,6 +52,7 @@ const BoxDetails = () => {
         duration,
         holdToken,
         accessToken,
+        currentUserId: user?.id,
         enabled: showBookingModal && Boolean(reservationSeed),
         initialStatus: reservationSeed?.status,
         initialPosition: reservationSeed?.position,
