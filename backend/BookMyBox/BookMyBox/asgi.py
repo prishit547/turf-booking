@@ -24,8 +24,9 @@ django_asgi_app = get_asgi_application()
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
 
 import bookings.routing  # noqa: E402
+from bookings.ws_auth import JWTAuthMiddleware  # noqa: E402
 
 application = ProtocolTypeRouter({
     'http': django_asgi_app,
-    'websocket': URLRouter(bookings.routing.websocket_urlpatterns),
+    'websocket': JWTAuthMiddleware(URLRouter(bookings.routing.websocket_urlpatterns)),
 })

@@ -145,6 +145,25 @@ DATABASES = {
     )
 }
 
+# Tests that deliberately hammer one row with many concurrent threads (see
+# bookings/tests/test_reserve_confirm_flow.py's 50-thread concurrency proof)
+# expose two SQLite-only limitations, neither of which apply to Postgres
+# (the production database, see DEPLOYMENT.md — MVCC + row-level locking
+# doesn't have either problem):
+#   1. A longer busy-timeout so genuinely queued writers get to retry
+#      instead of failing immediately.
+#   2. Django's default SQLite *test* database is an in-memory, shared-cache
+#      DB, which uses SQLite's shared-cache table-level locking — that
+#      raises SQLITE_LOCKED (not SQLITE_BUSY) on lock conflicts between
+#      threads, and SQLITE_LOCKED is explicitly NOT retried by the
+#      busy-timeout/busy-handler mechanism (a SQLite behavior, not a Django
+#      or Python bug). Pointing the test DB at a real file instead of
+#      :memory: avoids shared-cache mode entirely, so ordinary file-level
+#      locking (which *does* honor the timeout below) applies instead.
+if DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3':
+    DATABASES['default'].setdefault('OPTIONS', {}).setdefault('timeout', 30)
+    DATABASES['default'].setdefault('TEST', {}).setdefault('NAME', str(BASE_DIR / 'test_db.sqlite3'))
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

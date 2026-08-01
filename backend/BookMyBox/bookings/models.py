@@ -42,10 +42,25 @@ class Booking(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        # Note: uniqueness is intentionally not enforced here because a cancelled
-        # booking should not permanently block a slot. Overlap validation is done
-        # in the view against active (non-cancelled) bookings.
         ordering = ['date', 'start_time']
+        constraints = [
+            # Defense-in-depth guard independent of the Redis reservation
+            # layer (bookings/reservation.py) — Redis is a fast-path/UX
+            # cache, never the sole source of truth, so the DB must still
+            # be able to reject a double-booking on its own. Scoped to
+            # Confirmed/Completed only (matching migration 0002's original
+            # reasoning) so a cancelled booking never permanently blocks a
+            # slot. Note this only catches an *exact* start_time collision,
+            # not the general overlapping-interval case (e.g. a 1hr booking
+            # at 09:00 vs. a 2hr booking at 08:30) — that case remains
+            # guarded by the overlaps() check in bookings/views.py, same as
+            # before this constraint existed.
+            models.UniqueConstraint(
+                fields=['box', 'date', 'start_time'],
+                condition=models.Q(booking_status__in=['Confirmed', 'Completed']),
+                name='unique_active_booking_per_box_date_start',
+            ),
+        ]
 
     def clean(self):
         super().clean()

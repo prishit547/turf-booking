@@ -72,11 +72,27 @@ class SingleAcquireTests(ReservationTestCase):
         self.assertEqual(held_too.status, 'held')
 
 
+class SlotSignatureTests(ReservationTestCase):
+    def test_signature_round_trips_through_colon_containing_start_time(self):
+        sig = reservation.slot_signature(box_id=7, date='2030-01-15', start_time='10:00', duration=2)
+        parsed = reservation.parse_slot_signature(sig)
+        self.assertEqual(parsed, {'box_id': '7', 'date': '2030-01-15', 'start_time': '10:00', 'duration': 2})
+
+
 class ConfirmTests(ReservationTestCase):
     def test_holder_can_confirm(self):
         held = reservation.reserve_slot(**self._slot(), user_id=1)
         result = reservation.confirm_reservation(held.hold_token, user_id=1)
         self.assertEqual(result.status, 'confirmed')
+
+    def test_confirm_result_carries_signature_for_booking_creation(self):
+        slot = self._slot()
+        held = reservation.reserve_slot(**slot, user_id=1)
+        result = reservation.confirm_reservation(held.hold_token, user_id=1)
+        self.assertEqual(
+            reservation.parse_slot_signature(result.sig),
+            {'box_id': str(slot['box_id']), 'date': slot['date'], 'start_time': slot['start_time'], 'duration': slot['duration']},
+        )
 
     def test_confirm_drains_queue_instead_of_promoting(self):
         held = reservation.reserve_slot(**self._slot(), user_id=1)

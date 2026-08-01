@@ -116,9 +116,7 @@ class BookingAPITests(APITestCase):
             },
             format='json'
         )
-        # NOTE: becomes 409 once Phase 3's 400->409 conflict-status fix lands;
-        # left at 400 here since this test module predates that change.
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
 
     def test_update_booking_not_allowed(self):
         self._auth()

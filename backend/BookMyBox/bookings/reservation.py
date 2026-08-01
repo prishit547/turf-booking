@@ -54,8 +54,26 @@ def reset_client():
 # ---------------------------------------------------------------------------
 
 def slot_signature(box_id, date, start_time, duration):
-    """Canonical string identifying one exact bookable slot request."""
-    return f"{box_id}:{date}:{start_time}:{duration}"
+    """Canonical string identifying one exact bookable slot request.
+
+    Uses '|' as the delimiter, not ':' — start_time is "HH:MM" and would
+    make a ':'-joined signature ambiguous to split back apart.
+    """
+    return f"{box_id}|{date}|{start_time}|{duration}"
+
+
+def parse_slot_signature(sig):
+    """Inverse of slot_signature() — reconstructs the four components a
+    caller needs (e.g. to write the actual Booking row after a confirm)."""
+    box_id, date, start_time, duration = sig.split('|')
+    return {'box_id': box_id, 'date': date, 'start_time': start_time, 'duration': int(duration)}
+
+
+def expires_at_to_eta(expires_at_ts):
+    """Converts a reservation.py unix-timestamp expiry into a timezone-aware
+    datetime suitable for Celery's apply_async(eta=...)."""
+    from datetime import datetime, timezone as dt_timezone
+    return datetime.fromtimestamp(expires_at_ts, tz=dt_timezone.utc)
 
 
 def _hold_key(sig):
@@ -225,6 +243,7 @@ class ReserveResult:
 class ConfirmResult:
     status: Literal['confirmed', 'invalid']
     released_queue: list = field(default_factory=list)  # list of (user_id, hold_token)
+    sig: Optional[str] = None
 
 
 @dataclass
@@ -273,7 +292,7 @@ def confirm_reservation(hold_token, user_id) -> ConfirmResult:
     """Finalize a held slot. Caller must then write the real Booking row —
     this only clears Redis state and reports who was waiting behind it so
     they can be told the slot is gone (not promoted; it's permanently taken)."""
-    meta = _get_holdmeta(hold_token)
+    meta = get_holdmeta(hold_token)
     if meta is None or meta['user_id'] != str(user_id):
         return ConfirmResult(status='invalid')
     sig = meta['sig']
@@ -289,7 +308,7 @@ def confirm_reservation(hold_token, user_id) -> ConfirmResult:
     for item in reply[1:]:
         uid, _, token = item.partition('|')
         released.append((uid, token))
-    return ConfirmResult(status='confirmed', released_queue=released)
+    return ConfirmResult(status='confirmed', released_queue=released, sig=sig)
 
 
 def release_hold(hold_token, ttl_seconds=None) -> ReleaseResult:
@@ -298,7 +317,7 @@ def release_hold(hold_token, ttl_seconds=None) -> ReleaseResult:
     already gone (already confirmed, already promoted away, etc.) — becomes
     a no-op ('stale')."""
     ttl_seconds = ttl_seconds or settings.RESERVATION_HOLD_TTL_SECONDS
-    meta = _get_holdmeta(hold_token)
+    meta = get_holdmeta(hold_token)
     if meta is None:
         return ReleaseResult(status='stale')
     sig = meta['sig']
@@ -337,7 +356,7 @@ def get_hold_status(hold_token) -> HoldStatus:
     """Always re-derives status from the hold/queue keys themselves rather
     than trusting any cached state, so a stale holdmeta entry can never
     report a status that no longer matches reality."""
-    meta = _get_holdmeta(hold_token)
+    meta = get_holdmeta(hold_token)
     if meta is None:
         return HoldStatus(found=False)
     sig = meta['sig']
@@ -359,7 +378,10 @@ def get_hold_status(hold_token) -> HoldStatus:
     return HoldStatus(found=False)
 
 
-def _get_holdmeta(hold_token):
+def get_holdmeta(hold_token):
+    """Public reverse lookup from hold_token -> {sig, user_id}. Exposed (not
+    prefixed) because views need it directly for authorization checks (e.g.
+    confirming the caller actually owns a hold_token before acting on it)."""
     data = get_client().hgetall(_holdmeta_key(hold_token))
     if not data:
         return None
