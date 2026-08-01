@@ -348,6 +348,10 @@ CELERY_TIMEZONE = TIME_ZONE
 # touch reservation keys.
 REDIS_RESERVATION_URL = env('REDIS_RESERVATION_URL', f'{REDIS_URL}/3')
 
+# How long a user who reaches the front of a contended slot has to confirm
+# their booking before the hold is released to the next person in the queue.
+RESERVATION_HOLD_TTL_SECONDS = int(env('RESERVATION_HOLD_TTL_SECONDS', '300'))
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
