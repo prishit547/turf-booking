@@ -32,7 +32,7 @@ class ErrorBoundary extends Component {
               Something went wrong
             </h2>
             <p className="text-gray-600 dark:text-gray-300 mb-6">
-              We're sorry, but an unexpected error occurred. Please try refreshing the page.
+              We&apos;re sorry, but an unexpected error occurred. Please try refreshing the page.
             </p>
             {import.meta.env.DEV && this.state.error && (
               <pre className="text-left text-xs bg-gray-100 dark:bg-gray-900 p-4 rounded-lg mb-6 overflow-auto text-red-600 dark:text-red-400">

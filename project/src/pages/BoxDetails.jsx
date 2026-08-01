@@ -5,7 +5,6 @@ import { Swiper, SwiperSlide } from 'swiper/react';
 import { Navigation, Pagination, Autoplay } from 'swiper/modules';
 import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, Calendar as CalendarIcon, ArrowLeft, Heart } from 'lucide-react';
 import Calendar from 'react-calendar';
-import { useBox } from '../context/BoxContext';
 import { useBooking } from '../context/BookingContext';
 import { useSlotReservation } from '../hooks/useSlotReservation';
 import Modal from '../components/common/Modal';
@@ -36,7 +35,6 @@ const BoxDetails = () => {
     const [duration, setDuration] = useState(1);
     const [showBookingModal, setShowBookingModal] = useState(false);
     const [bookingLoading, setBookingLoading] = useState(false);
-    const [bookingData, setBookingData] = useState(null);
     const [error, setError] = useState(null);
     const [bookedSlots, setBookedSlots] = useState([]); // New state for booked time slots
     const [slotsLoading, setSlotsLoading] = useState(false); // Loading state for slots
@@ -44,7 +42,6 @@ const BoxDetails = () => {
     const [reservationLoading, setReservationLoading] = useState(false);
     const [holdToken, setHoldToken] = useState(null);
     const [reservationSeed, setReservationSeed] = useState(null); // {status, position, expiresAt} from the reserve() HTTP response
-    const { boxes } = useBox();
     const { reserveSlot, confirmReservation, releaseHold } = useBooking();
     const { isAuthenticated, user, accessToken } = useAuth();
 

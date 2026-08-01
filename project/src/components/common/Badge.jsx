@@ -1,4 +1,3 @@
-import React from 'react';
 import { Trophy, Star, Target, Award, Crown, Zap } from 'lucide-react';
 
 const Badge = ({ name, description, earned, type = 'default', size = 'md' }) => {

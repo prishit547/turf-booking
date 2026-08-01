@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, X, MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
+import { X, MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
 import { useBox } from '../../context/BoxContext';
 import { MEDIA_BASE_URL } from '../../api';
 
@@ -171,7 +171,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
       } else {
         setErrors({ submit: result.error });
       }
-    } catch (error) {
+    } catch {
       setErrors({ submit: 'A client-side error occurred. Please try again.' });
     } finally {
       setIsSubmitting(false);

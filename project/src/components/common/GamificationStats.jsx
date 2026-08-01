@@ -1,4 +1,3 @@
-import React from 'react';
 import { Trophy, Zap, TrendingUp, Star } from 'lucide-react';
 
 const GamificationStats = ({ userStats, loading }) => {
@@ -112,7 +111,7 @@ const GamificationStats = ({ userStats, loading }) => {
         <div className="bg-white p-6 rounded-lg shadow">
           <h4 className="text-lg font-semibold mb-4 flex items-center">
             <TrendingUp className="mr-2 text-blue-500" />
-            This Week's Progress
+            This Week&apos;s Progress
           </h4>
           <div className="space-y-3">
             <div className="flex justify-between items-center">

@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -13,7 +12,7 @@ import {
   Filler,
   RadialLinearScale,
 } from 'chart.js';
-import { Bar, Doughnut, Line, PolarArea, Radar } from 'react-chartjs-2';
+import { Bar, Doughnut, Line, PolarArea } from 'react-chartjs-2';
 import { motion } from 'framer-motion';
 
 ChartJS.register(

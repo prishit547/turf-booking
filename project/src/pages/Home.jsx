@@ -25,7 +25,10 @@ const Home = () => {
   useEffect(() => {
     fetchFeaturedBoxes()
     fetchPopularBoxes()
-  }, [])
+    // fetchFeaturedBoxes/fetchPopularBoxes are stable (useCallback with []
+    // deps all the way down in BoxContext), so including them here is safe
+    // and won't cause extra re-fetches.
+  }, [fetchFeaturedBoxes, fetchPopularBoxes])
 
   // Enhanced stats data
   const stats = [
@@ -50,13 +53,14 @@ const Home = () => {
       }
     )
 
-    if (statsRef.current) {
-      observer.observe(statsRef.current)
+    const node = statsRef.current
+    if (node) {
+      observer.observe(node)
     }
 
     return () => {
-      if (statsRef.current) {
-        observer.unobserve(statsRef.current)
+      if (node) {
+        observer.unobserve(node)
       }
     }
   }, [startCounting])
