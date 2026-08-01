@@ -136,12 +136,61 @@ export const BookingProvider = ({ children }) => {
         }
     }, [dispatch]); // Dependency: dispatch is stable
 
+    // reserveSlot/confirmReservation/releaseHold deliberately don't dispatch
+    // SET_LOADING/SET_ERROR into the shared context state — they're used in
+    // a much more granular, frequent flow (one call per slot click) than
+    // fetchBookings/createBooking, and sharing one loading/error flag across
+    // all of them would reproduce the same race BoxContext's loadingMap
+    // fix addressed for its own fetches. The calling component manages its
+    // own local loading/error UI state instead (see BoxDetails.jsx).
+
+    // First phase of the two-phase reservation flow: claim a contended slot
+    // or join its wait queue. Returns {status: 'held'|'queued', hold_token, ...}
+    // on success, or {success: false, unavailable: true, error} if the slot
+    // is already permanently booked (409).
+    const reserveSlot = useCallback(async ({ boxId, date, startTime, duration }) => {
+        try {
+            const response = await api.post('/bookings/reserve/', { boxId, date, startTime, duration });
+            return { success: true, ...response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to reserve this slot.';
+            return { success: false, unavailable: error.response?.status === 409, error: errorMessage };
+        }
+    }, []);
+
+    // Second phase: finalize a held slot into a real booking.
+    const confirmReservation = useCallback(async (holdToken) => {
+        try {
+            const response = await api.post(`/bookings/confirm/${holdToken}/`);
+            dispatch({ type: 'ADD_BOOKING', payload: response.data });
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to confirm booking.';
+            return { success: false, error: errorMessage };
+        }
+    }, [dispatch]);
+
+    // Explicit "give up my hold/spot in queue" — promotes the next queued
+    // user immediately instead of making them wait out the full TTL.
+    const releaseHold = useCallback(async (holdToken) => {
+        try {
+            const response = await api.post(`/bookings/release_hold/${holdToken}/`);
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to release hold.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
     const value = {
         ...state,
         fetchBookings,
         createBooking,
         updateBooking,
-        cancelBooking
+        cancelBooking,
+        reserveSlot,
+        confirmReservation,
+        releaseHold
     };
 
     return (

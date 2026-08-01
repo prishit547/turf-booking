@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Swiper, SwiperSlide } from 'swiper/react';
@@ -7,6 +7,7 @@ import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, Calendar as CalendarIco
 import Calendar from 'react-calendar';
 import { useBox } from '../context/BoxContext';
 import { useBooking } from '../context/BookingContext';
+import { useSlotReservation } from '../hooks/useSlotReservation';
 import Modal from '../components/common/Modal';
 import Loader from '../components/common/Loader';
 import Chatbot from '../components/common/Chatbot';
@@ -40,9 +41,25 @@ const BoxDetails = () => {
     const [bookedSlots, setBookedSlots] = useState([]); // New state for booked time slots
     const [slotsLoading, setSlotsLoading] = useState(false); // Loading state for slots
     const [showReviewModal, setShowReviewModal] = useState(false); // State for review modal
+    const [reservationLoading, setReservationLoading] = useState(false);
+    const [holdToken, setHoldToken] = useState(null);
+    const [reservationSeed, setReservationSeed] = useState(null); // {status, position, expiresAt} from the reserve() HTTP response
     const { boxes } = useBox();
-    const { createBooking } = useBooking();
-    const { isAuthenticated, user } = useAuth();
+    const { reserveSlot, confirmReservation, releaseHold } = useBooking();
+    const { isAuthenticated, user, accessToken } = useAuth();
+
+    const liveReservation = useSlotReservation({
+        boxId: box?.id,
+        date: selectedTimeSlot ? formatLocalDate(selectedDate) : null,
+        startTime: selectedTimeSlot,
+        duration,
+        holdToken,
+        accessToken,
+        enabled: showBookingModal && Boolean(reservationSeed),
+        initialStatus: reservationSeed?.status,
+        initialPosition: reservationSeed?.position,
+        initialExpiresAt: reservationSeed?.expiresAt,
+    });
 
     // Check if box is already in favorites on mount or when user/box changes
     useEffect(() => {
@@ -59,32 +76,36 @@ const BoxDetails = () => {
         checkFavorite();
     }, [user, box?.id]);
 
+    // Shared by the periodic poll below AND by the booking/reservation flows
+    // whenever a slot's availability may have just changed (a booking
+    // succeeded, a race was lost, someone else's slot was released) — a
+    // single source of truth for "what does the grid currently show."
+    const refreshBookedSlots = useCallback(async () => {
+        if (!box?.id || !selectedDate) return;
+
+        setSlotsLoading(true);
+        try {
+            const dateString = formatLocalDate(selectedDate); // YYYY-MM-DD in local timezone
+            const response = await api.get(`/bookings/booked_slots/?box_id=${box.id}&date=${dateString}`);
+            setBookedSlots(response.data.booked_slots || []);
+        } catch (error) {
+            console.error('Error fetching booked slots:', error);
+            setBookedSlots([]); // Reset to empty if error
+        } finally {
+            setSlotsLoading(false);
+        }
+    }, [box?.id, selectedDate]);
+
     // Fetch booked time slots when box or selected date changes
     useEffect(() => {
-        const fetchBookedSlots = async () => {
-            if (!box?.id || !selectedDate) return;
-            
-            setSlotsLoading(true);
-            try {
-                const dateString = formatLocalDate(selectedDate); // YYYY-MM-DD in local timezone
-                const response = await api.get(`/bookings/booked_slots/?box_id=${box.id}&date=${dateString}`);
-                setBookedSlots(response.data.booked_slots || []);
-            } catch (error) {
-                console.error('Error fetching booked slots:', error);
-                setBookedSlots([]); // Reset to empty if error
-            } finally {
-                setSlotsLoading(false);
-            }
-        };
-
-        fetchBookedSlots();
+        refreshBookedSlots();
 
         // Set up auto-refresh every 30 seconds to keep slots current
-        const intervalId = setInterval(fetchBookedSlots, 30000);
+        const intervalId = setInterval(refreshBookedSlots, 30000);
 
         // Cleanup interval on unmount or dependency change
         return () => clearInterval(intervalId);
-    }, [box?.id, selectedDate]); // Re-fetch when box or date changes
+    }, [refreshBookedSlots]); // Re-fetch when box or date changes
 
     const handleAddToFavorites = async () => {
         if (!user) {
@@ -209,8 +230,10 @@ const BoxDetails = () => {
         }, 1000);
     };
 
-    // This function now directly handles the booking submission to the backend
-    const confirmBooking = async () => {
+    // First phase: reserve the slot (or join its queue) before showing the
+    // confirmation modal, so concurrent bookers of the same slot get a real
+    // hold/queue-position instead of racing straight for the DB write.
+    const handleBookNowClick = async () => {
         if (!isAuthenticated) {
             toast.info('Please login to book a box');
             return;
@@ -221,72 +244,98 @@ const BoxDetails = () => {
             return;
         }
 
-        // Check if the selected time slot is available
         if (!isTimeSlotAvailable(selectedTimeSlot)) {
             toast.error('Selected time slot is not available. Please choose a different time.');
             return;
         }
 
-        const startTimeParts = selectedTimeSlot.split(':');
-        const startHour = parseInt(startTimeParts[0]);
-        const startMinute = parseInt(startTimeParts[1]);
-
-        const endHour = (startHour + duration) % 24;
-        const endMinute = startMinute;
-
-        const endTime = `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
-
-        const bookingPayload = {
-            user: user.id, // Assuming user.id is available from useAuth
-            // --- MODIFIED HERE ---
-            // Changed 'box' to 'boxId' to match backend expectation
+        setReservationLoading(true);
+        const result = await reserveSlot({
             boxId: box.id,
-            date: formatLocalDate(selectedDate), // YYYY-MM-DD in local timezone
-            // Changed 'start_time' to 'startTime' to match backend expectation
+            date: formatLocalDate(selectedDate),
             startTime: selectedTimeSlot,
-            end_time: endTime, // Keep as is if backend expects snake_case for end_time
-            duration: duration, // 'duration' key is already correct
-            // Changed 'total_amount' to 'totalAmount' for consistency, assuming backend also expects this
-            totalAmount: parseFloat((box.price * duration).toFixed(2)),
-            paymentStatus: 'Not Required', // Changed 'payment_status' to 'paymentStatus'
-            bookingStatus: 'Confirmed', // Changed 'booking_status' to 'bookingStatus'
-            // --- END MODIFIED ---
-        };
+            duration,
+        });
+        setReservationLoading(false);
 
+        if (!result.success) {
+            toast.error(result.error || 'Could not reserve this slot.');
+            if (result.unavailable) {
+                refreshBookedSlots();
+            }
+            return;
+        }
+
+        setHoldToken(result.hold_token);
+        setReservationSeed({ status: result.status, position: result.position, expiresAt: result.expires_at });
+        setShowBookingModal(true);
+        if (result.status === 'queued') {
+            toast.info(`This slot is currently held by someone else — you're #${result.position} in the queue.`);
+        }
+    };
+
+    // Second phase: finalize a held slot into a real booking. The
+    // reservation hold is what gates this, not a fresh availability check —
+    // the backend's DB-level check remains the final word regardless.
+    const handleConfirmReservation = async () => {
+        if (!holdToken) return;
         setBookingLoading(true);
-        setShowBookingModal(false); // Close the confirmation modal immediately
-
         try {
-            // Call the createBooking function from your BookingContext
-            // This function should use axios internally to send data to your backend
-            const result = await createBooking(bookingPayload);
-
+            const result = await confirmReservation(holdToken);
+            setShowBookingModal(false);
+            setHoldToken(null);
+            setReservationSeed(null);
             if (result.success) {
                 toast.success('Booking confirmed successfully! 🎉');
-                // Reset booking form fields
                 setSelectedTimeSlot('');
                 setDuration(1);
                 setSelectedDate(new Date());
-                
-                // Refresh booked slots to show the new booking
-                const dateString = formatLocalDate(selectedDate);
-                try {
-                    const response = await api.get(`/bookings/booked_slots/?box_id=${box.id}&date=${dateString}`);
-                    setBookedSlots(response.data.booked_slots || []);
-                } catch (error) {
-                    console.error('Error refreshing booked slots:', error);
-                }
             } else {
-                console.error('Backend booking creation failed:', result.error);
                 toast.error(`Booking failed: ${result.error || 'Please try again.'} 🙁`);
             }
-        } catch (error) {
-            console.error('Booking confirmation error:', error);
-            toast.error('Booking failed due to an unexpected error. Please contact support. 😟');
+            // Refresh either way: a success adds a new booked slot, a
+            // failure means someone else's booking is what beat us to it —
+            // both cases mean the grid we're showing is now stale.
+            refreshBookedSlots();
         } finally {
             setBookingLoading(false);
         }
     };
+
+    // Used both by the modal's "Cancel" button while held (no point paying
+    // for the full TTL if the user is walking away) and its "Leave Queue"
+    // button while queued.
+    const handleGiveUpReservation = async () => {
+        const tokenToRelease = holdToken;
+        setShowBookingModal(false);
+        setHoldToken(null);
+        setReservationSeed(null);
+        if (tokenToRelease) {
+            releaseHold(tokenToRelease); // best-effort — a TTL expiry covers this regardless if it fails
+        }
+    };
+
+    // Someone else confirmed the slot while we were queued for it.
+    useEffect(() => {
+        if (liveReservation.status === 'lost') {
+            toast.error('This slot was just booked by someone else.');
+            setShowBookingModal(false);
+            setHoldToken(null);
+            setReservationSeed(null);
+            refreshBookedSlots();
+        }
+    }, [liveReservation.status, refreshBookedSlots]);
+
+    // Promoted from the queue into a hold — let the user know it's their turn.
+    const wasQueuedRef = useRef(false);
+    useEffect(() => {
+        if (liveReservation.status === 'queued') {
+            wasQueuedRef.current = true;
+        } else if (liveReservation.status === 'held' && wasQueuedRef.current) {
+            wasQueuedRef.current = false;
+            toast.info("It's your turn! Please confirm your booking.");
+        }
+    }, [liveReservation.status]);
 
 
     if (loading) {
@@ -666,14 +715,14 @@ const BoxDetails = () => {
 
                             {/* Book Button */}
                             <EnhancedButton
-                                onClick={() => setShowBookingModal(true)}
+                                onClick={handleBookNowClick}
                                 variant="primary"
                                 size="lg"
                                 className="w-full"
-                                disabled={!selectedTimeSlot || bookingLoading}
-                                loading={bookingLoading}
+                                disabled={!selectedTimeSlot || reservationLoading}
+                                loading={reservationLoading}
                             >
-                                {bookingLoading ? 'Processing...' : 'Book Now'}
+                                {reservationLoading ? 'Checking availability...' : 'Book Now'}
                             </EnhancedButton>
 
                             <p className="text-xs text-gray-500 mt-2 text-center">
@@ -687,8 +736,8 @@ const BoxDetails = () => {
             {/* Booking Confirmation Modal */}
             <Modal
                 isOpen={showBookingModal}
-                onClose={() => setShowBookingModal(false)}
-                title="Confirm Booking"
+                onClose={handleGiveUpReservation}
+                title={liveReservation.status === 'queued' ? "You're in Queue" : "Confirm Booking"}
                 size="medium"
             >
                 <div className="space-y-4">
@@ -711,25 +760,49 @@ const BoxDetails = () => {
                         </div>
                     </div>
 
+                    {liveReservation.status === 'queued' ? (
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+                            <p className="text-yellow-800 font-medium">
+                                Someone else is currently confirming this slot.
+                            </p>
+                            <p className="text-yellow-700 text-sm mt-1">
+                                You&rsquo;re #{liveReservation.position} in the queue — we&rsquo;ll notify you the moment it&rsquo;s your turn.
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="bg-primary-50 border border-primary-200 rounded-lg p-4 text-center">
+                            <p className="text-primary-800 font-medium">
+                                {liveReservation.secondsRemaining != null
+                                    ? `Confirm within ${Math.floor(liveReservation.secondsRemaining / 60)}:${String(liveReservation.secondsRemaining % 60).padStart(2, '0')}`
+                                    : 'This slot is held for you'}
+                            </p>
+                            <p className="text-primary-700 text-sm mt-1">
+                                If you don&rsquo;t confirm in time, it&rsquo;s released to the next person waiting.
+                            </p>
+                        </div>
+                    )}
+
                     <div className="flex space-x-3">
                         <EnhancedButton
-                            onClick={() => setShowBookingModal(false)}
+                            onClick={handleGiveUpReservation}
                             variant="secondary"
                             size="md"
                             className="flex-1"
                         >
-                            Cancel
+                            {liveReservation.status === 'queued' ? 'Leave Queue' : 'Cancel'}
                         </EnhancedButton>
-                        <EnhancedButton
-                            onClick={confirmBooking}
-                            variant="primary"
-                            size="md"
-                            className="flex-1"
-                            loading={bookingLoading}
-                            disabled={bookingLoading}
-                        >
-                            Confirm Booking
-                        </EnhancedButton>
+                        {liveReservation.status !== 'queued' && (
+                            <EnhancedButton
+                                onClick={handleConfirmReservation}
+                                variant="primary"
+                                size="md"
+                                className="flex-1"
+                                loading={bookingLoading}
+                                disabled={bookingLoading}
+                            >
+                                Confirm Booking
+                            </EnhancedButton>
+                        )}
                     </div>
                 </div>
             </Modal>
