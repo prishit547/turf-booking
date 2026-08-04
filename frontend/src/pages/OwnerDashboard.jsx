@@ -1,79 +1,52 @@
-// Enhanced OwnerDashboard.jsx
+// OwnerDashboard.jsx
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3, AlertCircle, CheckCircle, Activity, Sparkles, Building } from 'lucide-react';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, BarElement, Filler,
 } from 'chart.js';
+import {
+  Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3,
+  AlertCircle, CheckCircle, Activity, Sparkles, Building,
+} from 'lucide-react';
 
 import AddBoxForm from '../components/boxes/AddBoxForm';
 import ViewBoxModal from '../components/boxes/ViewBoxModal';
 import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
-import { animations, gradientText } from '../utils/animations';
-import { EnhancedButton, EnhancedCard, EnhancedBadge } from '../components/common/EnhancedComponents';
-import useCountAnimation from '../hooks/useCountAnimation';
+import { Button, Card, Badge, Loader, StatTile } from '../components/ui';
+import { useChartTheme } from '../utils/chartTheme';
 
 // ChartJS Registration
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, BarElement, Filler);
 
-// Enhanced helper component for sections that don't have backend data yet
-const Placeholder = ({ text, icon: Icon = AlertCircle }) => (
-  <motion.div 
-    className="text-center py-16"
-    {...animations.slideInUp}
-  >
-    <EnhancedCard className="max-w-md mx-auto p-8 text-center">
-      <motion.div 
-        className="text-gray-400 mb-4"
-        {...animations.iconBounce}
-      >
-        <Icon size={48} className="mx-auto" />
-      </motion.div>
-      <p className="text-gray-500 dark:text-gray-400">{text}</p>
-    </EnhancedCard>
-  </motion.div>
-);
+const FALLBACK_BOX_IMAGE = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=200&q=80';
 
-const AnimatedStatsCard = ({ stat, index }) => {
-  const count = useCountAnimation(stat.value, 2000, true);
+// Reusable dashboard conventions, copied verbatim from UserDashboard.jsx (see
+// that file's comments) rather than reinvented.
+const TABS = [
+  { id: 'overview', label: 'Overview', icon: BarChart3 },
+  { id: 'boxes', label: 'My Boxes', icon: Building },
+  { id: 'bookings', label: 'Bookings', icon: Calendar },
+  { id: 'analytics', label: 'Analytics', icon: TrendingUp },
+];
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.5 }}
-      whileInView={{ opacity: 1, scale: 1 }}
-      transition={{ delay: index * 0.1, duration: 0.6 }}
-      className="group"
-    >
-      <EnhancedCard hover className="p-6 relative overflow-hidden">
-        <motion.div
-          className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-400/10 to-purple-500/10 rounded-full blur-2xl -translate-y-8 translate-x-8"
-          {...animations.cardFloat}
-        />
-
-        <div className="relative z-10 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
-              {stat.title}
-            </p>
-            <p className={`text-3xl font-bold ${gradientText}`}>
-              {stat.isCurrency ? `₹${count}` : count}
-            </p>
-          </div>
-          <motion.div
-            className={`p-4 rounded-2xl ${stat.color} bg-opacity-10 group-hover:bg-opacity-20 transition-all duration-300`}
-            whileHover={{ scale: 1.1, rotate: 360 }}
-            transition={{ duration: 0.3 }}
-          >
-            <stat.icon size={32} className={`${stat.color.replace('bg-', 'text-')}`} />
-          </motion.div>
-        </div>
-      </EnhancedCard>
-    </motion.div>
-  );
+const BOX_STATUS_TONE = {
+  approved: 'success',
+  pending: 'warning',
+  rejected: 'danger',
 };
+
+/** Empty/placeholder state for sections that have no data yet. */
+function Placeholder({ text, icon: Icon = AlertCircle }) {
+  return (
+    <div className="text-center py-10 text-muted-foreground">
+      <Icon size={40} className="mx-auto mb-3 opacity-50" />
+      <p>{text}</p>
+    </div>
+  );
+}
 
 const OwnerDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -86,6 +59,7 @@ const OwnerDashboard = () => {
   const [error, setError] = useState(null);
   const { user } = useAuth();
   const { refreshAll } = useBox();
+  const chartTheme = useChartTheme();
 
   // Fetch all dashboard data
   const fetchAllData = useCallback(async () => {
@@ -149,503 +123,378 @@ const OwnerDashboard = () => {
     all_owner_boxes = []
   } = dashboardData || {};
 
-  // UI Data & Options
+  // Stat tiles data
   const stats = [
-    { title: 'Total Revenue', value: total_revenue, icon: DollarSign, color: 'bg-green-500', isCurrency: true },
-    { title: 'Total Bookings', value: total_bookings, icon: Calendar, color: 'bg-blue-500', isCurrency: false },
-    { title: 'Active Boxes', value: active_boxes_count, icon: CheckCircle, color: 'bg-purple-500', isCurrency: false },
-    { title: 'Avg Rating', value: avg_rating, icon: Star, color: 'bg-orange-500', isCurrency: false }
+    { key: 'revenue', tone: 'primary', icon: <DollarSign size={22} />, value: `₹${total_revenue}`, label: 'Total Revenue' },
+    { key: 'bookings', tone: 'success', icon: <Calendar size={22} />, value: total_bookings, label: 'Total Bookings' },
+    { key: 'active', tone: 'secondary', icon: <CheckCircle size={22} />, value: active_boxes_count, label: 'Active Boxes' },
+    { key: 'rating', tone: 'warning', icon: <Star size={22} />, value: `${avg_rating} / 5`, label: 'Avg Rating' },
   ];
 
+  // Chart data & options — colors come from the live theme (Chart.js renders
+  // to canvas, so it can't inherit Tailwind CSS classes).
   const revenueData = {
     labels: revenue_chart_labels,
-    datasets: [{ 
-      label: 'Revenue (₹)', 
-      data: revenue_chart_data, 
-      borderColor: 'rgb(16, 185, 129)', 
-      backgroundColor: 'rgba(16, 185, 129, 0.1)', 
-      tension: 0.4, 
-      fill: true 
+    datasets: [{
+      label: 'Revenue (₹)',
+      data: revenue_chart_data,
+      borderColor: chartTheme.colors.primary,
+      backgroundColor: chartTheme.hexToRgba(chartTheme.colors.primary, 0.1),
+      pointBackgroundColor: chartTheme.colors.primary,
+      tension: 0.4,
+      fill: true
     }],
   };
 
   const bookingsData = {
     labels: bookings_chart_labels,
-    datasets: [{ 
-      label: 'Bookings', 
-      data: bookings_chart_data, 
-      backgroundColor: 'rgba(59, 130, 246, 0.8)', 
-      borderRadius: 4 
+    datasets: [{
+      label: 'Bookings',
+      data: bookings_chart_data,
+      backgroundColor: chartTheme.hexToRgba(chartTheme.colors.success, 0.8),
+      borderRadius: 4
     }],
   };
 
   const sportsData = {
     labels: Object.keys(sports_distribution),
-    datasets: [{ 
-      data: Object.values(sports_distribution), 
-      backgroundColor: ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#06B6D4'], 
-      borderWidth: 0 
+    datasets: [{
+      data: Object.values(sports_distribution),
+      backgroundColor: Object.keys(sports_distribution).map(
+        (_, i) => chartTheme.series[i % chartTheme.series.length]
+      ),
+      borderWidth: 0
     }],
   };
-  
-  const chartOptions = { 
-    responsive: true, 
-    plugins: { legend: { position: 'top' } }, 
-    scales: { y: { beginAtZero: true } } 
-  };
-  
-  const doughnutOptions = { 
-    responsive: true, 
-    plugins: { legend: { position: 'bottom' } } 
+
+  const chartOptions = {
+    responsive: true,
+    plugins: {
+      legend: { position: 'top', labels: { color: chartTheme.text } },
+      tooltip: chartTheme.tooltip,
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: chartTheme.text } },
+      y: { beginAtZero: true, grid: { color: chartTheme.grid }, ticks: { color: chartTheme.text } },
+    },
   };
 
-  // Enhanced render logic
+  const doughnutOptions = {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom', labels: { color: chartTheme.text } },
+      tooltip: chartTheme.tooltip,
+    },
+  };
+
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900 flex items-center justify-center">
-        <motion.div 
-          className="text-center"
-          {...animations.slideInUp}
-        >
-          <motion.div
-            className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          />
-          <p className="text-xl text-gray-600 dark:text-gray-400 font-medium">Loading your dashboard...</p>
-        </motion.div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader size="lg" text="Loading your dashboard..." />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900 flex items-center justify-center">
-        <motion.div 
-          className="text-center max-w-md mx-auto p-8"
-          {...animations.slideInUp}
-        >
-          <EnhancedCard className="p-8 text-center">
-            <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-              Oops! Something went wrong
-            </h3>
-            <p className="text-red-600 dark:text-red-400 font-medium mb-6">{error}</p>
-            <EnhancedButton onClick={() => window.location.reload()}>
-              Try Again
-            </EnhancedButton>
-          </EnhancedCard>
-        </motion.div>
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
+        <Card padding="lg" className="max-w-md w-full text-center">
+          <AlertCircle size={48} className="text-danger mx-auto mb-4" />
+          <h3 className="text-xl font-display font-semibold text-foreground mb-2">
+            Oops! Something went wrong
+          </h3>
+          <p className="text-danger font-medium mb-6">{error}</p>
+          <Button onClick={() => window.location.reload()}>Try Again</Button>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900 pt-20 overflow-x-hidden">
-      {/* Enhanced Background Elements */}
-      <motion.div 
-        className="fixed top-0 left-0 w-72 sm:w-96 h-72 sm:h-96 bg-gradient-to-r from-blue-400/10 to-purple-500/10 rounded-full blur-3xl"
-        {...animations.cardFloat}
-      />
-      <motion.div 
-        className="fixed bottom-0 right-0 w-64 sm:w-80 h-64 sm:h-80 bg-gradient-to-r from-pink-400/10 to-blue-500/10 rounded-full blur-3xl"
-        {...animations.cardFloat}
-        transition={{ delay: 1, ...animations.cardFloat.transition }}
-      />
-
-      <div className="relative z-10 py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          {/* Enhanced Header */}
-          <motion.div 
-            className="mb-8 sm:mb-12"
-            {...animations.pageTransition}
-          >
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-              <motion.div
-                initial={{ opacity: 0, x: -30 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.2, duration: 0.6 }}
-                className="flex-1"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
-                  <motion.div
-                    className="p-3 sm:p-4 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl self-start"
-                    whileHover={{ scale: 1.1, rotate: 360 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <Building size={24} className="text-white sm:w-8 sm:h-8" />
-                  </motion.div>
-                  <div>
-                    <h1 className={`text-2xl sm:text-3xl lg:text-4xl xl:text-5xl font-bold mb-2 ${gradientText}`}>
-                      Welcome back, {user?.first_name || user?.email?.split('@')[0] || 'Owner'}!
-                    </h1>
-                    <p className="text-base sm:text-lg lg:text-xl text-gray-600 dark:text-gray-300 flex items-center">
-                      <Sparkles size={16} className="mr-2 text-blue-500 sm:w-5 sm:h-5" />
-                      Manage your sports facilities and track performance
-                    </p>
-                  </div>
-                </div>
-              </motion.div>
-              
-              <motion.div
-                initial={{ opacity: 0, x: 30 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.4, duration: 0.6 }}
-                className="flex flex-col sm:flex-row gap-4 sm:space-x-4"
-              >
-                <EnhancedButton
-                  onClick={() => setShowAddBoxModal(true)}
-                  icon={<Plus size={18} />}
-                  className="group w-full sm:w-auto"
-                >
-                  <span className="group-hover:translate-x-1 transition-transform">Add New Box</span>
-                </EnhancedButton>
-                
-                {pending_boxes_count > 0 && (
-                  <EnhancedCard className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 p-4">
-                    <div className="flex items-center space-x-3">
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      >
-                        <Clock size={20} className="text-yellow-600 dark:text-yellow-400" />
-                      </motion.div>
-                      <div>
-                        <p className="font-semibold text-yellow-800 dark:text-yellow-200">
-                          {pending_boxes_count} box{pending_boxes_count > 1 ? 'es' : ''} pending
-                        </p>
-                        <p className="text-sm text-yellow-600 dark:text-yellow-400">
-                          Awaiting approval
-                        </p>
-                      </div>
-                    </div>
-                  </EnhancedCard>
-                )}
-              </motion.div>
+    <div className="min-h-screen bg-background pt-24 pb-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header panel */}
+        <motion.div
+          initial={{ opacity: 0, y: -16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="rounded-2xl bg-card border border-border text-foreground p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-xl bg-primary flex items-center justify-center shrink-0">
+              <Building size={28} className="text-primary-foreground" />
             </div>
-          </motion.div>
+            <div>
+              <h1 className="font-display text-2xl sm:text-3xl font-bold">
+                Welcome back, {user?.first_name || user?.email?.split('@')[0] || 'Owner'}
+              </h1>
+              <p className="mt-1.5 text-muted-foreground flex items-center gap-2 text-sm sm:text-base">
+                <Sparkles size={16} />
+                Manage your sports facilities and track performance
+              </p>
+            </div>
+          </div>
 
-          {/* Enhanced Stats Cards */}
-          <motion.div
-            className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8 mb-8 sm:mb-12"
-            variants={animations.staggerContainer}
-            initial="initial"
-            whileInView="animate"
-          >
-            {stats.map((stat, index) => (
-              <AnimatedStatsCard key={stat.title} stat={stat} index={index} />
-            ))}
-          </motion.div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            {pending_boxes_count > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                <Clock size={16} />
+                <span>{pending_boxes_count} box{pending_boxes_count > 1 ? 'es' : ''} pending approval</span>
+              </div>
+            )}
+            <Button onClick={() => setShowAddBoxModal(true)} icon={<Plus size={18} />}>
+              Add New Box
+            </Button>
+          </div>
+        </motion.div>
 
-          {/* Enhanced Tabs Navigation */}
-          <motion.div 
-            className="mb-12"
-            initial={{ opacity: 0, y: 20 }} 
-            animate={{ opacity: 1, y: 0 }} 
-            transition={{ delay: 0.3 }}
-          >
-            <EnhancedCard className="p-0 overflow-hidden backdrop-blur-xl border-0">
-              <div className="border-b border-gray-200 dark:border-gray-700 bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm">
-                <nav className="flex flex-wrap gap-1 px-4 sm:px-6 overflow-x-auto scrollbar-hide" aria-label="Tabs">
-                  {[
-                    { id: 'overview', label: 'Overview', icon: <BarChart3 size={18} /> },
-                    { id: 'boxes', label: 'My Boxes', icon: <Building size={18} /> },
-                    { id: 'bookings', label: 'Bookings', icon: <Calendar size={18} /> },
-                    { id: 'analytics', label: 'Analytics', icon: <TrendingUp size={18} /> }
-                  ].map((tab) => (
-                    <motion.button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`relative flex items-center space-x-1 sm:space-x-2 py-3 sm:py-4 px-3 sm:px-6 font-medium text-xs sm:text-sm lg:text-base transition-all duration-300 rounded-t-xl whitespace-nowrap ${
-                        activeTab === tab.id
-                          ? 'text-blue-600 dark:text-blue-400 bg-white dark:bg-gray-800 shadow-sm'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50'
-                      }`}
-                      whileHover={{ y: -2 }}
-                      whileTap={{ y: 0 }}
-                    >
-                      <span className={activeTab === tab.id ? 'text-blue-600 dark:text-blue-400' : ''}>{tab.icon}</span>
-                      <span className="hidden sm:inline">{tab.label}</span>
-                      <span className="sm:hidden text-xs">{tab.label.split(' ')[0]}</span>
-                      {activeTab === tab.id && (
-                        <motion.div
-                          className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600"
-                          layoutId="activeTabIndicator"
-                          transition={{ duration: 0.3 }}
-                        />
-                      )}
-                    </motion.button>
-                  ))}
-                </nav>
+        {/* Tabs */}
+        <nav className="flex flex-wrap gap-2 mt-6 overflow-x-auto no-scrollbar" aria-label="Tabs">
+          {TABS.map((tab) => {
+            const TabIcon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 py-2.5 px-4 rounded-full font-medium text-sm border transition-colors duration-150 whitespace-nowrap ${
+                  isActive
+                    ? 'bg-primary/15 border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-elevated'
+                }`}
+              >
+                <TabIcon size={18} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Tab Content */}
+        <div className="py-8">
+          {/* Overview Tab */}
+          {activeTab === 'overview' && (
+            <div className="space-y-8">
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                {stats.map((stat) => (
+                  <StatTile key={stat.key} tone={stat.tone} icon={stat.icon} value={stat.value} label={stat.label} />
+                ))}
               </div>
 
-              {/* Tab Content */}
-              <div className="p-4 sm:p-6 lg:p-8">
-                {/* Overview Tab */}
-                {activeTab === 'overview' && (
-                  <motion.div 
-                    className="space-y-8"
-                    {...animations.slideInUp}
-                  >
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      <EnhancedCard className="p-6">
-                        <h4 className={`font-bold text-lg mb-4 ${gradientText}`}>Revenue Trend</h4>
-                        {revenue_chart_data.length > 0 ? (
-                          <Line data={revenueData} options={chartOptions} />
-                        ) : (
-                          <Placeholder text="No revenue data available" icon={TrendingUp} />
-                        )}
-                      </EnhancedCard>
-                      
-                      <EnhancedCard className="p-6">
-                        <h4 className={`font-bold text-lg mb-4 ${gradientText}`}>Weekly Bookings</h4>
-                        {bookings_chart_data.length > 0 ? (
-                          <Bar data={bookingsData} options={chartOptions} />
-                        ) : (
-                          <Placeholder text="No booking data available" icon={Calendar} />
-                        )}
-                      </EnhancedCard>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <div className="lg:col-span-2">
-                        <EnhancedCard className="p-6">
-                          <h4 className={`font-bold text-lg mb-6 ${gradientText}`}>Recent Bookings</h4>
-                          <div className="space-y-3">
-                            {recent_bookings.length > 0 ? recent_bookings.slice(0, 5).map((booking) => (
-                              <motion.div 
-                                key={booking.id}
-                                className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
-                                whileHover={{ scale: 1.02 }}
-                                transition={{ duration: 0.2 }}
-                              >
-                                <div>
-                                  <p className="font-semibold text-gray-900 dark:text-white">
-                                    {booking.user_name || 'Customer'}
-                                  </p>
-                                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                                    {booking.box_name} • {new Date(booking.date).toLocaleDateString()}
-                                  </p>
-                                  {booking.time_slot && (
-                                    <p className="text-xs text-gray-500 dark:text-gray-500">
-                                      {booking.time_slot}
-                                    </p>
-                                  )}
-                                </div>
-                                <div className="text-right">
-                                  <p className={`font-bold text-lg ${gradientText}`}>
-                                    ₹{booking.amount}
-                                  </p>
-                                  <EnhancedBadge variant="primary" size="sm">
-                                    Confirmed
-                                  </EnhancedBadge>
-                                </div>
-                              </motion.div>
-                            )) : (
-                              <Placeholder text="No recent bookings" icon={Calendar} />
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <div className="flex items-center gap-2 mb-4">
+                    <TrendingUp size={20} className="text-primary" />
+                    <h3 className="text-lg font-display font-semibold text-foreground">Revenue Trend</h3>
+                  </div>
+                  {revenue_chart_data.length > 0 ? (
+                    <Line data={revenueData} options={chartOptions} />
+                  ) : (
+                    <Placeholder text="No revenue data available" icon={TrendingUp} />
+                  )}
+                </Card>
+
+                <Card padding="md">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Calendar size={20} className="text-primary" />
+                    <h3 className="text-lg font-display font-semibold text-foreground">Weekly Bookings</h3>
+                  </div>
+                  {bookings_chart_data.length > 0 ? (
+                    <Bar data={bookingsData} options={chartOptions} />
+                  ) : (
+                    <Placeholder text="No booking data available" icon={Calendar} />
+                  )}
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
+                <Card padding="md" className="xl:col-span-2">
+                  <h3 className="text-lg font-display font-semibold mb-4 text-foreground">Recent Bookings</h3>
+                  {recent_bookings.length > 0 ? (
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      {recent_bookings.slice(0, 5).map((booking) => (
+                        <div key={booking.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 sm:gap-0">
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground truncate">
+                              {booking.user_name || 'Customer'}
+                            </p>
+                            <p className="text-xs sm:text-sm text-muted-foreground">
+                              {booking.box_name} &bull; {new Date(booking.date).toLocaleDateString()}
+                            </p>
+                            {booking.time_slot && (
+                              <p className="text-xs text-muted-foreground">{booking.time_slot}</p>
                             )}
                           </div>
-                        </EnhancedCard>
-                      </div>
-                      
-                      <EnhancedCard className="p-6">
-                        <h4 className={`font-bold text-lg mb-4 ${gradientText}`}>Sports Distribution</h4>
-                        {sportsData.labels.length > 0 ? (
-                          <Doughnut data={sportsData} options={doughnutOptions} />
-                        ) : (
-                          <Placeholder text="No sports data available" icon={Activity} />
-                        )}
-                      </EnhancedCard>
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-1">
+                            <span className="text-primary font-medium tabular-nums">₹{booking.amount}</span>
+                            <Badge tone="success">Confirmed</Badge>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  </motion.div>
-                )}
+                  ) : (
+                    <Placeholder text="No recent bookings" icon={Calendar} />
+                  )}
+                </Card>
 
-                {/* Boxes Tab */}
-                {activeTab === 'boxes' && (
-                  <motion.div 
-                    className="space-y-6"
-                    {...animations.slideInUp}
-                  >
-                    <div className="flex items-center justify-between">
-                      <h3 className={`text-2xl font-bold ${gradientText}`}>My Sports Boxes</h3>
-                      <EnhancedButton
-                        onClick={() => setShowAddBoxModal(true)}
-                        icon={<Plus size={20} />}
-                      >
-                        Add New Box
-                      </EnhancedButton>
-                    </div>
-                    
-                    {all_owner_boxes.length > 0 ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                        {all_owner_boxes.map((box) => (
-                          <motion.div 
-                            key={box.id}
-                            variants={animations.staggerItem}
-                            className="group"
-                          >
-                            <EnhancedCard hover className="p-4 sm:p-6 h-full">
-                              <div className="relative mb-4">
-                                <img
-                                  src={
-                                    box.image 
-                                      ? (box.image.startsWith('http') 
-                                          ? box.image 
-                                          : `${MEDIA_BASE_URL}${box.image}`)
-                                      : 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=200&q=80'
-                                  }
-                                  alt={box.name}
-                                  className="w-full h-40 sm:h-48 object-cover rounded-xl"
-                                  onError={(e) => {
-                                    e.target.src = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=200&q=80'
-                                  }}
-                                />
-                                <div className="absolute top-2 sm:top-3 right-2 sm:right-3">
-                                  <EnhancedBadge 
-                                    variant={
-                                      box.status === 'approved' ? 'success' : 
-                                      box.status === 'pending' ? 'warning' : 'danger'
-                                    }
-                                    size="sm"
-                                  >
-                                    {box.status}
-                                  </EnhancedBadge>
-                                </div>
-                              </div>
-                              
-                              <h4 className="font-bold text-lg text-gray-900 dark:text-white mb-2">
-                                {box.name}
-                              </h4>
-                              <p className="text-gray-600 dark:text-gray-400 mb-3">
-                                {box.location}
-                              </p>
-                              <p className={`text-xl font-bold mb-4 ${gradientText}`}>
-                                ₹{box.price}/hour
-                              </p>
-                              
-                              <div className="flex flex-col sm:flex-row gap-2 sm:space-x-2">
-                                <EnhancedButton 
-                                  variant="secondary" 
-                                  size="sm" 
-                                  icon={<Eye size={14} />}
-                                  onClick={() => handleViewBox(box)}
-                                  className="w-full sm:w-auto"
-                                >
-                                  <span className="hidden sm:inline">View</span>
-                                  <span className="sm:hidden">View Details</span>
-                                </EnhancedButton>
-                                <EnhancedButton 
-                                  variant="secondary" 
-                                  size="sm" 
-                                  icon={<Edit size={14} />}
-                                  onClick={() => handleEditBox(box)}
-                                  className="w-full sm:w-auto"
-                                >
-                                  <span className="hidden sm:inline">Edit</span>
-                                  <span className="sm:hidden">Edit Box</span>
-                                </EnhancedButton>
-                              </div>
-                            </EnhancedCard>
-                          </motion.div>
-                        ))}
-                      </div>
-                    ) : (
-                      <Placeholder text="No boxes found. Add your first sports box!" icon={Building} />
-                    )}
-                  </motion.div>
-                )}
-
-                {/* Bookings Tab */}
-                {activeTab === 'bookings' && (
-                  <motion.div 
-                    className="space-y-6"
-                    {...animations.slideInUp}
-                  >
-                    <h3 className={`text-2xl font-bold ${gradientText}`}>Recent Bookings</h3>
-                    {recent_bookings.length > 0 ? (
-                      <div className="space-y-4">
-                        {recent_bookings.map((booking) => (
-                          <motion.div 
-                            key={booking.id}
-                            variants={animations.staggerItem}
-                          >
-                            <EnhancedCard hover className="p-6">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <h4 className="font-bold text-lg text-gray-900 dark:text-white">
-                                    {booking.user_name || 'Customer'}
-                                  </h4>
-                                  <p className="text-gray-600 dark:text-gray-400">
-                                    {booking.box_name}
-                                  </p>
-                                  <p className="text-sm text-gray-500 dark:text-gray-500">
-                                    {new Date(booking.date).toLocaleDateString()} • {booking.time_slot}
-                                  </p>
-                                </div>
-                                <div className="text-right">
-                                  <p className={`text-xl font-bold ${gradientText}`}>
-                                    ₹{booking.amount}
-                                  </p>
-                                  <EnhancedBadge variant="primary" size="sm">
-                                    Confirmed
-                                  </EnhancedBadge>
-                                </div>
-                              </div>
-                            </EnhancedCard>
-                          </motion.div>
-                        ))}
-                      </div>
-                    ) : (
-                      <Placeholder text="No bookings found" icon={Calendar} />
-                    )}
-                  </motion.div>
-                )}
-
-                {/* Analytics Tab */}
-                {activeTab === 'analytics' && (
-                  <motion.div 
-                    className="space-y-8"
-                    {...animations.slideInUp}
-                  >
-                    <h3 className={`text-xl sm:text-2xl font-bold ${gradientText}`}>Business Analytics</h3>
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 sm:gap-8">
-                      <EnhancedCard className="p-4 sm:p-6">
-                        <h4 className={`font-bold text-base sm:text-lg mb-4 ${gradientText}`}>Revenue Analytics</h4>
-                        {revenue_chart_data.length > 0 ? (
-                          <Line data={revenueData} options={chartOptions} />
-                        ) : (
-                          <Placeholder text="No revenue analytics available" icon={TrendingUp} />
-                        )}
-                      </EnhancedCard>
-                      
-                      <EnhancedCard className="p-4 sm:p-6">
-                        <h4 className={`font-bold text-base sm:text-lg mb-4 ${gradientText}`}>Booking Trends</h4>
-                        {bookings_chart_data.length > 0 ? (
-                          <Bar data={bookingsData} options={chartOptions} />
-                        ) : (
-                          <Placeholder text="No booking trends available" icon={BarChart3} />
-                        )}
-                      </EnhancedCard>
-                    </div>
-                  </motion.div>
-                )}
+                <Card padding="md">
+                  <h3 className="text-base sm:text-lg font-display font-semibold mb-4 text-foreground">
+                    Sports Distribution
+                  </h3>
+                  {sportsData.labels.length > 0 ? (
+                    <Doughnut data={sportsData} options={doughnutOptions} />
+                  ) : (
+                    <Placeholder text="No sports data available" icon={Activity} />
+                  )}
+                </Card>
               </div>
-            </EnhancedCard>
-          </motion.div>
+            </div>
+          )}
+
+          {/* Boxes Tab */}
+          {activeTab === 'boxes' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-2xl font-display font-semibold text-foreground">My Sports Boxes</h2>
+                <Button onClick={() => setShowAddBoxModal(true)} icon={<Plus size={18} />}>
+                  Add New Box
+                </Button>
+              </div>
+
+              {all_owner_boxes.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  {all_owner_boxes.map((box) => (
+                    <Card key={box.id} padding="md" interactive className="flex flex-col">
+                      <div className="relative mb-4">
+                        <img
+                          src={
+                            box.image
+                              ? (box.image.startsWith('http') ? box.image : `${MEDIA_BASE_URL}${box.image}`)
+                              : FALLBACK_BOX_IMAGE
+                          }
+                          alt={box.name}
+                          className="w-full h-40 sm:h-48 object-cover rounded-lg"
+                          onError={(e) => {
+                            e.target.src = FALLBACK_BOX_IMAGE;
+                          }}
+                        />
+                        <div className="absolute top-3 right-3">
+                          <Badge tone={BOX_STATUS_TONE[box.status] || 'neutral'} size="md" className="capitalize">
+                            {box.status}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      <h3 className="text-xl font-display font-semibold text-foreground">{box.name}</h3>
+                      <p className="text-muted-foreground text-sm mt-1">{box.location}</p>
+                      <p className="text-primary font-medium text-lg mt-2 tabular-nums">
+                        ₹{box.price}/hour
+                      </p>
+
+                      <div className="mt-4 flex gap-2">
+                        <Button variant="outline" size="sm" icon={<Eye size={16} />} fullWidth onClick={() => handleViewBox(box)}>
+                          View
+                        </Button>
+                        <Button variant="outline" size="sm" icon={<Edit size={16} />} fullWidth onClick={() => handleEditBox(box)}>
+                          Edit
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <Card padding="lg" className="text-center">
+                  <Placeholder text="No boxes found. Add your first sports box!" icon={Building} />
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* Bookings Tab */}
+          {activeTab === 'bookings' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-display font-semibold text-foreground mb-4">
+                Recent Bookings ({recent_bookings.length})
+              </h2>
+
+              {recent_bookings.length > 0 ? (
+                <Card padding="md">
+                  <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                    {recent_bookings.map((booking) => (
+                      <div key={booking.id} className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                        <div>
+                          <p className="font-semibold text-lg text-foreground">
+                            {booking.user_name || 'Customer'}
+                          </p>
+                          <p className="text-muted-foreground">{booking.box_name}</p>
+                          <p className="text-muted-foreground text-sm">
+                            {new Date(booking.date).toLocaleDateString()} &bull; {booking.time_slot}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-primary font-medium text-lg tabular-nums">
+                            ₹{booking.amount}
+                          </p>
+                          <Badge tone="success">Confirmed</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              ) : (
+                <Card padding="lg" className="text-center">
+                  <Placeholder text="No bookings found" icon={Calendar} />
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* Analytics Tab */}
+          {activeTab === 'analytics' && (
+            <div className="space-y-8">
+              <h2 className="text-2xl font-display font-semibold text-foreground">Business Analytics</h2>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <div className="flex items-center gap-2 mb-4">
+                    <TrendingUp size={20} className="text-primary" />
+                    <h3 className="text-lg font-display font-semibold text-foreground">Revenue Analytics</h3>
+                  </div>
+                  {revenue_chart_data.length > 0 ? (
+                    <Line data={revenueData} options={chartOptions} />
+                  ) : (
+                    <Placeholder text="No revenue analytics available" icon={TrendingUp} />
+                  )}
+                </Card>
+
+                <Card padding="md">
+                  <div className="flex items-center gap-2 mb-4">
+                    <BarChart3 size={20} className="text-primary" />
+                    <h3 className="text-lg font-display font-semibold text-foreground">Booking Trends</h3>
+                  </div>
+                  {bookings_chart_data.length > 0 ? (
+                    <Bar data={bookingsData} options={chartOptions} />
+                  ) : (
+                    <Placeholder text="No booking trends available" icon={BarChart3} />
+                  )}
+                </Card>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Add Box Modal */}
-      <AddBoxForm 
-        isOpen={showAddBoxModal} 
-        onClose={() => setShowAddBoxModal(false)} 
-        onSuccess={handleAddBoxSuccess} 
+      <AddBoxForm
+        isOpen={showAddBoxModal}
+        onClose={() => setShowAddBoxModal(false)}
+        onSuccess={handleAddBoxSuccess}
       />
 
       {/* Edit Box Modal */}
-      <AddBoxForm 
-        isOpen={showEditBoxModal} 
-        onClose={() => setShowEditBoxModal(false)} 
+      <AddBoxForm
+        isOpen={showEditBoxModal}
+        onClose={() => setShowEditBoxModal(false)}
         onSuccess={handleEditBoxSuccess}
         editMode={true}
         boxData={selectedBox}
@@ -653,7 +502,7 @@ const OwnerDashboard = () => {
 
       {/* View Box Modal */}
       {showViewBoxModal && selectedBox && (
-        <ViewBoxModal 
+        <ViewBoxModal
           isOpen={showViewBoxModal}
           onClose={() => setShowViewBoxModal(false)}
           box={selectedBox}

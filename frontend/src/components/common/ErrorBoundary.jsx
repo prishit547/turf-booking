@@ -23,25 +23,25 @@ class ErrorBoundary extends Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center px-4">
-          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 text-center">
-            <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
-              <AlertTriangle size={32} className="text-red-600 dark:text-red-400" />
+        <div className="min-h-screen bg-background flex items-center justify-center px-4">
+          <div className="max-w-md w-full bg-card border border-border rounded-2xl shadow-lift p-8 text-center">
+            <div className="w-16 h-16 bg-danger/15 rounded-full flex items-center justify-center mx-auto mb-6">
+              <AlertTriangle size={32} className="text-danger" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+            <h2 className="text-2xl font-display font-bold text-foreground mb-2">
               Something went wrong
             </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">
+            <p className="text-muted-foreground mb-6">
               We&apos;re sorry, but an unexpected error occurred. Please try refreshing the page.
             </p>
             {import.meta.env.DEV && this.state.error && (
-              <pre className="text-left text-xs bg-gray-100 dark:bg-gray-900 p-4 rounded-lg mb-6 overflow-auto text-red-600 dark:text-red-400">
+              <pre className="text-left text-xs bg-elevated p-4 rounded-lg mb-6 overflow-auto text-danger">
                 {this.state.error.toString()}
               </pre>
             )}
             <button
               onClick={this.handleReset}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-primary hover:bg-primary/90 text-primary-foreground rounded-full font-medium transition-colors"
             >
               <RefreshCcw size={18} />
               Go Home

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { X, MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
+import { MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
 import { useBox } from '../../context/BoxContext';
 import { MEDIA_BASE_URL } from '../../api';
+import { Modal, Button, Input } from '../ui';
 
 const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = null }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -66,12 +67,12 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
   }, [editMode, boxData, isOpen]);
 
   const availableSports = [
-    'Cricket', 'Football', 'Tennis', 'Badminton', 'Basketball', 
+    'Cricket', 'Football', 'Tennis', 'Badminton', 'Basketball',
     'Pickleball', 'Volleyball', 'Table Tennis', 'Squash', 'Baseball'
   ];
   const availableAmenities = [
-    'Changing Room', 'Parking', 'Equipment Rental', 'Coaching', 
-    'Floodlights', 'AC/Heating', 'Refreshments', 'WiFi', 
+    'Changing Room', 'Parking', 'Equipment Rental', 'Coaching',
+    'Floodlights', 'AC/Heating', 'Refreshments', 'WiFi',
     'Security', 'First Aid', 'Lockers', 'Shower'
   ];
   const steps = [
@@ -95,12 +96,12 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
   const handleAmenityToggle = (amenity) => {
     setFormData(prev => ({ ...prev, amenities: prev.amenities.includes(amenity) ? prev.amenities.filter(a => a !== amenity) : [...prev.amenities, amenity] }));
   };
-  
+
   const handleImageChange = (e) => {
     if (e.target.files) {
       setFormData(prev => ({ ...prev, images: Array.from(e.target.files) }));
       if (errors.images) {
-        setErrors(prev => ({...prev, images: ''}));
+        setErrors(prev => ({ ...prev, images: '' }));
       }
     }
   };
@@ -144,9 +145,9 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
 
   const handleSubmit = async () => {
     if (!validateStep(1) || !validateStep(2) || !validateStep(3)) {
-        setErrors(prev => ({...prev, submit: 'Please fix the errors in all steps before submitting.'}));
-        setCurrentStep(1);
-        return;
+      setErrors(prev => ({ ...prev, submit: 'Please fix the errors in all steps before submitting.' }));
+      setCurrentStep(1);
+      return;
     }
 
     setIsSubmitting(true);
@@ -158,7 +159,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
       } else {
         result = await addBox(formData);
       }
-      
+
       if (result.success) {
         setSubmitted(true);
         setTimeout(() => {
@@ -178,202 +179,304 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
     }
   };
 
-  if (!isOpen) return null;
-  
   if (submitted) {
     return (
-      <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white dark:bg-gray-800 rounded-2xl p-8 max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-4"><Check size={32} className="text-green-600 dark:text-green-400" /></div>
-          <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+      <Modal isOpen={isOpen} onClose={onClose} title={editMode ? 'Box Updated' : 'Box Submitted'} size="sm">
+        <div className="text-center py-2">
+          <div className="w-16 h-16 bg-success/15 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Check size={32} className="text-success" />
+          </div>
+          <h3 className="text-xl font-display font-semibold text-foreground mb-2">
             {editMode ? 'Box Updated Successfully!' : 'Box Submitted Successfully!'}
           </h3>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">
-            {editMode 
+          <p className="text-muted-foreground">
+            {editMode
               ? 'Your sports box has been updated successfully.'
-              : 'Your sports box has been submitted and is now pending admin approval. You\'ll be notified once it\'s reviewed and approved.'
+              : "Your sports box has been submitted and is now pending admin approval. You'll be notified once it's reviewed and approved."
             }
           </p>
-        </motion.div>
-      </div>
-    )
+        </div>
+      </Modal>
+    );
   }
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b">
-          <h2 className="text-2xl font-bold text-gray-900">
-            {editMode ? 'Edit Sports Box' : 'Add New Sports Box'}
-          </h2>
-          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"><X size={20} /></button>
-        </div>
-
-        {/* Progress Steps */}
-        <div className="px-6 py-4 bg-gray-50 border-b flex items-center space-x-4">
-          {steps.map((step, idx) => (
-            <div key={step.id} className="flex items-center">
-              <step.icon size={20} className={currentStep === step.id ? 'text-primary-600' : 'text-gray-400'} />
-              <span className={`ml-2 font-medium ${currentStep === step.id ? 'text-primary-600' : 'text-gray-500'}`}>{step.title}</span>
-              {idx < steps.length - 1 && <span className="mx-2 text-gray-300">→</span>}
-            </div>
-          ))}
-        </div>
-
-        {/* Form Content */}
-        <div className="p-6 overflow-y-auto">
-          {currentStep === 1 && (
-            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Box Name *</label>
-                <input type="text" value={formData.name} onChange={(e) => handleChange('name', e.target.value)} className={`input-field ${errors.name ? 'border-red-500' : ''}`} placeholder="e.g., Elite Sports Arena" />
-                {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Short Description *</label>
-                <textarea value={formData.description} onChange={(e) => handleChange('description', e.target.value)} className={`input-field ${errors.description ? 'border-red-500' : ''}`} rows="2" placeholder="Short description..." />
-                {errors.description && <p className="text-red-500 text-sm mt-1">{errors.description}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Full Description</label>
-                <textarea value={formData.full_description} onChange={(e) => handleChange('full_description', e.target.value)} className="input-field" rows="3" placeholder="Full details about your facility..." />
-              </div>
-            </motion.div>
-          )}
-
-          {currentStep === 2 && (
-            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">Available Sports *</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {availableSports.map(sport => ( <label key={sport} className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${formData.sports.includes(sport) ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}><input type="checkbox" checked={formData.sports.includes(sport)} onChange={() => handleSportToggle(sport)} className="sr-only" /><span className="text-sm font-medium">{sport}</span></label>))}
-                </div>
-                {errors.sports && <p className="text-red-500 text-sm mt-1">{errors.sports}</p>}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Price (₹) *</label>
-                  <input type="number" value={formData.price} onChange={(e) => handleChange('price', e.target.value)} className={`input-field ${errors.price ? 'border-red-500' : ''}`} placeholder="e.g., 500" />
-                  {errors.price && <p className="text-red-500 text-sm mt-1">{errors.price}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Capacity *</label>
-                  <input type="number" value={formData.capacity} onChange={(e) => handleChange('capacity', e.target.value)} className={`input-field ${errors.capacity ? 'border-red-500' : ''}`} placeholder="e.g., 20" />
-                  {errors.capacity && <p className="text-red-500 text-sm mt-1">{errors.capacity}</p>}
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {currentStep === 3 && (
-            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Location *</label>
-                <input type="text" value={formData.location} onChange={(e) => handleChange('location', e.target.value)} className={`input-field ${errors.location ? 'border-red-500' : ''}`} placeholder="e.g., Near Iscon Temple, SG Highway, Ahmedabad" />
-                {errors.location && <p className="text-red-500 text-sm mt-1">{errors.location}</p>}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Latitude</label>
-                  <input type="number" value={formData.latitude} onChange={(e) => handleChange('latitude', e.target.value)} className="input-field" placeholder="e.g., 23.0225" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Longitude</label>
-                  <input type="number" value={formData.longitude} onChange={(e) => handleChange('longitude', e.target.value)} className="input-field" placeholder="e.g., 72.5714" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">Amenities *</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {availableAmenities.map(amenity => ( <label key={amenity} className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all ${formData.amenities.includes(amenity) ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}><input type="checkbox" checked={formData.amenities.includes(amenity)} onChange={() => handleAmenityToggle(amenity)} className="sr-only" /><span className="text-sm font-medium">{amenity}</span></label>))}
-                </div>
-                {errors.amenities && <p className="text-red-500 text-sm mt-1">{errors.amenities}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Facility Images *</label>
-                
-                {/* Show existing image in edit mode */}
-                {editMode && boxData?.image && (
-                  <div className="mb-4">
-                    <p className="text-sm text-gray-600 mb-2">Current Image:</p>
-                    <img 
-                      src={boxData.image.startsWith('http') ? boxData.image : `${MEDIA_BASE_URL}${boxData.image}`}
-                      alt="Current box image"
-                      className="h-32 w-full object-cover rounded-md"
-                      onError={(e) => {
-                        e.target.src = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
-                      }}
-                    />
-                    <p className="text-sm text-gray-500 mt-1">Upload new images to replace the current image</p>
-                  </div>
-                )}
-                
-                <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 ${errors.images ? 'border-red-500' : 'border-gray-300'} border-dashed rounded-md`}>
-                    <div className="space-y-1 text-center">
-                        <UploadCloud className="mx-auto h-12 w-12 text-gray-400" />
-                        <label htmlFor="file-upload" className="relative cursor-pointer bg-white rounded-md font-medium text-primary-600 hover:text-primary-500">
-                          <span>{editMode ? 'Upload new files' : 'Upload files'}</span>
-                          <input id="file-upload" type="file" className="sr-only" multiple onChange={handleImageChange} accept="image/*"/>
-                        </label>
-                    </div>
-                </div>
-                {errors.images && <p className="text-red-500 text-sm mt-1">{errors.images}</p>}
-                {formData.images.length > 0 && (
-                    <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 gap-4">
-                        {formData.images.map((file, i) => (<div key={i} className="relative"><img src={URL.createObjectURL(file)} alt="preview" className="h-24 w-full object-cover rounded-md"/></div>))}
-                    </div>
-                )}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Rules</label>
-                <textarea value={formData.rules} onChange={(e) => handleChange('rules', e.target.value)} className="input-field" rows="2" placeholder="Any rules for your facility?" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Contact Info</label>
-                <input type="text" value={formData.contactInfo} onChange={(e) => handleChange('contactInfo', e.target.value)} className="input-field" placeholder="Phone, email, etc." />
-              </div>
-            </motion.div>
-          )}
-
-          {currentStep === 4 && (
-             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-                <h3 className="text-lg font-semibold text-gray-900">Review Your Submission</h3>
-                <div className="bg-gray-50 rounded-lg p-6 space-y-4">
-                  <div><strong>Box Name:</strong> {formData.name}</div>
-                  <div><strong>Short Description:</strong> {formData.description}</div>
-                  <div><strong>Full Description:</strong> {formData.full_description}</div>
-                  <div><strong>Sports:</strong> {formData.sports.join(', ')}</div>
-                  <div><strong>Price:</strong> ₹{formData.price}</div>
-                  <div><strong>Capacity:</strong> {formData.capacity}</div>
-                  <div><strong>Location:</strong> {formData.location}</div>
-                  <div><strong>Latitude:</strong> {formData.latitude}</div>
-                  <div><strong>Longitude:</strong> {formData.longitude}</div>
-                  <div><strong>Amenities:</strong> {formData.amenities.join(', ')}</div>
-                  <div><strong>Rules:</strong> {formData.rules}</div>
-                  <div><strong>Contact Info:</strong> {formData.contactInfo}</div>
-                  <div><strong>Images:</strong> {formData.images.length} file(s) selected</div>
-                  {formData.images.length > 0 && (
-                    <div className="mt-2 grid grid-cols-3 sm:grid-cols-5 gap-2">
-                      {formData.images.map((file, i) => (<img key={i} src={URL.createObjectURL(file)} alt="preview" className="h-16 w-full object-cover rounded-md" />))}
-                    </div>
-                  )}
-                </div>
-                {errors.submit && (<div className="bg-red-50 p-3 rounded-lg"><p className="text-red-800 text-sm">{errors.submit}</p></div>)}
-             </motion.div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between p-6 border-t bg-gray-50">
-          <div>{currentStep > 1 && (<button onClick={handlePrevious} className="btn-secondary">Previous</button>)}</div>
-          <div className="flex items-center space-x-3">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            {currentStep < 4 ? (<button onClick={handleNext} className="btn-primary">Next</button>) : (<button onClick={handleSubmit} disabled={isSubmitting} className="btn-primary disabled:opacity-50">{isSubmitting ? (editMode ? 'Updating...' : 'Submitting...') : (editMode ? 'Update Box' : 'Submit for Approval')}</button>)}
-          </div>
-        </div>
-      </motion.div>
+  const footer = (
+    <div className="flex items-center justify-between w-full">
+      <div>
+        {currentStep > 1 && (
+          <Button variant="outline" onClick={handlePrevious}>Previous</Button>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        {currentStep < 4 ? (
+          <Button onClick={handleNext}>Next</Button>
+        ) : (
+          <Button onClick={handleSubmit} loading={isSubmitting}>
+            {isSubmitting ? (editMode ? 'Updating...' : 'Submitting...') : (editMode ? 'Update Box' : 'Submit for Approval')}
+          </Button>
+        )}
+      </div>
     </div>
+  );
+
+  const textareaClass = (hasError) => [
+    'w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground',
+    'border transition-colors duration-150 outline-none placeholder-muted-foreground resize-none',
+    'focus:ring-2 focus:ring-primary/40 focus:border-primary',
+    hasError ? 'border-danger' : 'border-input',
+  ].join(' ');
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={editMode ? 'Edit Sports Box' : 'Add New Sports Box'}
+      size="xl"
+      footer={footer}
+    >
+      {/* Progress Steps */}
+      <div className="flex items-center mb-6">
+        {steps.map((step, idx) => (
+          <div key={step.id} className="flex items-center flex-1 last:flex-none">
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center transition-colors ${
+                  currentStep >= step.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-secondary text-muted-foreground'
+                }`}
+              >
+                {currentStep > step.id ? <Check size={16} /> : <step.icon size={16} />}
+              </div>
+              <span
+                className={`text-sm font-medium hidden sm:inline whitespace-nowrap ${
+                  currentStep === step.id ? 'text-primary' : 'text-muted-foreground'
+                }`}
+              >
+                {step.title}
+              </span>
+            </div>
+            {idx < steps.length - 1 && (
+              <div className={`flex-1 h-0.5 mx-3 ${currentStep > step.id ? 'bg-primary' : 'bg-secondary'}`} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Form Content */}
+      <div className="max-h-[60vh] overflow-y-auto pr-1">
+        {currentStep === 1 && (
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+            <Input
+              label="Box Name *"
+              value={formData.name}
+              onChange={(e) => handleChange('name', e.target.value)}
+              error={errors.name}
+              placeholder="e.g., Elite Sports Arena"
+            />
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">Short Description *</label>
+              <textarea
+                value={formData.description}
+                onChange={(e) => handleChange('description', e.target.value)}
+                className={textareaClass(!!errors.description)}
+                rows="2"
+                placeholder="Short description..."
+              />
+              {errors.description && <p className="text-sm text-danger">{errors.description}</p>}
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">Full Description</label>
+              <textarea
+                value={formData.full_description}
+                onChange={(e) => handleChange('full_description', e.target.value)}
+                className={textareaClass(false)}
+                rows="3"
+                placeholder="Full details about your facility..."
+              />
+            </div>
+          </motion.div>
+        )}
+
+        {currentStep === 2 && (
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-3">Available Sports *</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {availableSports.map(sport => (
+                  <label
+                    key={sport}
+                    className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                      formData.sports.includes(sport)
+                        ? 'border-primary bg-primary/15'
+                        : 'border-input'
+                    }`}
+                  >
+                    <input type="checkbox" checked={formData.sports.includes(sport)} onChange={() => handleSportToggle(sport)} className="sr-only" />
+                    <span className="text-sm font-medium text-foreground">{sport}</span>
+                  </label>
+                ))}
+              </div>
+              {errors.sports && <p className="text-sm text-danger mt-1">{errors.sports}</p>}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Price (₹) *"
+                type="number"
+                value={formData.price}
+                onChange={(e) => handleChange('price', e.target.value)}
+                error={errors.price}
+                placeholder="e.g., 500"
+              />
+              <Input
+                label="Capacity *"
+                type="number"
+                value={formData.capacity}
+                onChange={(e) => handleChange('capacity', e.target.value)}
+                error={errors.capacity}
+                placeholder="e.g., 20"
+              />
+            </div>
+          </motion.div>
+        )}
+
+        {currentStep === 3 && (
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+            <Input
+              label="Location *"
+              value={formData.location}
+              onChange={(e) => handleChange('location', e.target.value)}
+              error={errors.location}
+              placeholder="e.g., Near Iscon Temple, SG Highway, Ahmedabad"
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Latitude"
+                type="number"
+                value={formData.latitude}
+                onChange={(e) => handleChange('latitude', e.target.value)}
+                placeholder="e.g., 23.0225"
+              />
+              <Input
+                label="Longitude"
+                type="number"
+                value={formData.longitude}
+                onChange={(e) => handleChange('longitude', e.target.value)}
+                placeholder="e.g., 72.5714"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-3">Amenities *</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {availableAmenities.map(amenity => (
+                  <label
+                    key={amenity}
+                    className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                      formData.amenities.includes(amenity)
+                        ? 'border-primary bg-primary/15'
+                        : 'border-input'
+                    }`}
+                  >
+                    <input type="checkbox" checked={formData.amenities.includes(amenity)} onChange={() => handleAmenityToggle(amenity)} className="sr-only" />
+                    <span className="text-sm font-medium text-foreground">{amenity}</span>
+                  </label>
+                ))}
+              </div>
+              {errors.amenities && <p className="text-sm text-danger mt-1">{errors.amenities}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">Facility Images *</label>
+
+              {/* Show existing image in edit mode */}
+              {editMode && boxData?.image && (
+                <div className="mb-4">
+                  <p className="text-sm text-muted-foreground mb-2">Current Image:</p>
+                  <img
+                    src={boxData.image.startsWith('http') ? boxData.image : `${MEDIA_BASE_URL}${boxData.image}`}
+                    alt="Current box image"
+                    className="h-32 w-full object-cover rounded-md"
+                    onError={(e) => {
+                      e.target.src = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                    }}
+                  />
+                  <p className="text-sm text-muted-foreground mt-1">Upload new images to replace the current image</p>
+                </div>
+              )}
+
+              <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 ${errors.images ? 'border-danger' : 'border-input'} border-dashed rounded-md`}>
+                <div className="space-y-1 text-center">
+                  <UploadCloud className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <label htmlFor="file-upload" className="relative cursor-pointer bg-transparent rounded-md font-medium text-primary hover:text-primary/80">
+                    <span>{editMode ? 'Upload new files' : 'Upload files'}</span>
+                    <input id="file-upload" type="file" className="sr-only" multiple onChange={handleImageChange} accept="image/*" />
+                  </label>
+                </div>
+              </div>
+              {errors.images && <p className="text-sm text-danger mt-1">{errors.images}</p>}
+              {formData.images.length > 0 && (
+                <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 gap-4">
+                  {formData.images.map((file, i) => (
+                    <div key={i} className="relative">
+                      <img src={URL.createObjectURL(file)} alt="preview" className="h-24 w-full object-cover rounded-md" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">Rules</label>
+              <textarea
+                value={formData.rules}
+                onChange={(e) => handleChange('rules', e.target.value)}
+                className={textareaClass(false)}
+                rows="2"
+                placeholder="Any rules for your facility?"
+              />
+            </div>
+            <Input
+              label="Contact Info"
+              value={formData.contactInfo}
+              onChange={(e) => handleChange('contactInfo', e.target.value)}
+              placeholder="Phone, email, etc."
+            />
+          </motion.div>
+        )}
+
+        {currentStep === 4 && (
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+            <h3 className="text-lg font-display font-semibold text-foreground">Review Your Submission</h3>
+            <div className="bg-elevated rounded-lg p-6 space-y-4 text-foreground">
+              <div><strong>Box Name:</strong> {formData.name}</div>
+              <div><strong>Short Description:</strong> {formData.description}</div>
+              <div><strong>Full Description:</strong> {formData.full_description}</div>
+              <div><strong>Sports:</strong> {formData.sports.join(', ')}</div>
+              <div><strong>Price:</strong> ₹{formData.price}</div>
+              <div><strong>Capacity:</strong> {formData.capacity}</div>
+              <div><strong>Location:</strong> {formData.location}</div>
+              <div><strong>Latitude:</strong> {formData.latitude}</div>
+              <div><strong>Longitude:</strong> {formData.longitude}</div>
+              <div><strong>Amenities:</strong> {formData.amenities.join(', ')}</div>
+              <div><strong>Rules:</strong> {formData.rules}</div>
+              <div><strong>Contact Info:</strong> {formData.contactInfo}</div>
+              <div><strong>Images:</strong> {formData.images.length} file(s) selected</div>
+              {formData.images.length > 0 && (
+                <div className="mt-2 grid grid-cols-3 sm:grid-cols-5 gap-2">
+                  {formData.images.map((file, i) => (
+                    <img key={i} src={URL.createObjectURL(file)} alt="preview" className="h-16 w-full object-cover rounded-md" />
+                  ))}
+                </div>
+              )}
+            </div>
+            {errors.submit && (
+              <div className="bg-danger/10 p-3 rounded-lg">
+                <p className="text-danger text-sm">{errors.submit}</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </div>
+    </Modal>
   );
 };
 

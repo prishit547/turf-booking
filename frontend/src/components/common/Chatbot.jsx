@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MessageCircle, X, Send, Bot, User } from 'lucide-react';
 import { api } from '../../api';
-import { EnhancedButton } from './EnhancedComponents';
+import { Button } from '../ui';
 
 const Chatbot = () => {
     const [isOpen, setIsOpen] = useState(false);
@@ -113,14 +113,14 @@ const Chatbot = () => {
             >
                 <motion.button
                     onClick={() => setIsOpen(true)}
-                    className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 rounded-full shadow-lg hover:shadow-xl transition-all duration-300"
+                    className="bg-primary text-primary-foreground p-4 rounded-full shadow-glow hover:shadow-lift hover:bg-primary/90 transition-all duration-300"
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.9 }}
                     animate={{
                         boxShadow: [
-                            "0 0 0 0 rgba(59, 130, 246, 0.4)",
-                            "0 0 0 10px rgba(59, 130, 246, 0)",
-                            "0 0 0 0 rgba(59, 130, 246, 0)"
+                            "0 0 0 0 rgba(209, 251, 0, 0.4)",
+                            "0 0 0 10px rgba(209, 251, 0, 0)",
+                            "0 0 0 0 rgba(209, 251, 0, 0)"
                         ]
                     }}
                     transition={{
@@ -131,16 +131,16 @@ const Chatbot = () => {
                 >
                     <MessageCircle size={24} />
                 </motion.button>
-                
+
                 {/* Tooltip */}
                 <motion.div
-                    className="absolute bottom-full right-0 mb-2 px-3 py-1 bg-gray-900 text-white text-sm rounded-lg whitespace-nowrap opacity-0 pointer-events-none"
+                    className="absolute bottom-full right-0 mb-2 px-3 py-1 bg-elevated text-foreground text-sm rounded-lg whitespace-nowrap opacity-0 pointer-events-none"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 2 }}
                 >
                     Any questions? Ask me!
-                    <div className="absolute top-full right-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
+                    <div className="absolute top-full right-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-elevated"></div>
                 </motion.div>
             </motion.div>
 
@@ -148,16 +148,16 @@ const Chatbot = () => {
             <AnimatePresence>
                 {isOpen && (
                     <motion.div
-                        className="fixed bottom-6 right-6 z-50 w-96 h-[500px] bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden"
+                        className="fixed bottom-6 right-6 z-50 w-96 h-[500px] bg-card rounded-2xl shadow-lift border border-border flex flex-col overflow-hidden"
                         initial={{ opacity: 0, scale: 0.8, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.8, y: 20 }}
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                     >
                         {/* Header */}
-                        <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 flex items-center justify-between">
+                        <div className="bg-primary text-primary-foreground p-4 flex items-center justify-between">
                             <div className="flex items-center space-x-3">
-                                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                <div className="w-8 h-8 bg-primary-foreground/10 rounded-full flex items-center justify-center">
                                     <Bot size={18} />
                                 </div>
                                 <div>
@@ -167,7 +167,7 @@ const Chatbot = () => {
                             </div>
                             <button
                                 onClick={() => setIsOpen(false)}
-                                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                                className="p-2 hover:bg-primary-foreground/10 rounded-lg transition-colors"
                             >
                                 <X size={18} />
                             </button>
@@ -185,20 +185,20 @@ const Chatbot = () => {
                                 >
                                     <div className={`flex items-start space-x-2 max-w-[80%] ${message.type === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
                                         <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                                            message.type === 'user' 
-                                                ? 'bg-blue-500 text-white' 
-                                                : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                                            message.type === 'user'
+                                                ? 'bg-primary text-primary-foreground'
+                                                : 'bg-elevated text-muted-foreground'
                                         }`}>
                                             {message.type === 'user' ? <User size={16} /> : <Bot size={16} />}
                                         </div>
                                         <div className={`p-3 rounded-2xl ${
                                             message.type === 'user'
-                                                ? 'bg-blue-500 text-white'
-                                                : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
+                                                ? 'bg-primary text-primary-foreground'
+                                                : 'bg-elevated text-foreground'
                                         }`}>
                                             <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                                             <p className={`text-xs mt-1 opacity-70 ${
-                                                message.type === 'user' ? 'text-blue-100' : 'text-gray-500'
+                                                message.type === 'user' ? 'text-primary-foreground' : 'text-muted-foreground'
                                             }`}>
                                                 {formatTime(message.timestamp)}
                                             </p>
@@ -206,7 +206,7 @@ const Chatbot = () => {
                                     </div>
                                 </motion.div>
                             ))}
-                            
+
                             {/* Loading indicator */}
                             {isLoading && (
                                 <motion.div
@@ -215,14 +215,14 @@ const Chatbot = () => {
                                     animate={{ opacity: 1, y: 0 }}
                                 >
                                     <div className="flex items-start space-x-2">
-                                        <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                                            <Bot size={16} className="text-gray-600 dark:text-gray-300" />
+                                        <div className="w-8 h-8 rounded-full bg-elevated flex items-center justify-center">
+                                            <Bot size={16} className="text-muted-foreground" />
                                         </div>
-                                        <div className="bg-gray-100 dark:bg-gray-700 p-3 rounded-2xl">
+                                        <div className="bg-elevated p-3 rounded-2xl">
                                             <div className="flex space-x-1">
-                                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
-                                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }}></div>
-                                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+                                                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse"></div>
+                                                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse" style={{ animationDelay: '0.1s' }}></div>
+                                                <div className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
                                             </div>
                                         </div>
                                     </div>
@@ -232,7 +232,7 @@ const Chatbot = () => {
                         </div>
 
                         {/* Input */}
-                        <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+                        <div className="p-4 border-t border-border">
                             <div className="flex space-x-2">
                                 <textarea
                                     ref={inputRef}
@@ -240,11 +240,11 @@ const Chatbot = () => {
                                     onChange={(e) => setInputMessage(e.target.value)}
                                     onKeyPress={handleKeyPress}
                                     placeholder="Type your message..."
-                                    className="flex-1 resize-none border border-gray-300 dark:border-gray-600 rounded-xl px-4 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent max-h-20"
+                                    className="flex-1 resize-none border border-border rounded-xl px-4 py-2 bg-card text-foreground placeholder-muted-foreground outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary max-h-20"
                                     rows="1"
                                     disabled={isLoading}
                                 />
-                                <EnhancedButton
+                                <Button
                                     onClick={sendMessage}
                                     variant="primary"
                                     size="sm"
@@ -254,7 +254,7 @@ const Chatbot = () => {
                                     icon={<Send size={16} />}
                                 >
                                     <span className="sr-only">Send message</span>
-                                </EnhancedButton>
+                                </Button>
                             </div>
                         </div>
                     </motion.div>

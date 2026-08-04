@@ -283,8 +283,11 @@ class BookingViewSet(viewsets.ModelViewSet):
 
         # Confirming permanently takes the slot — anyone still queued needs
         # a "sorry, taken" notice, not a promotion (there's nothing left to
-        # promote them into).
-        broadcasting.broadcast_slot_booked(result.sig)
+        # promote them into). The confirming user is still a member of this
+        # same group (their socket's been open since they placed the hold),
+        # so they receive their own broadcast too — booked_by_user_id lets
+        # the frontend tell that apart from an actual "someone else took it".
+        broadcasting.broadcast_slot_booked(result.sig, request.user.id)
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 

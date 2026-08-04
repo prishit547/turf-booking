@@ -28,7 +28,10 @@ class UserSerializer(serializers.ModelSerializer):
 
 # --- User Registration Serializer ---
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=6)
+    # min_length must match AUTH_PASSWORD_VALIDATORS' MinimumLengthValidator
+    # (settings.py, default 8) so this fails with one clear message instead
+    # of passing here only to be rejected by validate_password() below.
+    password = serializers.CharField(write_only=True, min_length=8)
     confirm_password = serializers.CharField(write_only=True)
 
     class Meta:

@@ -32,5 +32,9 @@ def broadcast_slot_released(sig):
     _send(sig, {'type': 'slot_released'})
 
 
-def broadcast_slot_booked(sig):
-    _send(sig, {'type': 'slot_booked'})
+def broadcast_slot_booked(sig, booked_by_user_id):
+    # booked_by_user_id lets recipients tell "I just booked this myself"
+    # apart from "someone else took it out from under me" — mirrors
+    # broadcast_promoted's new_user_id, for the same reason (see that
+    # function and useSlotReservation.js's 'promoted' handler).
+    _send(sig, {'type': 'slot_booked', 'booked_by_user_id': booked_by_user_id})

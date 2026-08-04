@@ -3,11 +3,10 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import { ThemeProvider } from './context/ThemeContext';
 import Header from './components/common/Header';
 import Footer from './components/common/Footer';
 import ScrollToTop from './components/common/ScrollToTop';
-import Loader from './components/common/Loader';
+import { Loader } from './components/ui';
 import { useAuth } from './api.jsx'; // Correct path and extension
 
 // Route-level code splitting: each page becomes its own chunk, fetched on
@@ -18,6 +17,8 @@ const Signup = lazy(() => import('./pages/Signup'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const BoxListings = lazy(() => import('./pages/BoxListings'));
 const BoxDetails = lazy(() => import('./pages/BoxDetails'));
+const Checkout = lazy(() => import('./pages/Checkout'));
+const BookingConfirmation = lazy(() => import('./pages/BookingConfirmation'));
 const UserDashboard = lazy(() => import('./pages/UserDashboard'));
 const OwnerDashboard = lazy(() => import('./pages/OwnerDashboard'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
@@ -27,7 +28,7 @@ const Contact = lazy(() => import('./pages/Contact'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 const RouteFallback = () => (
-  <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center transition-colors duration-200">
+  <div className="min-h-screen bg-background flex items-center justify-center">
     <Loader text="Loading..." />
   </div>
 );
@@ -36,7 +37,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { user, isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center text-gray-900 dark:text-white">Loading authentication...</div>;
+    return <div className="min-h-screen bg-background flex items-center justify-center text-foreground">Loading authentication...</div>;
   }
 
   if (!isAuthenticated) {
@@ -54,9 +55,8 @@ function App() {
   const { user } = useAuth();
   
   return (
-    <ThemeProvider>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
-        <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick pauseOnHover draggable theme="colored" />
+      <div className="min-h-screen bg-background">
+        <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick pauseOnHover draggable theme="dark" />
         <ScrollToTop />
         <Header />
         <AnimatePresence mode="wait">
@@ -74,6 +74,18 @@ function App() {
             <Route path="/profile" element={
               <ProtectedRoute>
                 <Profile />
+              </ProtectedRoute>
+            } />
+
+            <Route path="/checkout" element={
+              <ProtectedRoute>
+                <Checkout />
+              </ProtectedRoute>
+            } />
+
+            <Route path="/booking/:bookingId" element={
+              <ProtectedRoute>
+                <BookingConfirmation />
               </ProtectedRoute>
             } />
 
@@ -120,6 +132,6 @@ function App() {
         </AnimatePresence>
         <Footer />
       </div>
-    </ThemeProvider>
   );
-}export default App;
+}
+export default App;

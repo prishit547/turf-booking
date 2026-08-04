@@ -1,7 +1,7 @@
 // src/context/BoxContext.jsx
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from '../api.jsx'; // Make sure this path is correct for your project
+import { api, MEDIA_BASE_URL } from '../api.jsx'; // Make sure this path is correct for your project
 
 const BoxContext = createContext();
 
@@ -46,11 +46,61 @@ export const BoxProvider = ({ children }) => {
 
     const processBoxData = useCallback((boxesArray) => {
         if (!Array.isArray(boxesArray)) return [];
-        return boxesArray.map(box => ({
-            ...box,
-            rating: box.rating !== null ? parseFloat(box.rating) : null,
-            coordinates: (box.latitude && box.longitude) ? [parseFloat(box.latitude), parseFloat(box.longitude)] : null
-        }));
+        
+        const getAbsoluteUrl = (path, sport = '') => {
+            if (!path) {
+                const s = String(sport).toLowerCase();
+                if (s.includes('cricket')) {
+                    return 'https://images.unsplash.com/photo-1531415080290-bc9b899ddfb6?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                }
+                if (s.includes('football') || s.includes('soccer')) {
+                    return 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                }
+                if (s.includes('badminton')) {
+                    return 'https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                }
+                if (s.includes('basketball')) {
+                    return 'https://images.unsplash.com/photo-1546519638-68e109498ffc?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                }
+                if (s.includes('tennis')) {
+                    return 'https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+                }
+                return 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+            }
+            if (path.startsWith('http://') || path.startsWith('https://')) {
+                try {
+                    const url = new URL(path);
+                    return `${MEDIA_BASE_URL}${url.pathname}`;
+                } catch {
+                    return path;
+                }
+            }
+            if (path.startsWith('/media/')) {
+                return `${MEDIA_BASE_URL}${path}`;
+            }
+            if (path.startsWith('media/')) {
+                return `${MEDIA_BASE_URL}/${path}`;
+            }
+            if (path.startsWith('box_images/')) {
+                return `${MEDIA_BASE_URL}/media/${path}`;
+            }
+            return `${MEDIA_BASE_URL}/media/box_images/${path}`;
+        };
+
+        return boxesArray.map(box => {
+            const formattedImage = getAbsoluteUrl(box.image, box.sport);
+            const formattedImages = (Array.isArray(box.images) && box.images.length > 0)
+                ? box.images.map(p => getAbsoluteUrl(p, box.sport))
+                : [formattedImage];
+            
+            return {
+                ...box,
+                image: formattedImage,
+                images: formattedImages,
+                rating: box.rating !== null ? parseFloat(box.rating) : null,
+                coordinates: (box.latitude && box.longitude) ? [parseFloat(box.latitude), parseFloat(box.longitude)] : null
+            };
+        });
     }, []);
 
     const fetchOwnerBoxes = useCallback(async () => {

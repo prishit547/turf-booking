@@ -28,13 +28,12 @@ export const animations = {
 
   // Card animations
   cardHover: {
-    whileHover: { 
-      y: -8, 
-      scale: 1.02,
-      boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
-      transition: { duration: 0.3, ease: "easeOut" }
+    whileHover: {
+      y: -4,
+      boxShadow: "0 12px 24px -4px rgba(0,0,0,0.5), 0 4px 8px rgba(0,0,0,0.3)",
+      transition: { duration: 0.2, ease: "easeOut" }
     },
-    whileTap: { scale: 0.98 }
+    whileTap: { scale: 0.99 }
   },
 
   cardFloat: {
@@ -50,22 +49,21 @@ export const animations = {
 
   // Button animations
   buttonPrimary: {
-    whileHover: { 
-      scale: 1.05,
-      boxShadow: "0 10px 25px rgba(59, 130, 246, 0.4)",
+    whileHover: {
+      scale: 1.02,
+      boxShadow: "0 8px 20px rgba(209, 251, 0, 0.32)",
       transition: { duration: 0.2 }
     },
-    whileTap: { scale: 0.95 },
+    whileTap: { scale: 0.97 },
     transition: { type: "spring", stiffness: 400, damping: 17 }
   },
 
   buttonSecondary: {
-    whileHover: { 
-      scale: 1.03,
-      backgroundColor: "rgba(59, 130, 246, 0.1)",
+    whileHover: {
+      scale: 1.01,
       transition: { duration: 0.2 }
     },
-    whileTap: { scale: 0.97 }
+    whileTap: { scale: 0.98 }
   },
 
   // Modal animations
@@ -205,18 +203,4 @@ export const useScrollAnimation = () => {
     initial: "initial",
     whileInView: "animate"
   };
-};
-
-// Gradient text utility
-export const gradientText = "bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 bg-clip-text text-transparent";
-
-// Glass morphism utility
-export const glassMorphism = "backdrop-blur-xl bg-white/10 border border-white/20 shadow-xl";
-
-// Modern shadow utilities
-export const shadows = {
-  soft: "shadow-lg shadow-blue-500/10",
-  medium: "shadow-xl shadow-blue-500/20",
-  strong: "shadow-2xl shadow-blue-500/30",
-  glow: "shadow-2xl shadow-blue-500/40 drop-shadow-lg"
 };

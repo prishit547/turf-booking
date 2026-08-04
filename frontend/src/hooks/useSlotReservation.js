@@ -81,7 +81,19 @@ export function useSlotReservation({
                     setState({ status: 'queued', position: message.position, expiresAt: null });
                     break;
                 case 'slot_booked':
-                    setState({ status: 'lost', position: null, expiresAt: null });
+                    // Like 'promoted', this is broadcast to the whole group —
+                    // including the confirming user's own still-open socket
+                    // (they've been connected since placing the hold). Their
+                    // own REST confirm() response already drives their
+                    // success UI, so echoing 'lost' back at them here would
+                    // fire a false "someone else booked this" error right
+                    // alongside their own success toast. Only actual other
+                    // watchers should see this as a loss.
+                    if (String(message.booked_by_user_id) === String(currentUserId)) {
+                        setState(IDLE_STATE);
+                    } else {
+                        setState({ status: 'lost', position: null, expiresAt: null });
+                    }
                     break;
                 case 'slot_released':
                 case 'idle':

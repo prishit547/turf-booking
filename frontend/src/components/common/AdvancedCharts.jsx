@@ -14,6 +14,7 @@ import {
 } from 'chart.js';
 import { Bar, Doughnut, Line, PolarArea } from 'react-chartjs-2';
 import { motion } from 'framer-motion';
+import { useChartTheme } from '../../utils/chartTheme';
 
 ChartJS.register(
   CategoryScale,
@@ -31,14 +32,16 @@ ChartJS.register(
 
 // Enhanced Revenue Trend Chart
 export const EnhancedRevenueTrend = ({ data, loading = false }) => {
+  const theme = useChartTheme();
+
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
         <div className="animate-pulse flex space-x-4">
-          <div className="rounded-full bg-gray-300 dark:bg-gray-600 h-10 w-10"></div>
+          <div className="rounded-full bg-elevated h-10 w-10"></div>
           <div className="flex-1 space-y-2 py-1">
-            <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-3/4"></div>
-            <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/2"></div>
+            <div className="h-4 bg-elevated rounded w-3/4"></div>
+            <div className="h-4 bg-elevated rounded w-1/2"></div>
           </div>
         </div>
       </div>
@@ -51,12 +54,12 @@ export const EnhancedRevenueTrend = ({ data, loading = false }) => {
       {
         label: 'Revenue (₹)',
         data: data?.values || [],
-        borderColor: 'rgb(59, 130, 246)',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        borderColor: theme.colors.primary,
+        backgroundColor: theme.hexToRgba(theme.colors.primary, 0.1),
         borderWidth: 3,
         fill: true,
         tension: 0.4,
-        pointBackgroundColor: 'rgb(59, 130, 246)',
+        pointBackgroundColor: theme.colors.primary,
         pointBorderColor: '#fff',
         pointBorderWidth: 2,
         pointRadius: 6,
@@ -75,13 +78,7 @@ export const EnhancedRevenueTrend = ({ data, loading = false }) => {
       tooltip: {
         mode: 'index',
         intersect: false,
-        backgroundColor: 'rgba(17, 24, 39, 0.95)',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        borderColor: 'rgb(59, 130, 246)',
-        borderWidth: 1,
-        cornerRadius: 8,
-        displayColors: false,
+        ...theme.tooltip,
         callbacks: {
           title: (context) => `${context[0].label}`,
           label: (context) => `Revenue: ₹${context.parsed.y.toLocaleString()}`,
@@ -99,7 +96,7 @@ export const EnhancedRevenueTrend = ({ data, loading = false }) => {
           display: false,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },
@@ -107,10 +104,10 @@ export const EnhancedRevenueTrend = ({ data, loading = false }) => {
       },
       y: {
         grid: {
-          color: 'rgba(107, 114, 128, 0.1)',
+          color: theme.grid,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },
@@ -133,31 +130,22 @@ export const EnhancedRevenueTrend = ({ data, loading = false }) => {
 
 // Enhanced Sport Distribution Chart
 export const EnhancedSportDistribution = ({ data, loading = false }) => {
+  const theme = useChartTheme();
+
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-500"></div>
+        <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary"></div>
       </div>
     );
   }
-
-  const sportColors = {
-    'Cricket': '#10B981',
-    'Football': '#3B82F6',
-    'Tennis': '#F59E0B',
-    'Badminton': '#EF4444',
-    'Basketball': '#F97316',
-    'Pickleball': '#8B5CF6',
-    'Volleyball': '#06B6D4',
-    'Squash': '#84CC16',
-  };
 
   const chartData = {
     labels: data?.labels || [],
     datasets: [
       {
         data: data?.values || [],
-        backgroundColor: data?.labels?.map(label => sportColors[label] || '#6B7280') || [],
+        backgroundColor: (data?.labels || []).map((_, i) => theme.series[i % theme.series.length]),
         borderColor: '#fff',
         borderWidth: 3,
         hoverBorderWidth: 4,
@@ -178,7 +166,7 @@ export const EnhancedSportDistribution = ({ data, loading = false }) => {
           font: {
             size: 12,
           },
-          color: '#374151',
+          color: theme.text,
           generateLabels: function(chart) {
             const data = chart.data;
             if (data.labels.length && data.datasets.length) {
@@ -200,12 +188,7 @@ export const EnhancedSportDistribution = ({ data, loading = false }) => {
         },
       },
       tooltip: {
-        backgroundColor: 'rgba(17, 24, 39, 0.95)',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        borderColor: 'rgb(59, 130, 246)',
-        borderWidth: 1,
-        cornerRadius: 8,
+        ...theme.tooltip,
         callbacks: {
           label: (context) => {
             const total = context.dataset.data.reduce((a, b) => a + b, 0);
@@ -230,12 +213,14 @@ export const EnhancedSportDistribution = ({ data, loading = false }) => {
 
 // Booking Activity Heatmap (Bar Chart)
 export const BookingActivityChart = ({ data, loading = false }) => {
+  const theme = useChartTheme();
+
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
         <div className="animate-pulse space-y-2 w-full">
           {[...Array(7)].map((_, i) => (
-            <div key={i} className="h-6 bg-gray-300 dark:bg-gray-600 rounded"></div>
+            <div key={i} className="h-6 bg-elevated rounded"></div>
           ))}
         </div>
       </div>
@@ -252,9 +237,9 @@ export const BookingActivityChart = ({ data, loading = false }) => {
           const value = ctx.parsed?.y || 0;
           const max = Math.max(...(data?.values || [1]));
           const opacity = Math.max(0.3, value / max);
-          return `rgba(16, 185, 129, ${opacity})`;
+          return theme.hexToRgba(theme.colors.success, opacity);
         },
-        borderColor: 'rgb(16, 185, 129)',
+        borderColor: theme.colors.success,
         borderWidth: 2,
         borderRadius: 6,
         borderSkipped: false,
@@ -270,12 +255,7 @@ export const BookingActivityChart = ({ data, loading = false }) => {
         display: false,
       },
       tooltip: {
-        backgroundColor: 'rgba(17, 24, 39, 0.95)',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        borderColor: 'rgb(16, 185, 129)',
-        borderWidth: 1,
-        cornerRadius: 8,
+        ...theme.tooltip,
         callbacks: {
           label: (context) => `${context.parsed.y} hours played`,
         },
@@ -287,7 +267,7 @@ export const BookingActivityChart = ({ data, loading = false }) => {
           display: false,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },
@@ -295,10 +275,10 @@ export const BookingActivityChart = ({ data, loading = false }) => {
       },
       y: {
         grid: {
-          color: 'rgba(107, 114, 128, 0.1)',
+          color: theme.grid,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },
@@ -321,10 +301,12 @@ export const BookingActivityChart = ({ data, loading = false }) => {
 
 // Peak Hours Polar Chart
 export const PeakHoursChart = ({ data, loading = false }) => {
+  const theme = useChartTheme();
+
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-500"></div>
+        <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-turf"></div>
       </div>
     );
   }
@@ -335,20 +317,8 @@ export const PeakHoursChart = ({ data, loading = false }) => {
       {
         label: 'Booking Percentage',
         data: data?.values || [],
-        backgroundColor: [
-          'rgba(139, 92, 246, 0.7)',
-          'rgba(59, 130, 246, 0.7)',
-          'rgba(16, 185, 129, 0.7)',
-          'rgba(245, 158, 11, 0.7)',
-          'rgba(239, 68, 68, 0.7)',
-        ],
-        borderColor: [
-          'rgb(139, 92, 246)',
-          'rgb(59, 130, 246)',
-          'rgb(16, 185, 129)',
-          'rgb(245, 158, 11)',
-          'rgb(239, 68, 68)',
-        ],
+        backgroundColor: theme.series.map((c) => theme.hexToRgba(c, 0.7)),
+        borderColor: theme.series,
         borderWidth: 2,
       },
     ],
@@ -365,16 +335,11 @@ export const PeakHoursChart = ({ data, loading = false }) => {
           font: {
             size: 11,
           },
-          color: '#374151',
+          color: theme.text,
         },
       },
       tooltip: {
-        backgroundColor: 'rgba(17, 24, 39, 0.95)',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        borderColor: 'rgb(139, 92, 246)',
-        borderWidth: 1,
-        cornerRadius: 8,
+        ...theme.tooltip,
         callbacks: {
           label: (context) => `${context.label}: ${context.parsed.toFixed(1)}%`,
         },
@@ -395,6 +360,8 @@ export const PeakHoursChart = ({ data, loading = false }) => {
 
 // Monthly Spending Trend with Gradient
 export const MonthlySpendingChart = ({ data, loading = false }) => {
+  const theme = useChartTheme();
+
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center">
@@ -402,7 +369,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
           {[...Array(6)].map((_, i) => (
             <div
               key={i}
-              className="h-8 bg-gray-300 dark:bg-gray-600 rounded"
+              className="h-8 bg-elevated rounded"
               style={{ width: `${Math.random() * 60 + 40}%` }}
             ></div>
           ))}
@@ -417,21 +384,21 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
       {
         label: 'Monthly Spending',
         data: data?.values || [],
-        borderColor: 'rgb(139, 92, 246)',
+        borderColor: theme.colors.secondary,
         backgroundColor: (context) => {
           const chart = context.chart;
           const { ctx, chartArea } = chart;
           if (!chartArea) return null;
-          
+
           const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-          gradient.addColorStop(0, 'rgba(139, 92, 246, 0)');
-          gradient.addColorStop(1, 'rgba(139, 92, 246, 0.3)');
+          gradient.addColorStop(0, theme.hexToRgba(theme.colors.secondary, 0));
+          gradient.addColorStop(1, theme.hexToRgba(theme.colors.secondary, 0.3));
           return gradient;
         },
         borderWidth: 3,
         fill: true,
         tension: 0.4,
-        pointBackgroundColor: 'rgb(139, 92, 246)',
+        pointBackgroundColor: theme.colors.secondary,
         pointBorderColor: '#fff',
         pointBorderWidth: 2,
         pointRadius: 5,
@@ -450,12 +417,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
       tooltip: {
         mode: 'index',
         intersect: false,
-        backgroundColor: 'rgba(17, 24, 39, 0.95)',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        borderColor: 'rgb(139, 92, 246)',
-        borderWidth: 1,
-        cornerRadius: 8,
+        ...theme.tooltip,
         callbacks: {
           label: (context) => `Spent: ₹${context.parsed.y.toLocaleString()}`,
         },
@@ -472,7 +434,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
           display: false,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },
@@ -480,10 +442,10 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
       },
       y: {
         grid: {
-          color: 'rgba(107, 114, 128, 0.1)',
+          color: theme.grid,
         },
         ticks: {
-          color: '#6B7280',
+          color: theme.text,
           font: {
             size: 12,
           },

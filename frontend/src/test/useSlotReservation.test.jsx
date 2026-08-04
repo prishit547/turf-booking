@@ -128,14 +128,34 @@ describe('useSlotReservation', () => {
     expect(result.current.secondsRemaining).toBeNull()
   })
 
-  it('transitions to lost on slot_booked', () => {
-    const { result } = renderHook(() => useSlotReservation({ ...baseProps, enabled: true }))
+  it('transitions to lost when someone else books the slot', () => {
+    const { result } = renderHook(() =>
+      useSlotReservation({ ...baseProps, enabled: true, currentUserId: 42 })
+    )
 
     act(() => {
-      FakeWebSocket.instances[0].emit({ type: 'slot_booked' })
+      FakeWebSocket.instances[0].emit({ type: 'slot_booked', booked_by_user_id: '99' })
     })
 
     expect(result.current.status).toBe('lost')
+  })
+
+  it('does not report lost when the current user is the one who booked it', () => {
+    // 'slot_booked' is broadcast to the whole group, including the
+    // confirming user's own still-open socket (they've been connected since
+    // placing the hold) — see bookings/views.py's confirm(). Their own
+    // REST response already drives their success UI; without this check
+    // they'd see a false "someone else booked this" alongside their own
+    // success toast (this was the exact bug reported and fixed).
+    const { result } = renderHook(() =>
+      useSlotReservation({ ...baseProps, enabled: true, currentUserId: 42, initialStatus: 'held' })
+    )
+
+    act(() => {
+      FakeWebSocket.instances[0].emit({ type: 'slot_booked', booked_by_user_id: '42' })
+    })
+
+    expect(result.current.status).toBe('idle')
   })
 
   it('closes the socket on unmount', () => {

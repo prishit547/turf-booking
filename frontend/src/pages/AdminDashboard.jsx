@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Users, Calendar, DollarSign, TrendingUp, Search, Filter, Edit, Trash2, Eye, Shield, AlertTriangle, CheckCircle, X, Clock } from 'lucide-react'
+import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Trash2, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText } from 'lucide-react'
 import { Line, Doughnut, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -17,8 +17,8 @@ import {
 import { toast } from 'react-toastify'
 import { useAuth, api } from '../api.jsx'
 import { useBox } from '../context/BoxContext'
-import Modal from '../components/common/Modal'
-import Loader from '../components/common/Loader'
+import { Button, Card, Badge, Modal, Loader, StatTile, Input, Select } from '../components/ui'
+import { useChartTheme } from '../utils/chartTheme'
 
 ChartJS.register(
   CategoryScale,
@@ -33,10 +33,32 @@ ChartJS.register(
 )
 
 const ChartEmptyState = ({ label = 'No data yet' }) => (
-  <div className="flex items-center justify-center h-48 text-sm text-gray-400 dark:text-gray-500">
+  <div className="flex items-center justify-center h-48 text-sm text-muted-foreground">
     {label}
   </div>
 )
+
+const TABS = [
+  { id: 'overview', label: 'Overview', icon: BarChart3 },
+  { id: 'approvals', label: 'Box Approvals', icon: CheckCircle },
+  { id: 'users', label: 'Users', icon: Users },
+  { id: 'bookings', label: 'Bookings', icon: Calendar },
+  { id: 'analytics', label: 'Analytics', icon: TrendingUp },
+  { id: 'reports', label: 'Reports', icon: FileText },
+]
+
+const ROLE_TONE = { Owner: 'secondary', Admin: 'danger', User: 'primary' }
+const USER_STATUS_TONE = { Active: 'success', Inactive: 'danger', Suspended: 'danger' }
+const BOOKING_STATUS_TONE = { Confirmed: 'success', Completed: 'primary', Cancelled: 'danger' }
+const ACTIVITY_TONE = { approval: 'warning', user: 'primary', booking: 'success' }
+
+const initial = (value) => (value || '?').charAt(0).toUpperCase()
+
+const formatDate = (value) => {
+  if (!value) return 'N/A'
+  const d = new Date(value)
+  return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString()
+}
 
 // Exports already-fetched data as a downloaded CSV — no backend endpoint needed.
 const exportToCsv = (filename, rows) => {
@@ -68,6 +90,8 @@ const exportToCsv = (filename, rows) => {
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview')
   const [searchTerm, setSearchTerm] = useState('')
+  const [bookingSearch, setBookingSearch] = useState('')
+  const [bookingStatusFilter, setBookingStatusFilter] = useState('')
   const [selectedBox, setSelectedBox] = useState(null)
   const [showApprovalModal, setShowApprovalModal] = useState(false)
   const [rejectionReason, setRejectionReason] = useState('')
@@ -76,6 +100,7 @@ const AdminDashboard = () => {
   const [adminError, setAdminError] = useState(null)
   const { user } = useAuth()
   const { pendingBoxes, fetchPendingBoxes, approveBox, rejectBox } = useBox()
+  const chartTheme = useChartTheme()
 
   useEffect(() => {
     fetchPendingBoxes()
@@ -99,37 +124,6 @@ const AdminDashboard = () => {
     fetchAdminData()
   }, [fetchAdminData])
 
-  const stats = [
-    {
-      title: 'Total Users',
-      value: adminData?.stats?.total_users?.toLocaleString() || '0',
-      change: `${adminData?.stats?.total_owners || 0} owners`,
-      icon: Users,
-      color: 'bg-blue-500'
-    },
-    {
-      title: 'Total Bookings',
-      value: adminData?.stats?.total_bookings?.toLocaleString() || '0',
-      change: 'Confirmed & completed',
-      icon: Calendar,
-      color: 'bg-green-500'
-    },
-    {
-      title: 'Platform Revenue',
-      value: `₹${parseFloat(adminData?.stats?.platform_revenue || 0).toLocaleString()}`,
-      change: 'Lifetime revenue',
-      icon: DollarSign,
-      color: 'bg-purple-500'
-    },
-    {
-      title: 'Pending Approvals',
-      value: pendingBoxes.length,
-      change: pendingBoxes.length > 0 ? 'Needs attention' : 'All clear',
-      icon: AlertTriangle,
-      color: pendingBoxes.length > 0 ? 'bg-orange-500' : 'bg-green-500'
-    }
-  ]
-
   // No hardcoded fallback numbers here: charts only ever render real data
   // from the backend. Empty arrays make hasRevenueData/hasSportsData/
   // hasUserGrowthData below false, which renders an explicit empty state
@@ -140,8 +134,9 @@ const AdminDashboard = () => {
       {
         label: 'Platform Revenue (₹)',
         data: adminData?.revenue_chart?.data || [],
-        borderColor: 'rgb(16, 185, 129)',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderColor: chartTheme.colors.primary,
+        backgroundColor: chartTheme.hexToRgba(chartTheme.colors.primary, 0.1),
+        pointBackgroundColor: chartTheme.colors.primary,
         tension: 0.4,
         fill: true,
       },
@@ -154,14 +149,9 @@ const AdminDashboard = () => {
     datasets: [
       {
         data: adminData?.sports_distribution?.data || [],
-        backgroundColor: [
-          '#10B981',
-          '#3B82F6',
-          '#F59E0B',
-          '#EF4444',
-          '#8B5CF6',
-          '#06B6D4',
-        ],
+        backgroundColor: (adminData?.sports_distribution?.labels || []).map(
+          (_, i) => chartTheme.series[i % chartTheme.series.length]
+        ),
         borderWidth: 0,
       },
     ],
@@ -174,7 +164,7 @@ const AdminDashboard = () => {
       {
         label: 'New Users',
         data: adminData?.user_growth_chart?.data || [],
-        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        backgroundColor: chartTheme.hexToRgba(chartTheme.colors.success, 0.8),
         borderRadius: 4,
       },
     ],
@@ -182,40 +172,26 @@ const AdminDashboard = () => {
   const hasUserGrowthData = (adminData?.user_growth_chart?.data || []).some((v) => v > 0)
 
   const users = adminData?.users || []
-
   const boxes = adminData?.boxes || adminData?.boxes_overview || []
-
   const bookings = adminData?.bookings || []
-
-  const tabs = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'approvals', label: `Box Approvals ${pendingBoxes.length > 0 ? `(${pendingBoxes.length})` : ''}` },
-    { id: 'users', label: 'Users' },
-    { id: 'bookings', label: 'Bookings' },
-    { id: 'analytics', label: 'Analytics' },
-    { id: 'reports', label: 'Reports' }
-  ]
 
   const chartOptions = {
     responsive: true,
     plugins: {
-      legend: {
-        position: 'top',
-      },
+      legend: { position: 'top', labels: { color: chartTheme.text } },
+      tooltip: chartTheme.tooltip,
     },
     scales: {
-      y: {
-        beginAtZero: true,
-      }
-    }
+      x: { grid: { display: false }, ticks: { color: chartTheme.text } },
+      y: { beginAtZero: true, grid: { color: chartTheme.grid }, ticks: { color: chartTheme.text } },
+    },
   }
 
   const doughnutOptions = {
     responsive: true,
     plugins: {
-      legend: {
-        position: 'bottom',
-      },
+      legend: { position: 'bottom', labels: { color: chartTheme.text } },
+      tooltip: chartTheme.tooltip,
     },
   }
 
@@ -249,12 +225,27 @@ const AdminDashboard = () => {
     setShowApprovalModal(true)
   }
 
+  const closeRejectModal = () => {
+    setShowApprovalModal(false)
+    setSelectedBox(null)
+    setRejectionReason('')
+  }
+
   const totalPlatformRevenue = adminData?.stats?.platform_revenue || 0
-  const filteredUsers = users.filter(user =>
-    (user.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    (user.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    (user.role?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+  const filteredUsers = users.filter(u =>
+    (u.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+    (u.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+    (u.role?.toLowerCase() || '').includes(searchTerm.toLowerCase())
   )
+  const filteredBookings = bookings.filter((b) => {
+    const q = bookingSearch.toLowerCase()
+    const matchesSearch = !q
+      || (b.user?.toLowerCase() || '').includes(q)
+      || (b.box?.toLowerCase() || '').includes(q)
+      || (b.owner?.toLowerCase() || '').includes(q)
+    const matchesStatus = !bookingStatusFilter || b.status === bookingStatusFilter
+    return matchesSearch && matchesStatus
+  })
   const recentActivity = adminData?.recent_activity || []
   const topCities = adminData?.top_cities || []
 
@@ -272,771 +263,640 @@ const AdminDashboard = () => {
     return date.toLocaleDateString()
   }
 
-  const getActivityColor = (type) => {
-    switch (type) {
-      case 'approval': return 'bg-yellow-500'
-      case 'user': return 'bg-blue-500'
-      case 'booking': return 'bg-green-500'
-      default: return 'bg-purple-500'
-    }
-  }
+  const quickActions = [
+    { icon: Shield, title: 'User management', text: 'Manage user accounts and permissions', tab: 'users' },
+    { icon: CheckCircle, title: 'Box approvals', text: 'Review and approve new facilities', tab: 'approvals', count: pendingBoxes.length },
+    { icon: DollarSign, title: 'Revenue reports', text: 'View platform financial analytics', tab: 'reports' },
+    { icon: TrendingUp, title: 'Platform analytics', text: 'Comprehensive usage statistics', tab: 'analytics' },
+  ]
+
+  const reports = [
+    {
+      icon: DollarSign, tone: 'text-success', title: 'Revenue report',
+      text: 'Detailed financial analytics and commission tracking',
+      onClick: () => exportToCsv('revenue-report.csv', bookings.map(b => ({
+        id: b.id, user: b.user, box: b.box, owner: b.owner, date: b.date, amount: b.amount, commission: b.commission, status: b.status,
+      }))),
+    },
+    {
+      icon: Users, tone: 'text-primary', title: 'User analytics',
+      text: 'User behavior, engagement, and growth metrics',
+      onClick: () => exportToCsv('user-analytics-report.csv', users.map(u => ({
+        id: u.id, name: u.name, email: u.email, role: u.role, status: u.status, bookings: u.bookings, joinDate: u.joinDate,
+      }))),
+    },
+    {
+      icon: Calendar, tone: 'text-turf', title: 'Booking report',
+      text: 'Booking trends, patterns, and performance analysis',
+      onClick: () => exportToCsv('booking-report.csv', bookings.map(b => ({
+        id: b.id, date: b.date, user: b.user, box: b.box, status: b.status,
+      }))),
+    },
+    { icon: TrendingUp, tone: 'text-warning', title: 'Performance report', text: 'Platform performance and operational metrics', disabled: true },
+    { icon: Shield, tone: 'text-danger', title: 'Security report', text: 'Security incidents, user activity, and system logs', disabled: true },
+    { icon: Eye, tone: 'text-muted-foreground', title: 'Custom report', text: 'Create custom reports with specific parameters', disabled: true },
+  ]
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="container-max section-padding">
+    <div className="min-h-screen bg-background pt-24 pb-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header panel */}
+        <motion.div
+          initial={{ opacity: 0, y: -16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="rounded-2xl bg-card border border-border text-foreground p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-xl bg-primary flex items-center justify-center shrink-0">
+              <Shield size={28} className="text-primary-foreground" />
+            </div>
+            <div>
+              <h1 className="font-display text-2xl sm:text-3xl font-bold">
+                Welcome, {user?.first_name || user?.name?.split('@')[0] || user?.name || 'Admin'}
+              </h1>
+              <p className="mt-1.5 text-muted-foreground text-sm sm:text-base">
+                Monitor and manage the entire BookMyBox platform
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-sm text-muted-foreground">
+              <span className="w-2 h-2 rounded-full bg-primary" />
+              Platform admin
+            </div>
+            {pendingBoxes.length > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                <AlertTriangle size={16} />
+                {pendingBoxes.length} pending approval{pendingBoxes.length > 1 ? 's' : ''}
+              </div>
+            )}
+          </div>
+        </motion.div>
+
         {(loadingAdmin || adminError) && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-6"
-          >
+          <div className="mt-6">
             {loadingAdmin && <Loader text="Loading admin dashboard..." />}
             {adminError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+              <div className="bg-danger/10 border border-danger/30 text-danger px-4 py-3 rounded-lg">
                 {adminError}
               </div>
             )}
-          </motion.div>
+          </div>
         )}
 
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-                Welcome, {user?.first_name || user?.name?.split('@')[0] || user?.name || 'Admin'}! 🛡️
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400">Monitor and manage the entire BookMyBox platform</p>
-            </div>
-            <div className="hidden md:flex items-center space-x-4">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border dark:border-gray-700">
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
-                  <span className="text-sm font-medium dark:text-gray-200">Platform Admin</span>
-                </div>
-              </div>
-              {pendingBoxes.length > 0 && (
-                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-4">
-                  <div className="flex items-center space-x-2">
-                    <AlertTriangle size={16} className="text-yellow-600" />
-                    <span className="text-sm font-medium text-yellow-800">
-                      {pendingBoxes.length} pending approval{pendingBoxes.length > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </motion.div>
+        {/* Stats */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
+          <StatTile
+            tone="primary"
+            icon={<Users size={22} />}
+            value={adminData?.stats?.total_users?.toLocaleString() || '0'}
+            label={`Total users · ${adminData?.stats?.total_owners || 0} owners`}
+            loading={loadingAdmin}
+          />
+          <StatTile
+            tone="success"
+            icon={<Calendar size={22} />}
+            value={adminData?.stats?.total_bookings?.toLocaleString() || '0'}
+            label="Confirmed & completed bookings"
+            loading={loadingAdmin}
+          />
+          <StatTile
+            tone="secondary"
+            icon={<DollarSign size={22} />}
+            value={`₹${parseFloat(adminData?.stats?.platform_revenue || 0).toLocaleString()}`}
+            label="Lifetime platform revenue"
+            loading={loadingAdmin}
+          />
+          <StatTile
+            tone={pendingBoxes.length > 0 ? 'warning' : 'neutral'}
+            icon={<AlertTriangle size={22} />}
+            value={pendingBoxes.length}
+            label={pendingBoxes.length > 0 ? 'Pending approvals — needs attention' : 'Pending approvals — all clear'}
+          />
+        </div>
 
-        {/* Stats Cards */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
-        >
-          {stats.map((stat, index) => (
-            <motion.div
-              key={stat.title}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: index * 0.1 }}
-              className="card p-6 hover:shadow-lg transition-shadow"
+        {/* Quick actions */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
+          {quickActions.map((action) => (
+            <Card
+              key={action.title}
+              as="button"
+              padding="md"
+              interactive
+              onClick={() => setActiveTab(action.tab)}
+              className="text-center w-full"
             >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">{stat.title}</p>
-                  <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-                  <p className={`text-sm ${stat.title === 'Pending Approvals' && pendingBoxes.length > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                    {stat.change}
-                  </p>
-                </div>
-                <div className={`${stat.color} p-3 rounded-lg`}>
-                  <stat.icon size={24} className="text-white" />
-                </div>
-              </div>
-            </motion.div>
+              <action.icon size={28} className="mx-auto text-primary mb-3" strokeWidth={1.75} />
+              <h3 className="font-display font-semibold text-foreground mb-1">{action.title}</h3>
+              <p className="text-sm text-muted-foreground">{action.text}</p>
+              {action.count > 0 && (
+                <span className="inline-block mt-2">
+                  <Badge tone="warning">{action.count} pending</Badge>
+                </span>
+              )}
+            </Card>
           ))}
-        </motion.div>
-
-        {/* Quick Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8"
-        >
-          <div className="card p-6 text-center hover:shadow-lg transition-shadow cursor-pointer">
-            <Shield size={32} className="mx-auto text-blue-500 mb-3" />
-            <h3 className="font-semibold text-gray-900 mb-2">User Management</h3>
-            <p className="text-sm text-gray-600">Manage user accounts and permissions</p>
-          </div>
-          
-          <div className="card p-6 text-center hover:shadow-lg transition-shadow cursor-pointer">
-            <CheckCircle size={32} className="mx-auto text-green-500 mb-3" />
-            <h3 className="font-semibold text-gray-900 mb-2">Box Approvals</h3>
-            <p className="text-sm text-gray-600">Review and approve new facilities</p>
-            {pendingBoxes.length > 0 && (
-              <span className="inline-block mt-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded-full">
-                {pendingBoxes.length} pending
-              </span>
-            )}
-          </div>
-          
-          <div className="card p-6 text-center hover:shadow-lg transition-shadow cursor-pointer">
-            <DollarSign size={32} className="mx-auto text-purple-500 mb-3" />
-            <h3 className="font-semibold text-gray-900 mb-2">Revenue Reports</h3>
-            <p className="text-sm text-gray-600">View platform financial analytics</p>
-          </div>
-          
-          <div className="card p-6 text-center hover:shadow-lg transition-shadow cursor-pointer">
-            <TrendingUp size={32} className="mx-auto text-orange-500 mb-3" />
-            <h3 className="font-semibold text-gray-900 mb-2">Platform Analytics</h3>
-            <p className="text-sm text-gray-600">Comprehensive usage statistics</p>
-          </div>
-        </motion.div>
+        </div>
 
         {/* Tabs */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="card mb-8"
-        >
-          <div className="border-b border-gray-200">
-            <nav className="flex space-x-8 px-6 overflow-x-auto">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-                    activeTab === tab.id
-                      ? 'border-primary-500 text-primary-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
-          </div>
+        <nav className="flex flex-wrap gap-2 mt-8 overflow-x-auto no-scrollbar" aria-label="Tabs">
+          {TABS.map((tab) => {
+            const TabIcon = tab.icon
+            const isActive = activeTab === tab.id
+            const showCount = tab.id === 'approvals' && pendingBoxes.length > 0
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 py-2.5 px-4 rounded-full font-medium text-sm border transition-colors duration-150 whitespace-nowrap ${
+                  isActive
+                    ? 'bg-primary/15 border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-elevated'
+                }`}
+              >
+                <TabIcon size={18} />
+                <span>{tab.label}{showCount ? ` (${pendingBoxes.length})` : ''}</span>
+              </button>
+            )
+          })}
+        </nav>
 
-          <div className="p-6">
-            {/* Overview Tab */}
-            {activeTab === 'overview' && (
-              <div className="space-y-8">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Platform Revenue Trend</h4>
-                    {hasRevenueData ? <Line data={revenueData} options={chartOptions} /> : <ChartEmptyState label="No revenue data yet" />}
-                  </div>
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">User Growth</h4>
-                    {hasUserGrowthData ? <Bar data={userGrowthData} options={chartOptions} /> : <ChartEmptyState label="No user growth data yet" />}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="lg:col-span-2">
-                    <h4 className="font-medium mb-4">Recent Platform Activity</h4>
-                    <div className="space-y-3">
-                      {recentActivity.length > 0 ? recentActivity.map((event) => (
-                        <div key={event.id || `${event.type}-${event.time}`} className={`flex items-center justify-between py-3 px-4 rounded-lg border ${
-                          event.type === 'approval' ? 'bg-yellow-50 border-yellow-200' :
-                          event.type === 'user' ? 'bg-blue-50 border-blue-200' :
-                          event.type === 'booking' ? 'bg-green-50 border-green-200' :
-                          'bg-purple-50 border-purple-200'
-                        }`}>
-                          <div className="flex items-center space-x-3">
-                            <div className={`w-2 h-2 rounded-full ${getActivityColor(event.type)}`}></div>
-                            <span className="text-sm">{event.text}</span>
-                          </div>
-                          <span className={`text-xs ${
-                            event.type === 'approval' ? 'text-yellow-700' :
-                            event.type === 'user' ? 'text-blue-700' :
-                            event.type === 'booking' ? 'text-green-700' :
-                            'text-purple-700'
-                          }`}>{formatTimeAgo(event.time)}</span>
-                        </div>
-                      )) : (
-                        <div className="text-center py-8 text-gray-500">No recent activity</div>
-                      )}
-                      {pendingBoxes.length > 0 && (
-                        <div className="flex items-center justify-between py-3 px-4 bg-yellow-50 rounded-lg border border-yellow-200">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                            <span className="text-sm">{pendingBoxes.length} box{pendingBoxes.length > 1 ? 'es' : ''} pending approval</span>
-                          </div>
-                          <button
-                            onClick={() => setActiveTab('approvals')}
-                            className="text-xs text-yellow-700 hover:text-yellow-800 font-medium"
-                          >
-                            Review Now
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Sports Distribution</h4>
-                    {hasSportsData ? <Doughnut data={sportsData} options={doughnutOptions} /> : <ChartEmptyState label="No sports distribution data yet" />}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Revenue Summary</h4>
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Total Platform Revenue</span>
-                        <span className="font-medium">₹{parseFloat(totalPlatformRevenue).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Commission (10%)</span>
-                        <span className="font-medium">₹{Math.round(parseFloat(totalPlatformRevenue) * 0.1).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Confirmed Bookings</span>
-                        <span className="font-medium">{adminData?.stats?.total_bookings || 0}</span>
-                      </div>
-                      <div className="flex justify-between items-center border-t pt-2">
-                        <span className="text-sm font-medium">Avg Booking Value</span>
-                        <span className="font-bold text-primary-600">
-                          ₹{adminData?.stats?.total_bookings
-                            ? Math.round(parseFloat(totalPlatformRevenue) / adminData.stats.total_bookings).toLocaleString()
-                            : 0}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Top Performing Cities</h4>
-                    <div className="space-y-3">
-                      {topCities.length > 0 ? topCities.map((city) => (
-                        <div key={city.city} className="space-y-1">
-                          <div className="flex justify-between text-sm">
-                            <span>{city.city}</span>
-                            <span className="font-medium">{city.bookings} bookings</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div
-                              className="bg-primary-500 h-2 rounded-full transition-all duration-500"
-                              style={{ width: `${city.percentage}%` }}
-                            />
-                          </div>
-                        </div>
-                      )) : (
-                        <div className="text-center py-8 text-gray-500">No city data available</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+        <div className="py-8">
+          {/* Overview */}
+          {activeTab === 'overview' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Platform revenue trend</h4>
+                  {hasRevenueData ? <Line data={revenueData} options={chartOptions} /> : <ChartEmptyState label="No revenue data yet" />}
+                </Card>
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">User growth</h4>
+                  {hasUserGrowthData ? <Bar data={userGrowthData} options={chartOptions} /> : <ChartEmptyState label="No user growth data yet" />}
+                </Card>
               </div>
-            )}
 
-            {/* Box Approvals Tab */}
-            {activeTab === 'approvals' && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Box Approval Queue</h3>
-                  <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-500">
-                      {pendingBoxes.length} pending approval{pendingBoxes.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </div>
-
-                {pendingBoxes.length === 0 ? (
-                  <div className="text-center py-12">
-                    <CheckCircle size={64} className="mx-auto text-green-500 mb-4" />
-                    <h3 className="text-xl font-semibold text-gray-900 mb-2">All caught up!</h3>
-                    <p className="text-gray-600">No boxes pending approval at the moment.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {pendingBoxes.map((box) => (
-                      <motion.div
-                        key={box.id}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="card overflow-hidden"
-                      >
-                        <div className="relative">
-                          <img
-                            src={box.image}
-                            alt={box.name}
-                            className="w-full h-48 object-cover"
-                          />
-                          <div className="absolute top-4 right-4 bg-yellow-100 border border-yellow-300 px-2 py-1 rounded-lg flex items-center space-x-1">
-                            <Clock size={14} className="text-yellow-600" />
-                            <span className="text-xs font-medium text-yellow-800">Pending</span>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
+                <Card padding="md" className="xl:col-span-2">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Recent platform activity</h4>
+                  {recentActivity.length > 0 || pendingBoxes.length > 0 ? (
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      {recentActivity.map((event) => (
+                        <div key={event.id || `${event.type}-${event.time}`} className="flex items-center justify-between gap-3 p-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Badge tone={ACTIVITY_TONE[event.type] || 'neutral'} variant="solid" className="w-2 h-2 p-0 shrink-0" />
+                            <span className="text-sm text-foreground truncate">{event.text}</span>
                           </div>
+                          <span className="text-xs text-muted-foreground shrink-0">{formatTimeAgo(event.time)}</span>
                         </div>
-                        
-                        <div className="p-6">
-                          <div className="mb-4">
-                            <h4 className="font-semibold text-gray-900 text-lg">{box.name}</h4>
-                            <p className="text-sm text-gray-600">by {box.owner}</p>
+                      ))}
+                      {pendingBoxes.length > 0 && (
+                        <div className="flex items-center justify-between gap-3 p-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Badge tone="warning" variant="solid" className="w-2 h-2 p-0 shrink-0" />
+                            <span className="text-sm text-foreground truncate">
+                              {pendingBoxes.length} box{pendingBoxes.length > 1 ? 'es' : ''} pending approval
+                            </span>
+                          </div>
+                          <Button variant="ghost" size="sm" onClick={() => setActiveTab('approvals')}>Review now</Button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-muted-foreground">No recent activity</div>
+                  )}
+                </Card>
+
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Sports distribution</h4>
+                  {hasSportsData ? <Doughnut data={sportsData} options={doughnutOptions} /> : <ChartEmptyState label="No sports distribution data yet" />}
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Revenue summary</h4>
+                  <dl className="space-y-3 text-sm">
+                    <div className="flex justify-between items-center">
+                      <dt className="text-muted-foreground">Total platform revenue</dt>
+                      <dd className="font-medium text-foreground tabular-nums">₹{parseFloat(totalPlatformRevenue).toLocaleString()}</dd>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <dt className="text-muted-foreground">Commission (10%)</dt>
+                      <dd className="font-medium text-foreground tabular-nums">₹{Math.round(parseFloat(totalPlatformRevenue) * 0.1).toLocaleString()}</dd>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <dt className="text-muted-foreground">Confirmed bookings</dt>
+                      <dd className="font-medium text-foreground tabular-nums">{adminData?.stats?.total_bookings || 0}</dd>
+                    </div>
+                    <div className="flex justify-between items-center border-t border-border pt-3">
+                      <dt className="font-medium text-foreground">Avg booking value</dt>
+                      <dd className="font-display text-lg text-primary tabular-nums">
+                        ₹{adminData?.stats?.total_bookings
+                          ? Math.round(parseFloat(totalPlatformRevenue) / adminData.stats.total_bookings).toLocaleString()
+                          : 0}
+                      </dd>
+                    </div>
+                  </dl>
+                </Card>
+
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Top performing cities</h4>
+                  <div className="space-y-3">
+                    {topCities.length > 0 ? topCities.map((city) => (
+                      <div key={city.city} className="space-y-1.5">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-foreground">{city.city}</span>
+                          <span className="font-medium text-muted-foreground tabular-nums">{city.bookings} bookings</span>
+                        </div>
+                        <div className="w-full bg-elevated rounded-full h-2 overflow-hidden">
+                          <div
+                            className="bg-primary h-full rounded-full transition-all duration-500"
+                            style={{ width: `${city.percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="text-center py-8 text-muted-foreground">No city data available</div>
+                    )}
+                  </div>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {/* Box approvals */}
+          {activeTab === 'approvals' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-2xl font-display font-semibold text-foreground">Box approval queue</h3>
+                <span className="text-sm text-muted-foreground">
+                  {pendingBoxes.length} pending approval{pendingBoxes.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {pendingBoxes.length === 0 ? (
+                <Card padding="lg" className="text-center">
+                  <CheckCircle size={56} className="mx-auto text-success mb-4" />
+                  <h3 className="text-xl font-display font-semibold text-foreground mb-2">All caught up</h3>
+                  <p className="text-muted-foreground">No boxes pending approval at the moment.</p>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {pendingBoxes.map((box) => (
+                    <Card key={box.id} padding="none" className="overflow-hidden flex flex-col">
+                      <div className="relative">
+                        <img src={box.image} alt={box.name} className="w-full h-48 object-cover" />
+                        <div className="absolute top-4 right-4">
+                          <Badge tone="warning" variant="solid" size="md">
+                            <Clock size={14} />
+                            Pending
+                          </Badge>
+                        </div>
+                      </div>
+
+                      <div className="p-6 flex flex-col flex-1">
+                        <div className="mb-4">
+                          <h4 className="font-display font-semibold text-lg text-foreground">{box.name}</h4>
+                          <p className="text-sm text-muted-foreground">by {box.owner}</p>
+                        </div>
+
+                        <div className="space-y-3 mb-5 text-sm">
+                          <div>
+                            <p className="text-muted-foreground">Sports available</p>
+                            <p className="font-medium text-foreground">{box.sports?.join(', ')}</p>
                           </div>
 
-                          <div className="space-y-3 mb-4">
+                          <div className="grid grid-cols-2 gap-4">
                             <div>
-                              <p className="text-sm text-gray-600">Sports Available:</p>
-                              <p className="font-medium">{box.sports?.join(', ')}</p>
+                              <p className="text-muted-foreground">Location</p>
+                              <p className="font-medium text-foreground">{box.location}</p>
                             </div>
-                            
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <p className="text-sm text-gray-600">Location:</p>
-                                <p className="font-medium">{box.location}</p>
-                              </div>
-                              <div>
-                                <p className="text-sm text-gray-600">Price/Hour:</p>
-                                <p className="font-medium">₹{box.price}</p>
-                              </div>
-                              <div>
-                                <p className="text-sm text-gray-600">Capacity:</p>
-                                <p className="font-medium">{box.capacity} players</p>
-                              </div>
-                              <div>
-                                <p className="text-sm text-gray-600">Submitted:</p>
-                                <p className="font-medium">{box.submitted_at ? new Date(box.submitted_at).toLocaleDateString() : 'N/A'}</p>
-                              </div>
+                            <div>
+                              <p className="text-muted-foreground">Price / hour</p>
+                              <p className="font-medium text-foreground tabular-nums">₹{box.price}</p>
                             </div>
+                            <div>
+                              <p className="text-muted-foreground">Capacity</p>
+                              <p className="font-medium text-foreground">{box.capacity} players</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Submitted</p>
+                              <p className="font-medium text-foreground">{formatDate(box.submitted_at)}</p>
+                            </div>
+                          </div>
 
-                            <div>
-                              <p className="text-sm text-gray-600">Description:</p>
-                              <p className="text-sm text-gray-800">{box.description}</p>
-                            </div>
+                          <div>
+                            <p className="text-muted-foreground">Description</p>
+                            <p className="text-foreground">{box.description}</p>
+                          </div>
 
+                          {box.amenities?.length > 0 && (
                             <div>
-                              <p className="text-sm text-gray-600">Amenities:</p>
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {box.amenities?.map((amenity) => (
-                                  <span
-                                    key={amenity}
-                                    className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded"
-                                  >
-                                    {amenity}
-                                  </span>
+                              <p className="text-muted-foreground mb-1.5">Amenities</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {box.amenities.map((amenity) => (
+                                  <Badge key={amenity} tone="neutral">{amenity}</Badge>
                                 ))}
                               </div>
                             </div>
-                          </div>
-
-                          <div className="flex space-x-3">
-                            <button
-                              onClick={() => openRejectModal(box)}
-                              className="flex-1 px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50 transition-colors flex items-center justify-center space-x-2"
-                            >
-                              <X size={16} />
-                              <span>Reject</span>
-                            </button>
-                            <button
-                              onClick={() => handleApproveBox(box.id)}
-                              className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2"
-                            >
-                              <CheckCircle size={16} />
-                              <span>Approve</span>
-                            </button>
-                          </div>
+                          )}
                         </div>
-                      </motion.div>
+
+                        <div className="flex gap-3 mt-auto">
+                          <Button variant="outline" fullWidth icon={<X size={16} />} onClick={() => openRejectModal(box)}>
+                            Reject
+                          </Button>
+                          <Button fullWidth icon={<CheckCircle size={16} />} onClick={() => handleApproveBox(box.id)}>
+                            Approve
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Users */}
+          {activeTab === 'users' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <h3 className="text-2xl font-display font-semibold text-foreground">User management</h3>
+                <div className="w-full sm:w-72">
+                  <Input
+                    leadingIcon={<Search size={16} />}
+                    placeholder="Search users..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['User', 'Email', 'Role', 'Status', 'Bookings', 'Join date', 'Actions'].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">
+                            {users.length === 0 ? 'No users yet' : 'No users match your search'}
+                          </td>
+                        </tr>
+                      ) : filteredUsers.map((u) => (
+                        <tr key={u.id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
+                                {initial(u.name)}
+                              </div>
+                              <span className="font-medium text-foreground whitespace-nowrap">{u.name}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground">{u.email}</td>
+                          <td className="py-3 px-4"><Badge tone={ROLE_TONE[u.role] || 'neutral'}>{u.role}</Badge></td>
+                          <td className="py-3 px-4"><Badge tone={USER_STATUS_TONE[u.status] || 'neutral'}>{u.status}</Badge></td>
+                          <td className="py-3 px-4 text-muted-foreground tabular-nums">{u.bookings}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{formatDate(u.joinDate)}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1">
+                              {[
+                                { Icon: Eye, label: 'View user' },
+                                { Icon: Edit, label: 'Edit user' },
+                                { Icon: Trash2, label: 'Delete user' },
+                              ].map(({ Icon, label }) => (
+                                <button
+                                  key={label}
+                                  disabled
+                                  title={`${label} — coming soon`}
+                                  aria-label={`${label} — coming soon`}
+                                  className="p-1.5 rounded-md text-muted-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  <Icon size={16} />
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* Bookings */}
+          {activeTab === 'bookings' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <h3 className="text-2xl font-display font-semibold text-foreground">Booking management</h3>
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                  <div className="w-full sm:w-64">
+                    <Input
+                      leadingIcon={<Search size={16} />}
+                      placeholder="Search bookings..."
+                      value={bookingSearch}
+                      onChange={(e) => setBookingSearch(e.target.value)}
+                    />
+                  </div>
+                  <Select value={bookingStatusFilter} onChange={(e) => setBookingStatusFilter(e.target.value)}>
+                    <option value="">All status</option>
+                    <option value="Confirmed">Confirmed</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </Select>
+                </div>
+              </div>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['User', 'Box', 'Owner', 'Date', 'Amount', 'Commission', 'Status'].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredBookings.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">
+                            {bookings.length === 0 ? 'No bookings yet' : 'No bookings match your filters'}
+                          </td>
+                        </tr>
+                      ) : filteredBookings.map((booking) => (
+                        <tr key={booking.id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
+                                {initial(booking.user)}
+                              </div>
+                              <span className="text-foreground whitespace-nowrap">{booking.user}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground">{booking.box}</td>
+                          <td className="py-3 px-4 text-muted-foreground">{booking.owner}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{booking.date}</td>
+                          <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{booking.amount}</td>
+                          <td className="py-3 px-4 font-medium text-success tabular-nums">
+                            ₹{Math.round(booking.amount * 0.1)}
+                          </td>
+                          <td className="py-3 px-4">
+                            <Badge tone={BOOKING_STATUS_TONE[booking.status] || 'neutral'}>{booking.status}</Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* Analytics */}
+          {activeTab === 'analytics' && (
+            <div className="space-y-6">
+              <h3 className="text-2xl font-display font-semibold text-foreground">Platform analytics</h3>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Revenue growth</h4>
+                  {hasRevenueData ? <Line data={revenueData} options={chartOptions} /> : <ChartEmptyState label="No revenue data yet" />}
+                </Card>
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">User acquisition</h4>
+                  {hasUserGrowthData ? <Bar data={userGrowthData} options={chartOptions} /> : <ChartEmptyState label="No user growth data yet" />}
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Platform metrics</h4>
+                  <dl className="space-y-3 text-sm">
+                    {[
+                      ['Total users', users.length],
+                      ['Active boxes', boxes.filter(b => b.status === 'Approved' || b.status === 'approved').length],
+                      ['Total bookings', bookings.length],
+                      ['Platform commission', `₹${Math.round(parseFloat(totalPlatformRevenue) * 0.1).toLocaleString()}`],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex justify-between items-center">
+                        <dt className="text-muted-foreground">{label}</dt>
+                        <dd className="font-medium text-foreground tabular-nums">{value}</dd>
+                      </div>
                     ))}
-                  </div>
-                )}
+                  </dl>
+                </Card>
+
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Booking trends</h4>
+                  <dl className="space-y-3 text-sm">
+                    {[
+                      ['Confirmed / completed', bookings.filter(b => b.status === 'Confirmed' || b.status === 'Completed').length],
+                      ['Cancelled', bookings.filter(b => b.status === 'Cancelled').length],
+                      ['Average booking value', `₹${bookings.length
+                        ? Math.round(bookings.reduce((sum, b) => sum + parseFloat(b.amount || 0), 0) / bookings.length).toLocaleString()
+                        : 0}`],
+                      ['Total commission', `₹${Math.round(bookings.reduce((sum, b) => sum + parseFloat(b.commission || 0), 0)).toLocaleString()}`],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex justify-between items-center">
+                        <dt className="text-muted-foreground">{label}</dt>
+                        <dd className="font-medium text-foreground tabular-nums">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Card>
+
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Box status</h4>
+                  <dl className="space-y-3 text-sm">
+                    {[
+                      ['Approved', boxes.filter(b => b.status === 'Approved' || b.status === 'approved').length],
+                      ['Pending', boxes.filter(b => b.status === 'Pending' || b.status === 'pending').length],
+                      ['Rejected', boxes.filter(b => b.status === 'Rejected' || b.status === 'rejected').length],
+                      ['Total owners', adminData?.stats?.total_owners || 0],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex justify-between items-center">
+                        <dt className="text-muted-foreground">{label}</dt>
+                        <dd className="font-medium text-foreground tabular-nums">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Card>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Users Tab */}
-            {activeTab === 'users' && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">User Management</h3>
-                  <div className="flex items-center space-x-4">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                      <input
-                        type="text"
-                        placeholder="Search users..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                      />
-                    </div>
-                    <button className="flex items-center space-x-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
-                      <Filter size={16} />
-                      <span>Filter</span>
-                    </button>
-                  </div>
-                </div>
+          {/* Reports */}
+          {activeTab === 'reports' && (
+            <div className="space-y-6">
+              <h3 className="text-2xl font-display font-semibold text-foreground">Platform reports</h3>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">User</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Email</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Role</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Status</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Bookings</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Join Date</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredUsers.map((user) => (
-                        <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-3">
-                              <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                {user.name.charAt(0)}
-                              </div>
-                              <span className="font-medium">{user.name}</span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-4">{user.email}</td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              user.role === 'Owner' 
-                                ? 'bg-purple-100 text-purple-800'
-                                : user.role === 'Admin'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {user.role}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              user.status === 'Active' 
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {user.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4">{user.bookings}</td>
-                          <td className="py-3 px-4">{new Date(user.joinDate).toLocaleDateString()}</td>
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-2">
-                              <button className="p-1 text-gray-600 hover:text-primary-600">
-                                <Eye size={16} />
-                              </button>
-                              <button className="p-1 text-gray-600 hover:text-primary-600">
-                                <Edit size={16} />
-                              </button>
-                              <button className="p-1 text-gray-600 hover:text-red-600">
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Bookings Tab */}
-            {activeTab === 'bookings' && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Booking Management</h3>
-                  <div className="flex items-center space-x-4">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                      <input
-                        type="text"
-                        placeholder="Search bookings..."
-                        className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                      />
-                    </div>
-                    <select className="px-4 py-2 border border-gray-300 rounded-lg">
-                      <option>All Status</option>
-                      <option>Confirmed</option>
-                      <option>Completed</option>
-                      <option>Cancelled</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">User</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Box</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Owner</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Date</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Amount</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Commission</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Status</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-900">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bookings.map((booking) => (
-                        <tr key={booking.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-3">
-                              <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                {booking.user.charAt(0)}
-                              </div>
-                              <span>{booking.user}</span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-4">{booking.box}</td>
-                          <td className="py-3 px-4">{booking.owner}</td>
-                          <td className="py-3 px-4">{booking.date}</td>
-                          <td className="py-3 px-4 font-medium">₹{booking.amount}</td>
-                          <td className="py-3 px-4 font-medium text-green-600">₹{Math.round(booking.amount * 0.1)}</td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              booking.status === 'Confirmed' 
-                                ? 'bg-green-100 text-green-800'
-                                : booking.status === 'Completed'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {booking.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-2">
-                              <button className="p-1 text-gray-600 hover:text-primary-600">
-                                <Eye size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Analytics Tab */}
-            {activeTab === 'analytics' && (
-              <div className="space-y-8">
-                <h3 className="text-lg font-semibold">Platform Analytics</h3>
-                
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Revenue Growth</h4>
-                    {hasRevenueData ? <Line data={revenueData} options={chartOptions} /> : <ChartEmptyState label="No revenue data yet" />}
-                  </div>
-                  
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">User Acquisition</h4>
-                    {hasUserGrowthData ? <Bar data={userGrowthData} options={chartOptions} /> : <ChartEmptyState label="No user growth data yet" />}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Platform Metrics</h4>
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Total Users</span>
-                        <span className="font-medium">{users.length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Active Boxes</span>
-                        <span className="font-medium">{boxes.filter(b => b.status === 'Approved' || b.status === 'approved').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Total Bookings</span>
-                        <span className="font-medium">{bookings.length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Platform Commission</span>
-                        <span className="font-medium">₹{Math.round(parseFloat(totalPlatformRevenue) * 0.1).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Booking Trends</h4>
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Confirmed / Completed</span>
-                        <span className="font-medium">{bookings.filter(b => b.status === 'Confirmed' || b.status === 'Completed').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Cancelled</span>
-                        <span className="font-medium">{bookings.filter(b => b.status === 'Cancelled').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Average Booking Value</span>
-                        <span className="font-medium">
-                          ₹{bookings.length
-                            ? Math.round(bookings.reduce((sum, b) => sum + parseFloat(b.amount || 0), 0) / bookings.length).toLocaleString()
-                            : 0}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Total Commission</span>
-                        <span className="font-medium">₹{Math.round(bookings.reduce((sum, b) => sum + parseFloat(b.commission || 0), 0)).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card p-6">
-                    <h4 className="font-medium mb-4">Box Status</h4>
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Approved</span>
-                        <span className="font-medium">{boxes.filter(b => b.status === 'Approved' || b.status === 'approved').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Pending</span>
-                        <span className="font-medium">{boxes.filter(b => b.status === 'Pending' || b.status === 'pending').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Rejected</span>
-                        <span className="font-medium">{boxes.filter(b => b.status === 'Rejected' || b.status === 'rejected').length}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-gray-600">Total Owners</span>
-                        <span className="font-medium">{adminData?.stats?.total_owners || 0}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Reports Tab */}
-            {activeTab === 'reports' && (
-              <div className="space-y-6">
-                <h3 className="text-lg font-semibold">Platform Reports</h3>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <div className="card p-6 hover:shadow-lg transition-shadow cursor-pointer">
-                    <DollarSign size={32} className="text-green-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">Revenue Report</h4>
-                    <p className="text-sm text-gray-600 mb-4">Detailed financial analytics and commission tracking</p>
-                    <button
-                      className="btn-primary w-full"
-                      onClick={() => exportToCsv('revenue-report.csv', bookings.map(b => ({
-                        id: b.id, user: b.user, box: b.box, owner: b.owner, date: b.date, amount: b.amount, commission: b.commission, status: b.status,
-                      })))}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                {reports.map((report) => (
+                  <Card key={report.title} padding="md" className={`flex flex-col ${report.disabled ? 'opacity-60' : ''}`}>
+                    <report.icon size={28} className={`mb-4 ${report.tone}`} strokeWidth={1.75} />
+                    <h4 className="font-display font-semibold text-foreground mb-2">{report.title}</h4>
+                    <p className="text-sm text-muted-foreground mb-5 flex-1">{report.text}</p>
+                    <Button
+                      fullWidth
+                      onClick={report.onClick}
+                      disabled={report.disabled}
+                      title={report.disabled ? 'Coming soon' : undefined}
                     >
-                      Generate Report
-                    </button>
-                  </div>
-
-                  <div className="card p-6 hover:shadow-lg transition-shadow cursor-pointer">
-                    <Users size={32} className="text-blue-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">User Analytics</h4>
-                    <p className="text-sm text-gray-600 mb-4">User behavior, engagement, and growth metrics</p>
-                    <button
-                      className="btn-primary w-full"
-                      onClick={() => exportToCsv('user-analytics-report.csv', users.map(u => ({
-                        id: u.id, name: u.name, email: u.email, role: u.role, status: u.status, bookings: u.bookings, joinDate: u.joinDate,
-                      })))}
-                    >
-                      Generate Report
-                    </button>
-                  </div>
-
-                  <div className="card p-6 hover:shadow-lg transition-shadow cursor-pointer">
-                    <Calendar size={32} className="text-purple-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">Booking Report</h4>
-                    <p className="text-sm text-gray-600 mb-4">Booking trends, patterns, and performance analysis</p>
-                    <button
-                      className="btn-primary w-full"
-                      onClick={() => exportToCsv('booking-report.csv', bookings.map(b => ({
-                        id: b.id, date: b.date, user: b.user, box: b.box, status: b.status,
-                      })))}
-                    >
-                      Generate Report
-                    </button>
-                  </div>
-
-                  <div className="card p-6 opacity-60">
-                    <TrendingUp size={32} className="text-orange-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">Performance Report</h4>
-                    <p className="text-sm text-gray-600 mb-4">Platform performance and operational metrics</p>
-                    <button className="btn-primary w-full" disabled title="Coming soon">Coming Soon</button>
-                  </div>
-
-                  <div className="card p-6 opacity-60">
-                    <Shield size={32} className="text-red-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">Security Report</h4>
-                    <p className="text-sm text-gray-600 mb-4">Security incidents, user activity, and system logs</p>
-                    <button className="btn-primary w-full" disabled title="Coming soon">Coming Soon</button>
-                  </div>
-
-                  <div className="card p-6 opacity-60">
-                    <Eye size={32} className="text-indigo-500 mb-4" />
-                    <h4 className="font-semibold text-gray-900 mb-2">Custom Report</h4>
-                    <p className="text-sm text-gray-600 mb-4">Create custom reports with specific parameters</p>
-                    <button className="btn-primary w-full" disabled title="Coming soon">Coming Soon</button>
-                  </div>
-                </div>
+                      {report.disabled ? 'Coming soon' : 'Generate report'}
+                    </Button>
+                  </Card>
+                ))}
               </div>
-            )}
-          </div>
-        </motion.div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Rejection Modal */}
+      {/* Rejection Modal — Modal manages its own AnimatePresence internally,
+          so it renders unconditionally rather than behind a && guard. */}
       <Modal
         isOpen={showApprovalModal}
-        onClose={() => {
-          setShowApprovalModal(false)
-          setSelectedBox(null)
-          setRejectionReason('')
-        }}
-        title="Reject Box Application"
+        onClose={closeRejectModal}
+        title="Reject box application"
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={closeRejectModal}>Cancel</Button>
+            <Button variant="danger" onClick={() => handleRejectBox(selectedBox?.id)}>Reject application</Button>
+          </>
+        )}
       >
         <div className="space-y-4">
-          <p className="text-gray-600">
+          <p className="text-muted-foreground">
             Are you sure you want to reject the application for{' '}
-            <strong>{selectedBox?.name}</strong>?
+            <span className="font-semibold text-foreground">{selectedBox?.name}</span>?
           </p>
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Rejection Reason (Optional)
+
+          <div className="space-y-1.5">
+            <label htmlFor="rejection-reason" className="block text-sm font-medium text-foreground">
+              Rejection reason (optional)
             </label>
             <textarea
+              id="rejection-reason"
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
-              className="input-field"
-              rows="3"
+              rows={3}
+              className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
               placeholder="Provide a reason for rejection to help the owner improve their application..."
             />
-          </div>
-          
-          <div className="flex space-x-3">
-            <button
-              onClick={() => {
-                setShowApprovalModal(false)
-                setSelectedBox(null)
-                setRejectionReason('')
-              }}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => handleRejectBox(selectedBox?.id)}
-              className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-            >
-              Reject Application
-            </button>
           </div>
         </div>
       </Modal>
