@@ -21,8 +21,9 @@ class BoxSerializer(serializers.ModelSerializer):
         model = Box
         fields = [
             'id', 'name', 'sport', 'sports', 'location', 'price', 'rating',
-            'capacity', 'image', 'images', 'amenities', 'description',
-            'full_description', 'rules', 'latitude', 'longitude', 'reviews'
+            'capacity', 'opening_time', 'closing_time', 'image', 'images',
+            'amenities', 'description', 'full_description', 'rules',
+            'latitude', 'longitude', 'reviews'
         ]
 
     def get_images(self, obj):
@@ -66,9 +67,9 @@ class OwnerBoxSerializer(serializers.ModelSerializer):
         model = Box
         fields = [
             'id', 'name', 'sport', 'sports', 'location', 'price',
-            'capacity', 'image', 'images', 'amenities', 'description',
-            'full_description', 'rules', 'latitude', 'longitude',
-            'status', 'rejection_reason'
+            'capacity', 'opening_time', 'closing_time', 'image', 'images',
+            'amenities', 'description', 'full_description', 'rules',
+            'latitude', 'longitude', 'status', 'rejection_reason'
         ]
         read_only_fields = ['status', 'rejection_reason']
 

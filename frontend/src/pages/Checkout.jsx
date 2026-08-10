@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { Smartphone, CreditCard, Wallet, Ticket, ShieldCheck } from 'lucide-react';
 import { toast } from 'react-toastify';
-import { Card, Button } from '../components/ui';
+import { Card, Button, Input } from '../components/ui';
 import { MagneticButton } from '../components/motion/MagneticButton';
 import { useBooking } from '../context/BookingContext';
 import { useSlotReservation } from '../hooks/useSlotReservation';
@@ -36,6 +36,11 @@ const Checkout = () => {
     const [couponCode, setCouponCode] = useState('');
     const [confirming, setConfirming] = useState(false);
     const [leaving, setLeaving] = useState(false);
+    const [details, setDetails] = useState({
+        name: user?.name || '',
+        phone: user?.phone || '',
+        email: user?.email || '',
+    });
 
     const liveReservation = useSlotReservation({
         boxId: draft?.boxId,
@@ -70,7 +75,7 @@ const Checkout = () => {
 
     if (!draft) {
         return (
-            <div className="min-h-screen flex items-center justify-center px-4 pt-16">
+            <div className="min-h-screen flex items-center justify-center px-4">
                 <Card className="text-center max-w-md">
                     <h2 className="text-2xl font-display font-semibold text-foreground mb-2">Nothing to check out</h2>
                     <p className="text-muted-foreground mb-6">Pick a time slot on a box&apos;s page first.</p>
@@ -122,7 +127,7 @@ const Checkout = () => {
     };
 
     return (
-        <div className="min-h-screen pt-24 pb-20 px-4 sm:px-6 lg:px-8">
+        <div className="min-h-screen pb-20 px-4 sm:px-6 lg:px-8 py-8">
             <div className="max-w-5xl mx-auto">
                 <h1 className="font-display font-black uppercase tracking-tight text-3xl sm:text-4xl text-foreground mb-8">
                     Checkout
@@ -149,6 +154,29 @@ const Checkout = () => {
                                 </p>
                             </Card>
                         )}
+
+                        <Card>
+                            <h3 className="font-display font-semibold text-foreground mb-4">Your details</h3>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                <Input
+                                    label="Name"
+                                    value={details.name}
+                                    onChange={(e) => setDetails({ ...details, name: e.target.value })}
+                                />
+                                <Input
+                                    label="Phone"
+                                    value={details.phone}
+                                    onChange={(e) => setDetails({ ...details, phone: e.target.value })}
+                                />
+                                <div className="sm:col-span-2">
+                                    <Input
+                                        label="Email"
+                                        value={details.email}
+                                        onChange={(e) => setDetails({ ...details, email: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+                        </Card>
 
                         <Card>
                             <h3 className="font-display font-semibold text-foreground mb-4 flex items-center gap-2">

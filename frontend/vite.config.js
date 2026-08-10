@@ -13,7 +13,6 @@ export default defineConfig({
         // rest by page.
         manualChunks: {
           maps: ['@vis.gl/react-google-maps'],
-          swiper: ['swiper', 'swiper/react'],
           charts: ['chart.js', 'react-chartjs-2'],
           'framer-motion': ['framer-motion'],
         },

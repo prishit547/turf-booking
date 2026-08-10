@@ -212,7 +212,7 @@ const Profile = () => {
   const avatarLetter = displayName.charAt(0).toUpperCase() || 'U';
 
   return (
-    <div className="min-h-screen bg-background pt-24 pb-16">
+    <div className="min-h-screen bg-background py-8">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header panel */}
         <motion.div

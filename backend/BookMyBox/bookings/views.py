@@ -93,6 +93,16 @@ class BookingViewSet(viewsets.ModelViewSet):
 
         end_time_str = self._compute_end_time_str(booking_date, start_time_str, duration_hours)
 
+        try:
+            box = Box.objects.get(pk=box_id)
+        except Box.DoesNotExist:
+            raise ValidationError("Box not found.")
+
+        if start_time_str < box.opening_time or end_time_str > box.closing_time:
+            raise ValidationError(
+                f"This facility is only bookable between {box.opening_time} and {box.closing_time}."
+            )
+
         return {
             'box_id': box_id,
             'booking_date': booking_date,

@@ -1,337 +1,240 @@
-import { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
-import { Search, Filter, Grid, List, Star, MapPin, Users, Map, X, ArrowRight, Sparkles, Target, Clock, LayoutGrid } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useState, useMemo, useCallback } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { LayoutGrid, List, Map, Search, SlidersHorizontal, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { useBox } from '../context/BoxContext';
 import { useDebounce } from '../hooks/useDebounce';
-import { Loader, Card, Button, Input, Select } from '../components/ui';
+import { Input, VenueCardSkeleton } from '../components/ui';
 import { BoxCard } from '../components/boxes/BoxCard';
+import { FilterPanel, defaultFilters } from '../components/boxes/FilterPanel';
 import Chatbot from '../components/common/Chatbot';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
-import { animations } from '../utils/animations';
-import { CricketIcon, FootballIcon, BadmintonIcon, BasketballIcon } from '../components/icons/SportIcons';
 
-const SPORT_PILLS = [
-    { name: '', label: 'All sports', Icon: LayoutGrid },
-    { name: 'Cricket', label: 'Cricket', Icon: CricketIcon },
-    { name: 'Football', label: 'Football', Icon: FootballIcon },
-    { name: 'Badminton', label: 'Badminton', Icon: BadmintonIcon },
-    { name: 'Basketball', label: 'Basketball', Icon: BasketballIcon },
-];
-
-const BoxListCard = ({ box }) => (
-    <motion.div variants={animations.staggerItem}>
-        <Card interactive padding="none" className="overflow-hidden group">
-            <div className="flex flex-col sm:flex-row">
-                <div className="relative sm:w-80 sm:flex-shrink-0 overflow-hidden">
-                    <img
-                        src={box.image}
-                        alt={box.name}
-                        className="w-full h-48 sm:h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                    />
-                    <div className="absolute top-3 right-3 bg-primary text-primary-foreground rounded-md px-2.5 py-1.5 text-right leading-none shadow-glow">
-                        <div className="text-[10px] uppercase tracking-wide opacity-80">From</div>
-                        <div className="font-display text-base leading-none mt-0.5">₹{box.price}</div>
-                    </div>
-                    <div className="absolute top-3 left-3 bg-card/90 backdrop-blur px-2 py-1 rounded-md text-xs font-semibold uppercase tracking-wide text-foreground">
-                        {box.sport || 'Multi-sport'}
-                    </div>
-                </div>
-
-                <div className="flex-1 p-6 flex flex-col justify-between">
-                    <div>
-                        <div className="flex items-start justify-between gap-4 mb-4">
-                            <div className="flex-1">
-                                <h3 className="text-xl font-display font-semibold text-foreground mb-1.5">
-                                    {box.name}
-                                </h3>
-                                <p className="text-muted-foreground text-sm line-clamp-2">
-                                    Experience premium sports facilities with state-of-the-art equipment and professional maintenance.
-                                </p>
-                            </div>
-                            <div className="text-right shrink-0 flex items-center gap-1 text-foreground font-medium">
-                                <Star size={16} className="text-warning fill-warning" />
-                                {box.rating}
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-6 text-sm text-muted-foreground">
-                            <div className="flex items-center gap-2"><MapPin size={16} />{box.location}</div>
-                            <div className="flex items-center gap-2"><Users size={16} />Up to {box.capacity} players</div>
-                            <div className="flex items-center gap-2"><Clock size={16} />Available today</div>
-                            <div className="flex items-center gap-2"><Target size={16} />{box.sport || 'Multi-sport'}</div>
-                        </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                        <Button as={Link} to={`/boxes/${box.id}`} variant="outline" className="flex-1" icon={<ArrowRight size={16} />}>
-                            View Details
-                        </Button>
-                        <Button as={Link} to={`/boxes/${box.id}`} className="flex-1">
-                            Book Now
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        </Card>
-    </motion.div>
-);
+const LOCATIONS = ['Ahmedabad', 'Kolkata', 'Goa', 'Jaipur', 'Lucknow', 'Bhopal', 'Indore', 'Chandigarh', 'Hyderabad', 'Chennai', 'Bengaluru', 'Pune', 'Delhi', 'Mumbai'];
 
 const BoxListings = () => {
+    const [searchParams] = useSearchParams();
     const [searchTerm, setSearchTerm] = useState('');
-    const [viewMode, setViewMode] = useState('grid');
-    const [sortBy, setSortBy] = useState('rating');
-    const [showFilters, setShowFilters] = useState(false);
+    const [location, setLocation] = useState(searchParams.get('location') || 'all');
+    const [sort, setSort] = useState('rating');
+    const [layout, setLayout] = useState('grid');
     const [showMap, setShowMap] = useState(false);
-
-    const [localFilters, setLocalFilters] = useState({
-        sport: '',
-        location: '',
-        priceRange: [0, 5000],
-        rating: 0
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [filters, setFiltersState] = useState({
+        ...defaultFilters,
+        sport: searchParams.get('sport') || '',
     });
 
-    const { boxes, loadingMap, errorMap, setFilters, clearFiltersAndRefresh } = useBox();
+    const { boxes, loadingMap, errorMap } = useBox();
+    // Loading/error reflect only BoxProvider's one-time initial fetch (it
+    // loads the full box list once on app mount, no pagination) — every
+    // filter below runs entirely client-side against that already-loaded
+    // list, exactly like the reference design's useMemo-based filtering.
+    // Sending each filter change to the backend instead would flip this
+    // whole grid to a loading-skeleton state on every click, which is what
+    // was killing the animated re-flow (AnimatePresence + layout) below.
     const loading = loadingMap.boxes;
     const error = errorMap.boxes;
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-    useEffect(() => {
-        setFilters({
-            search: debouncedSearchTerm,
-            sport: localFilters.sport,
-            location: localFilters.location,
-            min_price: localFilters.priceRange[0],
-            max_price: localFilters.priceRange[1],
-            min_rating: localFilters.rating
+    const amenityOptions = useMemo(() => {
+        const set = new Set();
+        boxes.forEach((b) => (b.amenities || []).forEach((a) => set.add(a)));
+        return [...set].sort();
+    }, [boxes]);
+
+    const results = useMemo(() => {
+        const q = debouncedSearchTerm.trim().toLowerCase();
+        const list = boxes.filter((b) => {
+            if (location !== 'all' && !(b.location || '').toLowerCase().includes(location.toLowerCase())) return false;
+            if (filters.sport && b.sport !== filters.sport) return false;
+            if ((parseFloat(b.price) || 0) > filters.maxPrice) return false;
+            if ((parseFloat(b.rating) || 0) < filters.minRating) return false;
+            if (filters.amenities.length && !filters.amenities.every((a) => (b.amenities || []).includes(a))) return false;
+            if (q) {
+                const haystack = `${b.name || ''} ${b.location || ''} ${b.sport || ''}`.toLowerCase();
+                if (!haystack.includes(q)) return false;
+            }
+            return true;
         });
-    }, [debouncedSearchTerm, localFilters, setFilters]);
+        return [...list].sort((a, b) => {
+            if (sort === 'price-low') return (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0);
+            if (sort === 'price-high') return (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0);
+            return (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0);
+        });
+    }, [boxes, location, filters.sport, filters.maxPrice, filters.minRating, filters.amenities, debouncedSearchTerm, sort]);
 
     const clearAllFilters = useCallback(() => {
         setSearchTerm('');
-        setLocalFilters({ sport: '', location: '', priceRange: [0, 5000], rating: 0 });
-        clearFiltersAndRefresh();
-    }, [clearFiltersAndRefresh]);
-
-    const handleFilterChange = useCallback((key, value) => {
-        setLocalFilters(prev => ({ ...prev, [key]: value }));
+        setLocation('all');
+        setFiltersState(defaultFilters);
     }, []);
-
-    const sortedBoxes = [...boxes].sort((a, b) => {
-        switch (sortBy) {
-            case 'price-low': return (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0);
-            case 'price-high': return (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0);
-            case 'rating': return (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0);
-            case 'name': return a.name.localeCompare(b.name);
-            default: return 0;
-        }
-    });
-
-    const sports = ['Cricket', 'Football', 'Badminton', 'Padel', 'Squash', 'Basketball', 'Multisport', 'Skating', 'Cycling', 'Futsal', 'Watersports', 'Yoga', 'Archery'];
-    const locations = ['Ahmedabad', 'Kolkata', 'Goa', 'Jaipur', 'Lucknow', 'Bhopal', 'Indore', 'Chandigarh', 'Hyderabad', 'Chennai', 'Bengaluru', 'Pune', 'Delhi', 'Mumbai'];
 
     return (
         <div className="min-h-screen">
-            <section className="pt-28 pb-14 px-4 sm:px-6 lg:px-8">
-                <div className="max-w-7xl mx-auto">
-                    <div className="text-center mb-10">
-                        <h1 className="font-display font-black uppercase tracking-tight text-4xl lg:text-5xl text-foreground mb-4">
-                            Discover sports boxes
-                        </h1>
-                        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-                            Find and book the perfect sports facility for your game from our curated collection of venues.
+            <div className="mx-auto max-w-7xl px-4 py-8">
+                <header className="flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                        <h1 className="font-display text-3xl uppercase sm:text-4xl">Boxes</h1>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            {loading ? 'Checking live availability…' : `${results.length} boxes match your filters`}
                         </p>
                     </div>
 
-                    <div className="max-w-4xl mx-auto">
-                        <Card>
-                            <div className="flex flex-col lg:flex-row gap-4 items-center">
-                                <div className="flex-1 w-full">
-                                    <Input
-                                        leadingIcon={<Search size={18} />}
-                                        placeholder="Search by name, sport, or location..."
-                                        value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                    />
-                                </div>
-
-                                <div className="flex gap-3 w-full lg:w-auto">
-                                    <Button
-                                        variant={showFilters ? 'primary' : 'outline'}
-                                        onClick={() => setShowFilters(!showFilters)}
-                                        icon={<Filter size={16} />}
-                                        className="flex-1 lg:flex-none"
-                                    >
-                                        Filters
-                                    </Button>
-                                    <Button
-                                        variant={showMap ? 'primary' : 'outline'}
-                                        onClick={() => setShowMap(!showMap)}
-                                        icon={<Map size={16} />}
-                                        className="flex-1 lg:flex-none"
-                                    >
-                                        {showMap ? 'Close map' : 'View map'}
-                                    </Button>
-                                    <div className="flex bg-elevated rounded-full p-1">
-                                        <button
-                                            className={`p-2 rounded-full transition-colors ${viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                                            onClick={() => setViewMode('grid')}
-                                            aria-label="Grid view"
-                                        >
-                                            <Grid size={18} />
-                                        </button>
-                                        <button
-                                            className={`p-2 rounded-full transition-colors ${viewMode === 'list' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                                            onClick={() => setViewMode('list')}
-                                            aria-label="List view"
-                                        >
-                                            <List size={18} />
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </Card>
-                    </div>
-
-                    <div className="flex flex-wrap justify-center gap-3 mt-6">
-                        {SPORT_PILLS.map(({ name, label, Icon }) => {
-                            const active = localFilters.sport === name;
-                            return (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <select
+                            value={location}
+                            onChange={(e) => setLocation(e.target.value)}
+                            aria-label="Location"
+                            className="rounded-full border border-border bg-card px-4 py-2 text-sm"
+                        >
+                            <option value="all">All locations</option>
+                            {LOCATIONS.map((l) => (
+                                <option key={l} value={l}>{l}</option>
+                            ))}
+                        </select>
+                        <select
+                            value={sort}
+                            onChange={(e) => setSort(e.target.value)}
+                            aria-label="Sort by"
+                            className="rounded-full border border-border bg-card px-4 py-2 text-sm"
+                        >
+                            <option value="rating">Top rated</option>
+                            <option value="price-low">Lowest price</option>
+                            <option value="price-high">Highest price</option>
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => setShowMap(true)}
+                            className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-primary/60 hover:text-foreground"
+                        >
+                            <Map className="h-4 w-4" /> Map
+                        </button>
+                        <div className="flex overflow-hidden rounded-full border border-border">
+                            {['grid', 'list'].map((l) => (
                                 <button
-                                    key={label}
-                                    onClick={() => handleFilterChange('sport', name)}
-                                    className={`flex items-center gap-2 px-4 py-2.5 rounded-full border font-medium text-sm transition-colors ${
-                                        active
-                                            ? 'bg-primary border-primary text-primary-foreground'
-                                            : 'bg-card border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
-                                    }`}
+                                    key={l}
+                                    type="button"
+                                    onClick={() => setLayout(l)}
+                                    aria-label={`${l} view`}
+                                    aria-pressed={layout === l}
+                                    className={`px-3 py-2 transition ${layout === l ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
                                 >
-                                    <Icon size={17} />
-                                    {label}
+                                    {l === 'grid' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
                                 </button>
-                            );
-                        })}
+                            ))}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setDrawerOpen(true)}
+                            className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm lg:hidden"
+                        >
+                            <SlidersHorizontal className="h-4 w-4" /> Filters
+                        </button>
                     </div>
+                </header>
+
+                <div className="mt-4 max-w-xl">
+                    <Input
+                        leadingIcon={<Search size={18} />}
+                        placeholder="Search by name, sport, or location..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
                 </div>
-            </section>
 
-            {showFilters && (
-                <motion.section
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="px-4 sm:px-6 lg:px-8 pb-8"
-                >
-                    <div className="max-w-7xl mx-auto">
-                        <Card>
-                            <div className="flex items-center justify-between mb-6">
-                                <h3 className="text-lg font-display font-semibold text-foreground">
-                                    Filter results
-                                </h3>
-                                <div className="flex items-center gap-3">
-                                    <Button variant="ghost" size="sm" onClick={clearAllFilters}>Clear all</Button>
-                                    <button onClick={() => setShowFilters(false)} className="text-muted-foreground hover:text-foreground">
-                                        <X size={20} />
-                                    </button>
-                                </div>
+                <div className="mt-6 grid gap-8 lg:grid-cols-[260px_1fr]">
+                    <aside className="hidden lg:block">
+                        <div className="sticky top-24 rounded-2xl border border-border bg-card p-5">
+                            <FilterPanel filters={filters} onChange={setFiltersState} amenityOptions={amenityOptions} />
+                        </div>
+                    </aside>
+
+                    <main>
+                        {loading ? (
+                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                                {Array.from({ length: 6 }).map((_, i) => (
+                                    <VenueCardSkeleton key={i} />
+                                ))}
                             </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-                                <Select label="Sport" value={localFilters.sport} onChange={(e) => handleFilterChange('sport', e.target.value)}>
-                                    <option value="">All sports</option>
-                                    {sports.map(sport => <option key={sport} value={sport}>{sport}</option>)}
-                                </Select>
-                                <Select label="Location" value={localFilters.location} onChange={(e) => handleFilterChange('location', e.target.value)}>
-                                    <option value="">All locations</option>
-                                    {locations.map(location => <option key={location} value={location}>{location}</option>)}
-                                </Select>
-                                <Select label="Minimum rating" value={localFilters.rating} onChange={(e) => handleFilterChange('rating', Number(e.target.value))}>
-                                    <option value={0}>Any rating</option>
-                                    <option value={4}>4+ stars</option>
-                                    <option value={4.5}>4.5+ stars</option>
-                                </Select>
-                                <Select label="Sort by" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                                    <option value="rating">Highest rated</option>
-                                    <option value="price-low">Price: low to high</option>
-                                    <option value="price-high">Price: high to low</option>
-                                    <option value="name">Name A-Z</option>
-                                </Select>
+                        ) : error ? (
+                            <div className="rounded-2xl border border-dashed border-border p-12 text-center">
+                                <h2 className="font-display text-xl">Something went wrong</h2>
+                                <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => window.location.reload()}
+                                    className="mt-5 rounded-full bg-primary px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-primary-foreground"
+                                >
+                                    Try again
+                                </button>
                             </div>
-                        </Card>
-                    </div>
-                </motion.section>
-            )}
-
-            <BoxListingsMap isOpen={showMap} onClose={() => setShowMap(false)} boxes={sortedBoxes} />
-
-            <section className="px-4 sm:px-6 lg:px-8 pb-20">
-                <div className="max-w-7xl mx-auto">
-                    <div className="flex items-center justify-between mb-8">
-                        <div>
-                            <h2 className="text-2xl font-display font-extrabold uppercase tracking-tight text-foreground">
-                                {sortedBoxes.length} sports boxes found
-                            </h2>
-                            {searchTerm && <p className="text-muted-foreground mt-1">Results for &ldquo;{searchTerm}&rdquo;</p>}
-                        </div>
-                        {(searchTerm || localFilters.sport || localFilters.location || localFilters.rating > 0) && (
-                            <Button variant="ghost" onClick={clearAllFilters} icon={<X size={16} />}>
-                                Clear filters
-                            </Button>
-                        )}
-                    </div>
-
-                    {loading && (
-                        <div className="flex justify-center py-16">
-                            <Loader text="Finding perfect sports boxes..." />
-                        </div>
-                    )}
-
-                    {error && (
-                        <div className="text-center py-16">
-                            <Card className="max-w-md mx-auto text-center">
-                                <X size={40} className="mx-auto text-danger mb-4" />
-                                <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                                    Something went wrong
-                                </h3>
-                                <p className="text-muted-foreground mb-6">{error}</p>
-                                <Button onClick={() => window.location.reload()}>Try again</Button>
-                            </Card>
-                        </div>
-                    )}
-
-                    {!loading && !error && (
-                        sortedBoxes.length === 0 ? (
-                            <div className="text-center py-16">
-                                <Card className="max-w-md mx-auto text-center">
-                                    <Sparkles size={40} className="mx-auto text-muted-foreground mb-4" />
-                                    <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                                        No boxes found
-                                    </h3>
-                                    <p className="text-muted-foreground mb-6">Try adjusting your search criteria or clear the filters.</p>
-                                    <Button onClick={clearAllFilters}>Clear all filters</Button>
-                                </Card>
+                        ) : results.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed border-border p-12 text-center">
+                                <h2 className="font-display text-xl">No boxes match that combination</h2>
+                                <p className="mt-2 text-sm text-muted-foreground">
+                                    Loosen the price or rating filter — there are plenty of slots nearby.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={clearAllFilters}
+                                    className="mt-5 rounded-full bg-primary px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-primary-foreground"
+                                >
+                                    Reset everything
+                                </button>
                             </div>
                         ) : (
                             <motion.div
-                                className={`grid gap-6 ${viewMode === 'grid' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}
-                                variants={animations.staggerContainer}
-                                initial="initial"
-                                animate="animate"
+                                layout
+                                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                                className={`grid gap-4 ${layout === 'grid' ? 'sm:grid-cols-2 xl:grid-cols-3' : 'grid-cols-1'}`}
                             >
-                                {sortedBoxes.map((box) =>
-                                    viewMode === 'grid' ? (
-                                        <motion.div key={box.id} variants={animations.staggerItem}>
-                                            <BoxCard box={box} />
-                                        </motion.div>
-                                    ) : (
-                                        <BoxListCard key={box.id} box={box} />
-                                    )
-                                )}
+                                <AnimatePresence mode="popLayout">
+                                    {results.map((box) => (
+                                        <BoxCard key={box.id} box={box} layout={layout} />
+                                    ))}
+                                </AnimatePresence>
                             </motion.div>
-                        )
-                    )}
+                        )}
+                    </main>
                 </div>
-            </section>
+            </div>
+
+            <BoxListingsMap isOpen={showMap} onClose={() => setShowMap(false)} boxes={results} />
+
+            <AnimatePresence>
+                {drawerOpen && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 bg-background/80 backdrop-blur lg:hidden"
+                    >
+                        <motion.div
+                            initial={{ y: '100%' }}
+                            animate={{ y: 0 }}
+                            exit={{ y: '100%' }}
+                            transition={{ type: 'spring', stiffness: 240, damping: 26 }}
+                            className="absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl border-t border-border bg-card p-5"
+                        >
+                            <div className="mb-4 flex items-center justify-between">
+                                <h2 className="font-display text-lg uppercase">Filters</h2>
+                                <button type="button" onClick={() => setDrawerOpen(false)} aria-label="Close filters">
+                                    <X className="h-5 w-5" />
+                                </button>
+                            </div>
+                            <FilterPanel filters={filters} onChange={setFiltersState} amenityOptions={amenityOptions} />
+                            <button
+                                type="button"
+                                onClick={() => setDrawerOpen(false)}
+                                className="mt-6 w-full rounded-full bg-primary py-3 text-sm font-bold uppercase tracking-wide text-primary-foreground"
+                            >
+                                Show {results.length} boxes
+                            </button>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <Chatbot />
         </div>

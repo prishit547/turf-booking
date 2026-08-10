@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Eye, EyeOff, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
 import { useAuth } from '../api.jsx';
 import GoogleLoginButton from '../components/common/GoogleLoginButton.jsx';
 import { AuthShell } from '../components/auth/AuthShell';
-import { Input, Button } from '../components/ui';
+import { Input } from '../components/ui';
+import { MagneticButton } from '../components/motion/MagneticButton';
 
 const Login = () => {
   const [formData, setFormData] = useState({ email: '', password: '' });
@@ -126,17 +127,12 @@ const Login = () => {
           </span>
         </div>
 
-        <Button type="submit" disabled={loading} loading={loading} iconRight={!loading && <ArrowRight size={18} />} fullWidth size="lg">
-          {loading ? 'Signing in...' : 'Sign in'}
-        </Button>
+        <MagneticButton type="submit" disabled={loading} className="w-full">
+          {loading ? 'Signing in…' : 'Sign in'}
+        </MagneticButton>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-4 bg-card text-muted-foreground">Or continue with</span>
-          </div>
+        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="h-px flex-1 bg-border" /> or continue with <span className="h-px flex-1 bg-border" />
         </div>
 
         <GoogleLoginButton setLoading={setLoading} setErrors={setErrors} />

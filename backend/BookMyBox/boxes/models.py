@@ -40,7 +40,10 @@ class Box(models.Model):
     # --- END OF NEW FIELD ---
 
     capacity = models.IntegerField(default=1)
-    
+
+    opening_time = models.CharField(max_length=5, default='06:00', help_text="Daily opening time (HH:MM, 24-hour)")
+    closing_time = models.CharField(max_length=5, default='23:00', help_text="Daily closing time (HH:MM, 24-hour)")
+
     image = models.ImageField(upload_to='box_images/', null=True, blank=True)
     images = models.JSONField(default=list, blank=True)
     amenities = models.JSONField(default=list, blank=True)

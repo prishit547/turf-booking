@@ -47,7 +47,7 @@ export function DateStrip({ selectedDate, onSelectDate, days = 14 }) {
                         {isSelected && (
                             <motion.div
                                 layoutId="date-strip-underline"
-                                className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-6 h-1 rounded-full bg-primary"
+                                className="absolute inset-x-3 -bottom-1 h-0.5 rounded-full bg-primary"
                                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                             />
                         )}

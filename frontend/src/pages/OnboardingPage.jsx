@@ -4,7 +4,8 @@ import { motion } from 'framer-motion';
 import { Phone, MapPin, BriefcaseBusiness } from 'lucide-react';
 import { api, useAuth } from '../api';
 import { AuthShell } from '../components/auth/AuthShell';
-import { Input, Select, Button } from '../components/ui';
+import { Input, Select } from '../components/ui';
+import { MagneticButton } from '../components/motion/MagneticButton';
 
 const OnboardingPage = () => {
   const location = useLocation();
@@ -119,9 +120,9 @@ const OnboardingPage = () => {
           <Input label="Business name" id="business_name" name="business_name" value={formData.business_name} onChange={handleChange} leadingIcon={<BriefcaseBusiness size={18} />} error={errors.business_name} placeholder="Elite Sports Complex" disabled={loading} />
         )}
 
-        <Button type="submit" disabled={loading} loading={loading} fullWidth size="lg">
-          {loading ? 'Completing setup...' : 'Complete setup'}
-        </Button>
+        <MagneticButton type="submit" disabled={loading} className="w-full">
+          {loading ? 'Completing setup…' : 'Complete setup'}
+        </MagneticButton>
       </form>
     </AuthShell>
   );

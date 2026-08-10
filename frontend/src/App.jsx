@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from './components/common/Header';
@@ -53,13 +53,30 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
 
 function App() {
   const { user } = useAuth();
-  
+  const location = useLocation();
+
   return (
       <div className="min-h-screen bg-background">
         <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick pauseOnHover draggable theme="dark" />
         <ScrollToTop />
         <Header />
-        <AnimatePresence mode="wait">
+        {/*
+          Enter-only fade, no AnimatePresence: an exit-blocking `mode="wait"`
+          transition sounds nicer but leaves the OLD page on screen (looking
+          like a frozen/black page) whenever its exit animation doesn't
+          resolve promptly — e.g. protected routes that immediately redirect
+          again (see /dashboard below) re-key this before the first exit even
+          finishes, so a wait-for-exit transition can stall indefinitely.
+          Keying a plain motion.div by pathname animates the incoming page in
+          while letting React unmount the outgoing one immediately, which is
+          both smoother in practice and impossible to get stuck on.
+        */}
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          >
           <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<Home />} />
@@ -129,7 +146,7 @@ function App() {
             <Route path="*" element={<NotFound />} />
           </Routes>
           </Suspense>
-        </AnimatePresence>
+          </motion.div>
         <Footer />
       </div>
   );

@@ -25,8 +25,7 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.52.0",
     "react-router-dom": "^6.26.0",
-    "react-toastify": "^11.0.5",
-    "swiper": "^14.0.7"
+    "react-toastify": "^11.0.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

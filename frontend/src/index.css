@@ -186,12 +186,3 @@
   }
 }
 
-/* Swiper custom styles */
-.swiper-pagination-bullet {
-  @apply bg-primary;
-}
-
-.swiper-pagination-bullet-active {
-  @apply bg-primary;
-}
-

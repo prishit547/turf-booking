@@ -1,26 +1,42 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, User, LogOut, Map, ChevronDown } from 'lucide-react'
+import { Menu, X, LayoutDashboard, User, LogOut, Map, ChevronDown } from 'lucide-react'
 import { useAuth } from '../../api.jsx'
 import NearbyBoxesMap from '../maps/NearbyBoxesMap'
-import { Button, Badge } from '../ui'
 
-const ROLE_TONE = { admin: 'secondary', owner: 'success', user: 'primary' }
+const nav = [
+  { to: '/boxes', label: 'Browse Boxes' },
+  { to: '/about', label: 'About' },
+  { to: '/contact', label: 'Contact' },
+]
+
+/** Shared logo mark — also used standalone on the Auth pages, matching the reference's `Logo` export from SiteHeader. */
+export function Logo() {
+  return (
+    <Link to="/" className="flex items-center gap-2">
+      <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-display text-sm font-black text-primary-foreground">
+        B
+      </span>
+      <span className="font-display text-lg font-black uppercase tracking-tight">
+        Book<span className="text-primary">MyBox</span>
+      </span>
+    </Link>
+  )
+}
 
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [showMap, setShowMap] = useState(false)
-  const [scrolled, setScrolled] = useState(false)
   const { user, isAuthenticated, logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20)
-    window.addEventListener('scroll', handleScroll)
-    return () => window.removeEventListener('scroll', handleScroll)
-  }, [])
+    if (!isMenuOpen) return
+    setIsMenuOpen(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate])
 
   const handleLogout = () => {
     logout()
@@ -40,227 +56,162 @@ const Header = () => {
     }
   }
 
-  const navItems = [
-    { name: 'Home', path: '/' },
-    { name: 'Browse Boxes', path: '/boxes' },
-    { name: 'About', path: '/about' },
-    { name: 'Contact', path: '/contact' },
-  ]
-
-  const userMenuVariants = {
-    initial: { opacity: 0, scale: 0.97, y: -8 },
-    animate: { opacity: 1, scale: 1, y: 0 },
-    exit: { opacity: 0, scale: 0.97, y: -8 },
-  }
-
   return (
     <>
-      <header
-        className={`fixed top-0 w-full z-50 transition-all duration-200 bg-background/85 backdrop-blur ${
-          scrolled ? 'shadow-lift border-b border-border' : 'border-b border-transparent'
-        }`}
-      >
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <Link to="/" className="flex items-center gap-3 group">
-              <div className="bg-primary text-primary-foreground w-10 h-10 rounded-lg flex items-center justify-center font-display font-semibold text-base group-hover:bg-primary/90 transition-colors">
-                BMB
-              </div>
-              <div className="flex flex-col leading-tight">
-                <span className="font-display font-semibold text-lg text-foreground">
-                  Book<span className="text-primary">MyBox</span>
-                </span>
-                <span className="text-xs text-muted-foreground -mt-0.5">Sports made easy</span>
-              </div>
-            </Link>
+      <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
+          <Logo />
 
-            {/* Desktop Navigation */}
-            <nav className="hidden lg:flex items-center gap-1">
-              {navItems.map((item) => (
-                <Link
-                  key={item.name}
-                  to={item.path}
-                  className="group relative px-4 py-2 rounded-lg font-medium text-muted-foreground hover:text-primary transition-colors"
+          <nav className="hidden items-center gap-1 md:flex">
+            {nav.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
+                className="relative rounded-full px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground"
+              >
+                {item.label}
+              </Link>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowMap(true)}
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground"
+            >
+              <Map className="h-4 w-4" /> Nearby
+            </button>
+          </nav>
+
+          <div className="flex items-center gap-2">
+            {isAuthenticated ? (
+              <div className="relative hidden md:block">
+                <button
+                  type="button"
+                  onClick={() => setIsUserMenuOpen((v) => !v)}
+                  className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-2 text-sm transition hover:border-primary/60"
                 >
-                  {item.name}
-                  <span className="absolute bottom-1 left-4 right-4 h-0.5 bg-primary rounded-full scale-x-0 group-hover:scale-x-100 origin-left transition-transform duration-200" />
-                </Link>
-              ))}
-
-              <button
-                onClick={() => setShowMap(true)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-              >
-                <Map size={17} />
-                <span>Nearby Boxes</span>
-              </button>
-            </nav>
-
-            {/* Desktop Auth */}
-            <div className="hidden lg:flex items-center gap-3">
-              {isAuthenticated ? (
-                <div className="relative">
-                  <button
-                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                    className="flex items-center gap-3 bg-secondary hover:bg-elevated px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <div className="w-8 h-8 bg-primary rounded-md flex items-center justify-center">
-                      <User size={16} className="text-primary-foreground" />
-                    </div>
-                    <div className="flex flex-col items-start">
-                      <span className="font-medium text-foreground text-sm">{user?.name}</span>
-                      <Badge tone={ROLE_TONE[user?.role] || 'neutral'} size="sm">{user?.role}</Badge>
-                    </div>
-                    <motion.div animate={{ rotate: isUserMenuOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
-                      <ChevronDown size={16} className="text-muted-foreground" />
-                    </motion.div>
-                  </button>
-
-                  <AnimatePresence>
-                    {isUserMenuOpen && (
-                      <motion.div
-                        variants={userMenuVariants}
-                        initial="initial"
-                        animate="animate"
-                        exit="exit"
-                        transition={{ duration: 0.15 }}
-                        className="absolute right-0 mt-2 w-56 bg-card rounded-2xl shadow-lift border border-border py-2 overflow-hidden"
-                      >
-                        <Link
-                          to={getDashboardRoute()}
-                          className="flex items-center gap-3 px-4 py-2.5 text-foreground hover:bg-elevated transition-colors"
-                          onClick={() => setIsUserMenuOpen(false)}
-                        >
-                          <div className="w-8 h-8 bg-primary/15 rounded-md flex items-center justify-center">
-                            <User size={16} className="text-primary" />
-                          </div>
-                          <span className="font-medium">Dashboard</span>
-                        </Link>
-                        <Link
-                          to="/profile"
-                          className="flex items-center gap-3 px-4 py-2.5 text-foreground hover:bg-elevated transition-colors"
-                          onClick={() => setIsUserMenuOpen(false)}
-                        >
-                          <div className="w-8 h-8 bg-turf/15 rounded-md flex items-center justify-center">
-                            <User size={16} className="text-turf" />
-                          </div>
-                          <span className="font-medium">Profile</span>
-                        </Link>
-                        <hr className="my-2 border-border" />
-                        <button
-                          onClick={handleLogout}
-                          className="w-full text-left flex items-center gap-3 px-4 py-2.5 text-foreground hover:bg-danger/10 transition-colors"
-                        >
-                          <div className="w-8 h-8 bg-danger/15 rounded-md flex items-center justify-center">
-                            <LogOut size={16} className="text-danger" />
-                          </div>
-                          <span className="font-medium">Logout</span>
-                        </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <Link
-                    to="/login"
-                    className="text-muted-foreground hover:text-primary font-medium px-4 py-2 rounded-lg hover:bg-primary/10 transition-colors"
-                  >
-                    Login
-                  </Link>
-                  <Button as={Link} to="/signup" size="sm">Sign Up</Button>
-                </div>
-              )}
-            </div>
-
-            {/* Mobile Menu Button */}
-            <div className="lg:hidden flex items-center gap-1">
-              <button
-                onClick={() => setIsMenuOpen(!isMenuOpen)}
-                className="p-2.5 rounded-lg hover:bg-elevated text-muted-foreground transition-colors"
-              >
-                {isMenuOpen ? <X size={22} /> : <Menu size={22} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Mobile Menu */}
-          <AnimatePresence>
-            {isMenuOpen && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-                className="lg:hidden border-t border-border py-4"
-              >
-                <nav className="flex flex-col gap-1">
-                  {navItems.map((item) => (
-                    <Link
-                      key={item.name}
-                      to={item.path}
-                      className="flex items-center gap-3 text-muted-foreground hover:text-primary font-medium py-3 px-4 rounded-lg hover:bg-primary/10 transition-colors"
-                      onClick={() => setIsMenuOpen(false)}
+                  <LayoutDashboard className="h-4 w-4" /> {user?.name?.split(' ')[0] || 'Account'}
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+                <AnimatePresence>
+                  {isUserMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.97, y: -8 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.97, y: -8 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 mt-2 w-52 overflow-hidden rounded-2xl border border-border bg-card py-2 shadow-lift"
                     >
-                      {item.name}
-                    </Link>
-                  ))}
-
-                  <button
-                    onClick={() => {
-                      setShowMap(true)
-                      setIsMenuOpen(false)
-                    }}
-                    className="flex items-center gap-3 text-muted-foreground hover:text-primary font-medium py-3 px-4 rounded-lg hover:bg-primary/10 transition-colors"
-                  >
-                    <Map size={20} />
-                    <span>Nearby Boxes</span>
-                  </button>
-
-                  {isAuthenticated ? (
-                    <div className="flex flex-col gap-1 pt-4 mt-2 border-t border-border">
-                      <div className="px-4 py-1 text-sm text-muted-foreground font-medium">Welcome, {user?.name}</div>
                       <Link
                         to={getDashboardRoute()}
-                        className="flex items-center gap-3 text-muted-foreground hover:text-primary font-medium py-3 px-4 rounded-lg hover:bg-primary/10 transition-colors"
-                        onClick={() => setIsMenuOpen(false)}
+                        className="flex items-center gap-3 px-4 py-2.5 text-foreground transition hover:bg-elevated"
+                        onClick={() => setIsUserMenuOpen(false)}
                       >
-                        <User size={20} />
-                        <span>Dashboard</span>
+                        <LayoutDashboard size={16} className="text-primary" /> Dashboard
                       </Link>
                       <Link
                         to="/profile"
-                        className="flex items-center gap-3 text-muted-foreground hover:text-primary font-medium py-3 px-4 rounded-lg hover:bg-primary/10 transition-colors"
-                        onClick={() => setIsMenuOpen(false)}
+                        className="flex items-center gap-3 px-4 py-2.5 text-foreground transition hover:bg-elevated"
+                        onClick={() => setIsUserMenuOpen(false)}
                       >
-                        <User size={20} />
-                        <span>Profile</span>
+                        <User size={16} className="text-turf" /> Profile
                       </Link>
+                      <hr className="my-2 border-border" />
                       <button
+                        type="button"
                         onClick={handleLogout}
-                        className="flex items-center gap-3 text-muted-foreground hover:text-danger font-medium py-3 px-4 rounded-lg hover:bg-danger/10 transition-colors"
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-foreground transition hover:bg-danger/10"
                       >
-                        <LogOut size={20} />
-                        <span>Logout</span>
+                        <LogOut size={16} className="text-danger" /> Logout
                       </button>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-2 pt-4 mt-2 border-t border-border">
-                      <Link
-                        to="/login"
-                        className="text-muted-foreground hover:text-primary font-medium py-3 px-4 rounded-lg hover:bg-primary/10 transition-colors"
-                        onClick={() => setIsMenuOpen(false)}
-                      >
-                        Login
-                      </Link>
-                      <Button as={Link} to="/signup" onClick={() => setIsMenuOpen(false)}>Sign Up</Button>
-                    </div>
+                    </motion.div>
                   )}
-                </nav>
-              </motion.div>
+                </AnimatePresence>
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                className="hidden rounded-full border border-border px-4 py-2 text-sm transition hover:border-primary/60 md:block"
+              >
+                Log in
+              </Link>
             )}
-          </AnimatePresence>
+            <Link
+              to="/boxes"
+              className="rounded-full bg-primary px-4 py-2 text-xs font-bold uppercase tracking-wide text-primary-foreground shadow-glow transition hover:bg-primary/90"
+            >
+              Book now
+            </Link>
+            <button
+              type="button"
+              className="md:hidden"
+              aria-label="Toggle menu"
+              onClick={() => setIsMenuOpen((v) => !v)}
+            >
+              {isMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
+          </div>
+        </div>
+
+        <div
+          className={`overflow-hidden border-t border-border transition-all md:hidden ${
+            isMenuOpen ? 'max-h-96' : 'max-h-0'
+          }`}
+        >
+          <nav className="flex flex-col gap-1 p-4">
+            {nav.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
+                onClick={() => setIsMenuOpen(false)}
+                className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-card hover:text-foreground"
+              >
+                {item.label}
+              </Link>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setShowMap(true)
+                setIsMenuOpen(false)
+              }}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground hover:bg-card hover:text-foreground"
+            >
+              <Map size={16} /> Nearby boxes
+            </button>
+            {isAuthenticated ? (
+              <>
+                <Link
+                  to={getDashboardRoute()}
+                  onClick={() => setIsMenuOpen(false)}
+                  className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-card hover:text-foreground"
+                >
+                  Dashboard
+                </Link>
+                <Link
+                  to="/profile"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-card hover:text-foreground"
+                >
+                  Profile
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="rounded-lg px-3 py-2 text-left text-sm text-danger hover:bg-card"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <Link
+                to="/login"
+                onClick={() => setIsMenuOpen(false)}
+                className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-card hover:text-foreground"
+              >
+                Log in / Sign up
+              </Link>
+            )}
+          </nav>
         </div>
       </header>
 

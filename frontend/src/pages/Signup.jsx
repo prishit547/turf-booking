@@ -6,7 +6,8 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../api.jsx'
 import GoogleLoginButton from '../components/common/GoogleLoginButton.jsx'
 import { AuthShell } from '../components/auth/AuthShell'
-import { Input, Select, Button } from '../components/ui'
+import { Input, Select } from '../components/ui'
+import { MagneticButton } from '../components/motion/MagneticButton'
 
 const Signup = () => {
   const [formData, setFormData] = useState({
@@ -196,17 +197,12 @@ const Signup = () => {
           disabled={loading}
         />
 
-        <Button type="submit" disabled={loading} loading={loading} fullWidth size="lg">
-          {loading ? 'Creating account...' : 'Create account'}
-        </Button>
+        <MagneticButton type="submit" disabled={loading} className="w-full">
+          {loading ? 'Creating account…' : 'Create account'}
+        </MagneticButton>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-4 bg-card text-muted-foreground">Or continue with</span>
-          </div>
+        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="h-px flex-1 bg-border" /> or continue with <span className="h-px flex-1 bg-border" />
         </div>
 
         <GoogleLoginButton setLoading={setLoading} setErrors={setErrors} />

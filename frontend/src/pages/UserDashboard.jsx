@@ -29,7 +29,7 @@ import {
   PeakHoursChart,
   MonthlySpendingChart,
 } from '../components/common/AdvancedCharts';
-import { Button, Card, Badge, Modal, Loader, StatTile, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
+import { Button, Card, Badge, Modal, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
 import AchievementBadge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
 
@@ -242,7 +242,7 @@ const UserDashboard = () => {
   }).sort((a, b) => parseBookingDateTime(b.date, b.start_time) - parseBookingDateTime(a.date, a.start_time));
 
   return (
-    <div className="min-h-screen bg-background pt-24 pb-16">
+    <div className="min-h-screen bg-background py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header panel */}
         <motion.div
@@ -434,67 +434,71 @@ const UserDashboard = () => {
                 </Card>
               ) : (
                 <>
-                  <Card padding="md">
-                    <h3 className="text-xl font-display font-semibold text-foreground mb-4 flex items-center">
-                      <CheckCircle size={22} className="mr-2 text-success" />
-                      Upcoming Bookings ({upcomingBookings.length})
+                  <div>
+                    <h3 className="text-lg font-display font-semibold text-foreground mb-3 flex items-center">
+                      <CheckCircle size={20} className="mr-2 text-success" />
+                      Upcoming ({upcomingBookings.length})
                     </h3>
                     {upcomingBookings.length === 0 ? (
-                      <p className="text-muted-foreground">No upcoming bookings.</p>
+                      <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
+                        No upcoming bookings.
+                      </div>
                     ) : (
-                      <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      <div className="space-y-3">
                         {upcomingBookings.map((booking) => (
-                          <div key={booking.id} className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                            <div>
-                              <p className="font-semibold text-lg text-foreground">{booking.box?.name || booking.box_name || 'Unknown Box'}</p>
-                              <p className="text-muted-foreground">
-                                {new Date(booking.date).toLocaleDateString()} at {booking.start_time} - {booking.end_time} ({booking.duration} hr)
-                              </p>
-                              <p className="text-muted-foreground tabular-nums">Total: ₹{booking.total_amount}</p>
+                          <article key={booking.id} className="rounded-2xl border border-border bg-card p-5">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <h2 className="font-display text-lg uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  {new Date(booking.date).toLocaleDateString()} · {booking.start_time} - {booking.end_time}
+                                </p>
+                              </div>
+                              <StatusPill status={booking.booking_status} />
                             </div>
-                            <div>
-                              {booking.booking_status === 'Confirmed' ? (
-                                <Button variant="danger" size="sm" icon={<XCircle size={18} />} onClick={() => openCancelModal(booking)}>
-                                  Cancel Booking
+                            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                              <span className="font-display text-xl tabular-nums">₹{booking.total_amount}</span>
+                              {booking.booking_status === 'Confirmed' && (
+                                <Button variant="danger" size="sm" icon={<XCircle size={16} />} onClick={() => openCancelModal(booking)}>
+                                  Cancel
                                 </Button>
-                              ) : (
-                                <Badge tone={BOOKING_STATUS_TONE[booking.booking_status] || 'neutral'} size="md">
-                                  {booking.booking_status}
-                                </Badge>
                               )}
                             </div>
-                          </div>
+                            <p className="mt-3 text-xs text-muted-foreground">
+                              Free cancellation up to 2 hours before booking time.
+                            </p>
+                          </article>
                         ))}
                       </div>
                     )}
-                  </Card>
+                  </div>
 
-                  <Card padding="md">
-                    <h3 className="text-xl font-display font-semibold text-foreground mb-4 flex items-center">
-                      <Clock size={22} className="mr-2 text-muted-foreground" />
-                      Past Bookings ({pastBookings.length})
+                  <div>
+                    <h3 className="text-lg font-display font-semibold text-foreground mb-3 flex items-center">
+                      <Clock size={20} className="mr-2 text-muted-foreground" />
+                      History ({pastBookings.length})
                     </h3>
                     {pastBookings.length === 0 ? (
-                      <p className="text-muted-foreground">No past bookings.</p>
+                      <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
+                        No past bookings.
+                      </div>
                     ) : (
-                      <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      <div className="space-y-3">
                         {pastBookings.map((booking) => (
-                          <div key={booking.id} className="p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                          <article key={booking.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5">
                             <div>
-                              <p className="font-semibold text-lg text-foreground">{booking.box?.name || booking.box_name || 'Unknown Box'}</p>
-                              <p className="text-muted-foreground">
-                                {new Date(booking.date).toLocaleDateString()} at {booking.start_time} - {booking.end_time} ({booking.duration} hr)
-                              </p>
-                              <p className="text-muted-foreground tabular-nums">Total: ₹{booking.total_amount}</p>
+                              <h2 className="font-display text-base uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
+                              <p className="text-sm text-muted-foreground">{new Date(booking.date).toLocaleDateString()}</p>
                             </div>
-                            <Badge tone={BOOKING_STATUS_TONE[booking.booking_status] || 'neutral'} size="md">
-                              {booking.booking_status}
-                            </Badge>
-                          </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm tabular-nums">₹{booking.total_amount}</span>
+                              <StatusPill status={booking.booking_status === 'Confirmed' ? 'Completed' : booking.booking_status} />
+                            </div>
+                          </article>
                         ))}
                       </div>
                     )}
-                  </Card>
+                  </div>
                 </>
               )}
             </div>

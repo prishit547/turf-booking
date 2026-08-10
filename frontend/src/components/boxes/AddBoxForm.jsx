@@ -13,6 +13,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
     location: '',
     price: '',
     capacity: '',
+    opening_time: '06:00',
+    closing_time: '23:00',
     description: '',
     amenities: [],
     images: [], // This will hold File objects for upload
@@ -37,6 +39,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         location: boxData.location || '',
         price: boxData.price || '',
         capacity: boxData.capacity || '',
+        opening_time: boxData.opening_time || '06:00',
+        closing_time: boxData.closing_time || '23:00',
         description: boxData.description || '',
         amenities: boxData.amenities || [],
         images: [], // Don't populate existing images as they're already uploaded
@@ -54,6 +58,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         location: '',
         price: '',
         capacity: '',
+        opening_time: '06:00',
+        closing_time: '23:00',
         description: '',
         amenities: [],
         images: [],
@@ -117,6 +123,11 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         if (formData.sports.length === 0) newErrors.sports = 'Select at least one sport';
         if (!formData.price || formData.price <= 0) newErrors.price = 'A valid price is required';
         if (!formData.capacity || formData.capacity <= 0) newErrors.capacity = 'A valid capacity is required';
+        if (!formData.opening_time) newErrors.opening_time = 'Opening time is required';
+        if (!formData.closing_time) newErrors.closing_time = 'Closing time is required';
+        if (formData.opening_time && formData.closing_time && formData.opening_time >= formData.closing_time) {
+          newErrors.closing_time = 'Closing time must be after opening time';
+        }
         break;
       case 3:
         if (!formData.location.trim()) newErrors.location = 'Location is required';
@@ -165,7 +176,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         setTimeout(() => {
           onSuccess?.();
           onClose();
-          setFormData({ name: '', sports: [], location: '', price: '', capacity: '', description: '', amenities: [], images: [], rules: '', contactInfo: '', full_description: '', latitude: '', longitude: '' });
+          setFormData({ name: '', sports: [], location: '', price: '', capacity: '', opening_time: '06:00', closing_time: '23:00', description: '', amenities: [], images: [], rules: '', contactInfo: '', full_description: '', latitude: '', longitude: '' });
           setCurrentStep(1);
           setSubmitted(false);
         }, 2000);
@@ -338,6 +349,24 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
                 placeholder="e.g., 20"
               />
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Opening Time *"
+                type="time"
+                value={formData.opening_time}
+                onChange={(e) => handleChange('opening_time', e.target.value)}
+                error={errors.opening_time}
+                hint="When customers can start booking each day"
+              />
+              <Input
+                label="Closing Time *"
+                type="time"
+                value={formData.closing_time}
+                onChange={(e) => handleChange('closing_time', e.target.value)}
+                error={errors.closing_time}
+                hint="Last bookable slot ends by this time"
+              />
+            </div>
           </motion.div>
         )}
 
@@ -453,6 +482,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
               <div><strong>Sports:</strong> {formData.sports.join(', ')}</div>
               <div><strong>Price:</strong> ₹{formData.price}</div>
               <div><strong>Capacity:</strong> {formData.capacity}</div>
+              <div><strong>Hours:</strong> {formData.opening_time} - {formData.closing_time}</div>
               <div><strong>Location:</strong> {formData.location}</div>
               <div><strong>Latitude:</strong> {formData.latitude}</div>
               <div><strong>Longitude:</strong> {formData.longitude}</div>

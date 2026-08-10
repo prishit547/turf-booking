@@ -77,6 +77,16 @@ const ViewBoxModal = ({ isOpen, onClose, box }) => {
             <p className="text-muted-foreground">{box.capacity} people</p>
           </div>
 
+          {(box.opening_time || box.closing_time) && (
+            <div className="bg-elevated p-4 rounded-lg">
+              <div className="flex items-center mb-2">
+                <Clock size={18} className="text-primary mr-2" />
+                <span className="font-medium text-foreground">Hours</span>
+              </div>
+              <p className="text-muted-foreground">{box.opening_time || '06:00'} - {box.closing_time || '23:00'}</p>
+            </div>
+          )}
+
           {box.avg_rating && (
             <div className="bg-elevated p-4 rounded-lg">
               <div className="flex items-center mb-2">
