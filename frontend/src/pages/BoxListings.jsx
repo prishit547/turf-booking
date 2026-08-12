@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { AnimatePresence, motion } from 'framer-motion';
 import { LayoutGrid, List, Map, Search, SlidersHorizontal, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -72,6 +73,14 @@ const BoxListings = () => {
 
     return (
         <div className="min-h-screen">
+            <Helmet>
+                <title>Browse Sports Boxes - BookMyBox</title>
+                <meta name="description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
+                <link rel="canonical" href={`${window.location.origin}/boxes`} />
+                <meta property="og:title" content="Browse Sports Boxes - BookMyBox" />
+                <meta property="og:description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
+                <meta property="og:url" content={`${window.location.origin}/boxes`} />
+            </Helmet>
             <div className="mx-auto max-w-7xl px-4 py-8">
                 <header className="flex flex-wrap items-end justify-between gap-4">
                     <div>
@@ -208,7 +217,7 @@ const BoxListings = () => {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 bg-background/80 backdrop-blur lg:hidden"
+                        className="fixed inset-0 z-[100] bg-background/80 backdrop-blur lg:hidden"
                     >
                         <motion.div
                             initial={{ y: '100%' }}

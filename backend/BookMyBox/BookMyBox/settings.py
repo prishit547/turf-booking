@@ -349,6 +349,17 @@ GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', '')
 # Google Gemini API key for the chatbot
 GEMINI_API_KEY = env('GEMINI_API_KEY', '')
 
+# Resend (transactional email) — used for password-reset and booking-invite
+# emails (see BookMyBox/emailing.py). Left blank in dev: send_email() logs
+# instead of raising, so local dev works without an account.
+RESEND_API_KEY = env('RESEND_API_KEY', '')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', 'onboarding@resend.dev')
+
+# Base URL of the frontend SPA, used to build links embedded in emails
+# (password reset, booking invites) — never derived from request.get_host()
+# since those emails are sent from a Celery worker with no request context.
+FRONTEND_URL = env('FRONTEND_URL', 'http://localhost:5173')
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 

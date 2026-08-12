@@ -186,3 +186,55 @@
   }
 }
 
+/* Leaflet dark-theme chrome — restyles the default light zoom control and
+   attribution bar (leaflet.css ships light-mode-only) to match this app's
+   near-black/lime design system. Scoped to .leaflet-dark so it never leaks
+   into a future light-map context. z-index kept below MapControlsPanel's
+   z-[1000] but above the map tiles/markers, matching Leaflet's own default
+   pane stacking. */
+.leaflet-dark .leaflet-container {
+  background: #090A0C;
+  font-family: inherit;
+}
+
+/* CARTO's dark-matter tiles read as near-flat black at a glance next to
+   this app's already-dark chrome — lift brightness/contrast/saturation on
+   the tile pane only (never the markers/popups/controls layered above it)
+   so streets and labels actually read instead of disappearing into the UI. */
+.leaflet-dark .leaflet-tile-pane {
+  filter: brightness(1.35) contrast(1.08) saturate(1.25);
+}
+
+.leaflet-dark .leaflet-control-zoom a {
+  background-color: #131519;
+  color: #F5F7F9;
+  border-color: rgba(245, 247, 249, 0.12);
+}
+
+.leaflet-dark .leaflet-control-zoom a:hover {
+  background-color: #1D2126;
+}
+
+.leaflet-dark .leaflet-control-attribution {
+  background-color: rgba(19, 21, 25, 0.8);
+  color: #A4AAB2;
+}
+
+.leaflet-dark .leaflet-control-attribution a {
+  color: #D1FB00;
+}
+
+.leaflet-dark .leaflet-popup-content-wrapper,
+.leaflet-dark .leaflet-popup-tip {
+  background-color: #131519;
+  color: #F5F7F9;
+}
+
+.leaflet-dark .leaflet-popup-close-button {
+  color: #A4AAB2;
+}
+
+.leaflet-dark .leaflet-popup-close-button:hover {
+  color: #F5F7F9;
+}
+

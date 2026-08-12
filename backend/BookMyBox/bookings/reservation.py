@@ -180,6 +180,30 @@ return {'confirmed', unpack(queued)}
 """
 
 # KEYS[1] = hold_key, KEYS[2] = queue_key
+#
+# Unconditional: unlike _EXPIRE_OR_RELEASE_AND_PROMOTE, there's no expected-
+# holder guard here — a preemption doesn't care who currently holds the
+# slot or is queued for it, it takes the slot away from all of them at
+# once. Returns the holder (if any) and the *entire* queue so the caller
+# can notify every displaced user, then clears both — there is nothing to
+# promote into, the slot itself is being taken.
+_PREEMPT = """
+local hold_key = KEYS[1]
+local queue_key = KEYS[2]
+
+local holder = redis.call('GET', hold_key)
+local queued = redis.call('LRANGE', queue_key, 0, -1)
+
+redis.call('DEL', hold_key)
+redis.call('DEL', queue_key)
+
+if holder == false then
+    return {'', unpack(queued)}
+end
+return {holder, unpack(queued)}
+"""
+
+# KEYS[1] = hold_key, KEYS[2] = queue_key
 # ARGV[1] = expected_holder_value, ARGV[2] = ttl_seconds, ARGV[3] = now_ts
 #
 # Used both for TTL-driven expiry (called by the Celery task at the hold's
@@ -263,6 +287,13 @@ class HoldStatus:
     expires_at: Optional[float] = None
 
 
+@dataclass
+class PreemptResult:
+    had_holder: bool
+    holder_user_id: Optional[str] = None
+    queued_user_ids: list = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -343,6 +374,38 @@ def release_hold(hold_token, ttl_seconds=None) -> ReleaseResult:
 # expire_hold is release_hold under a different name at the call site —
 # same operation, called by the Celery expiry task instead of a user action.
 expire_hold = release_hold
+
+
+def preempt_slot(box_id, date, start_time, duration) -> PreemptResult:
+    """Forcibly take a slot away from whoever currently holds it or is
+    queued for it — used by the owner-priority booking path (see
+    owner_dashboard/views.py's OwnerBookingViewSet.book). Distinct from
+    release_hold/expire_hold: those free the slot and promote the next
+    queued user into it; this clears the *entire* queue at once, since the
+    slot isn't being freed, it's being taken by the owner. Safe to call on
+    a slot with no active hold/queue — becomes a no-op that reports
+    had_holder=False and an empty queue."""
+    sig = slot_signature(box_id, date, start_time, duration)
+    script = _script('preempt', _PREEMPT)
+    reply = script(keys=[_hold_key(sig), _queue_key(sig)])
+    holder_value, queued_items = reply[0], reply[1:]
+
+    holder_user_id = None
+    if holder_value:
+        sep = holder_value.find(':')
+        holder_user_id = holder_value[:sep] if sep != -1 else None
+
+    queued_user_ids = []
+    for item in queued_items:
+        uid, _, _token = item.partition('|')
+        if uid:
+            queued_user_ids.append(uid)
+
+    return PreemptResult(
+        had_holder=holder_user_id is not None,
+        holder_user_id=holder_user_id,
+        queued_user_ids=queued_user_ids,
+    )
 
 
 def get_queue_position(hold_token) -> Optional[int]:

@@ -12,7 +12,7 @@ export default defineConfig({
         // code splitting (see App.jsx's React.lazy() usage) handles the
         // rest by page.
         manualChunks: {
-          maps: ['@vis.gl/react-google-maps'],
+          maps: ['leaflet', 'react-leaflet'],
           charts: ['chart.js', 'react-chartjs-2'],
           'framer-motion': ['framer-motion'],
         },

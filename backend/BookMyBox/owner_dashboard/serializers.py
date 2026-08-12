@@ -1,8 +1,19 @@
 # owner_dashboard/serializers.py
 from rest_framework import serializers
-from bookings.models import Booking 
+from bookings.models import Booking
 from boxes.models import Box
 from boxes.serializers import BoxSerializer # We can reuse the BoxSerializer for listing boxes
+from .models import Payout
+
+
+class PayoutSerializer(serializers.ModelSerializer):
+    owner_email = serializers.CharField(source='owner.email', read_only=True)
+
+    class Meta:
+        model = Payout
+        fields = ['id', 'owner', 'owner_email', 'amount', 'note', 'created_at']
+        read_only_fields = ['owner_email', 'created_at']
+        extra_kwargs = {'owner': {'write_only': True, 'required': True}}
 
 class BookingSerializer(serializers.ModelSerializer):
     class Meta:

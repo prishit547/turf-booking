@@ -1,21 +1,29 @@
 # boxes/views.py
-from rest_framework import viewsets, status
+from rest_framework import mixins, viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.core.files.storage import default_storage
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 import math
 
-from .models import Box, Review
-from .serializers import BoxSerializer, ReviewSerializer, OwnerBoxSerializer, AdminBoxSerializer
+from django.shortcuts import get_object_or_404
+
+from bookings.models import Booking
+from .models import Box, Review, BlockedDate, PricingRule
+from .serializers import (
+    BoxSerializer, ReviewSerializer, ReviewOwnerResponseSerializer, OwnerBoxSerializer,
+    AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, PricingRuleSerializer,
+)
 from .filters import BoxFilter
-from user.permissions import IsAdminUser, IsAdminOrOwner
+from user.notifications import notify
+from user.permissions import IsAdminUser, IsAdminOrOwner, IsOwnerUser
+from BookMyBox.pagination import StandardResultsPagination
 
 
 class MinLengthSearchFilter(drf_filters.SearchFilter):
@@ -88,7 +96,7 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         stress test measured as the dominant cost of listing 100 boxes
         (~925ms p50, vs ~220ms to retrieve a single box).
         """
-        return Box.objects.filter(status='approved').order_by('id').prefetch_related('reviews')
+        return Box.objects.filter(status='approved').order_by('id').prefetch_related('reviews', 'blocked_dates', 'pricing_rules')
 
     # --- ADDED THE TWO MISSING ACTIONS BELOW ---
 
@@ -158,12 +166,38 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
                 {'detail': 'You have already reviewed this facility.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        has_completed_booking = Booking.objects.filter(
+            box=box, user=request.user, booking_status__in=['Confirmed', 'Completed'],
+        ).exists()
+        if not has_completed_booking:
+            return Response(
+                {'detail': 'You can only review a facility you have booked.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ReviewSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(box=box, user=request.user)
+            review = serializer.save(box=box, user=request.user)
+
+            # Same upload pattern as OwnerBoxViewSet.perform_create's extra
+            # box images — capped at 4 since this is a customer review, not
+            # a facility listing.
+            uploaded_images = request.FILES.getlist('images')[:4]
+            if uploaded_images:
+                review.images = [
+                    default_storage.save(f"review_images/{img.name}", img)
+                    for img in uploaded_images
+                ]
+                review.save(update_fields=['images'])
+
             new_avg = box.reviews.aggregate(models.Avg('rating'))['rating__avg']
             box.rating = new_avg or 0.0
             box.save()
+            notify(
+                box.owner,
+                'New review received',
+                f"{request.user.full_name or request.user.email} left a {serializer.data.get('rating')}-star "
+                f"review on {box.name}.",
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -208,6 +242,38 @@ class OwnerBoxViewSet(viewsets.ModelViewSet):
 
             box.save()
 
+    def perform_update(self, serializer):
+        """If the owner is editing a box the admin sent back for changes,
+        treat the save itself as the resubmission — flip it back to
+        'pending' so it re-enters the admin approval queue, instead of
+        making the owner take a separate explicit "resubmit" action.
+        Editing an approved/rejected box is untouched — this only applies
+        to the changes_requested state."""
+        box = self.get_object()
+        was_changes_requested = box.status == 'changes_requested'
+        if was_changes_requested:
+            serializer.save(status='pending', rejection_reason='', submitted_at=timezone.now())
+        else:
+            serializer.save()
+
+    @action(detail=True, methods=['patch'], url_path='reviews/(?P<review_id>[^/.]+)/respond')
+    def respond_to_review(self, request, pk=None, review_id=None):
+        """Owner reply to a review on their own box — box is already
+        ownership-scoped via get_queryset()/get_object(), so a mismatched
+        box id 404s naturally without a separate ownership check."""
+        box = self.get_object()
+        review = get_object_or_404(box.reviews, pk=review_id)
+        serializer = ReviewOwnerResponseSerializer(review, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(owner_response_at=timezone.now())
+        notify(
+            review.user,
+            'The owner replied to your review',
+            f"{box.name}'s owner replied to your review.",
+            link=f'/boxes/{box.id}',
+        )
+        return Response(ReviewSerializer(review).data)
+
 
 class AdminBoxViewSet(viewsets.ViewSet):
     """
@@ -228,6 +294,7 @@ class AdminBoxViewSet(viewsets.ViewSet):
         box.status = 'approved'
         box.rejection_reason = ''
         box.save(update_fields=['status', 'rejection_reason'])
+        notify(box.owner, 'Your box was approved', f'{box.name} is now live and bookable.', link=f'/boxes/{box.id}')
         return Response(AdminBoxSerializer(box, context={'request': request}).data)
 
     def reject(self, request, pk=None):
@@ -239,4 +306,106 @@ class AdminBoxViewSet(viewsets.ViewSet):
         box.status = 'rejected'
         box.rejection_reason = reason
         box.save(update_fields=['status', 'rejection_reason'])
+        notify(
+            box.owner, 'Your box was rejected',
+            f'{box.name} was rejected: {reason}' if reason else f'{box.name} was rejected.',
+        )
         return Response(AdminBoxSerializer(box, context={'request': request}).data)
+
+    def request_changes(self, request, pk=None):
+        """A middle ground between approve/reject — the box isn't rejected
+        outright, but the owner needs to fix something before it can go
+        live. Reuses rejection_reason (already means "why this isn't
+        approved yet", which fits here too) to carry the admin's notes.
+        See OwnerBoxViewSet.perform_update() for the other half: editing a
+        changes_requested box auto-resubmits it to pending."""
+        try:
+            box = Box.objects.get(pk=pk)
+        except Box.DoesNotExist:
+            return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
+        reason = request.data.get('reason', '')
+        if not reason.strip():
+            return Response({'detail': 'Please explain what needs to change.'}, status=status.HTTP_400_BAD_REQUEST)
+        box.status = 'changes_requested'
+        box.rejection_reason = reason
+        box.save(update_fields=['status', 'rejection_reason'])
+        notify(
+            box.owner, 'Changes requested on your box',
+            f'{box.name} needs changes before it can be approved: {reason}',
+            link='/owner-dashboard',
+        )
+        return Response(AdminBoxSerializer(box, context={'request': request}).data)
+
+
+class AdminReviewViewSet(mixins.ListModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """Admin-only review moderation surface: list every review platform-wide
+    and delete abusive/spam ones. No update action — admins moderate, they
+    don't edit customer-authored content."""
+    serializer_class = AdminReviewSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
+    filter_backends = [drf_filters.SearchFilter, drf_filters.OrderingFilter]
+    search_fields = ['box__name', 'user__email', 'user__first_name', 'user__last_name', 'comment']
+    ordering_fields = ['date', 'rating']
+    ordering = ['-date']
+
+    def get_queryset(self):
+        return Review.objects.select_related('box', 'user').all()
+
+    def destroy(self, request, pk=None):
+        review = get_object_or_404(Review, pk=pk)
+        box = review.box
+        review.delete()
+        new_avg = box.reviews.aggregate(models.Avg('rating'))['rating__avg']
+        box.rating = new_avg or 0.0
+        box.save(update_fields=['rating'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class BlockedDateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """Owner-managed whole-day blocks (holiday/maintenance) on their own
+    boxes. Scoped to the owner's own boxes via get_queryset(), same
+    ownership-via-queryset pattern as OwnerBookingViewSet — a mismatched
+    box id 404s naturally rather than needing a separate check."""
+    serializer_class = BlockedDateSerializer
+    permission_classes = [IsOwnerUser]
+
+    def get_queryset(self):
+        queryset = BlockedDate.objects.filter(box__owner=self.request.user).select_related('box')
+        box_id = self.request.query_params.get('box')
+        if box_id:
+            queryset = queryset.filter(box_id=box_id)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        box_id = request.data.get('box')
+        if not Box.objects.filter(pk=box_id, owner=request.user).exists():
+            return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if BlockedDate.objects.filter(box_id=box_id, date=request.data.get('date')).exists():
+            return Response({'detail': 'This date is already blocked.'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().create(request, *args, **kwargs)
+
+
+class PricingRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """Owner-managed peak/off-peak price overrides on their own boxes. Same
+    ownership-via-queryset pattern as BlockedDateViewSet. create() locks the
+    box row for the duration of the overlap check + insert, so two
+    concurrent rule creates for the same box can't both pass validation
+    against a rule the other is still in the middle of inserting."""
+    serializer_class = PricingRuleSerializer
+    permission_classes = [IsOwnerUser]
+
+    def get_queryset(self):
+        queryset = PricingRule.objects.filter(box__owner=self.request.user).select_related('box')
+        box_id = self.request.query_params.get('box')
+        if box_id:
+            queryset = queryset.filter(box_id=box_id)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        box_id = request.data.get('box')
+        with transaction.atomic():
+            box = Box.objects.select_for_update().filter(pk=box_id, owner=request.user).first()
+            if not box:
+                return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return super().create(request, *args, **kwargs)

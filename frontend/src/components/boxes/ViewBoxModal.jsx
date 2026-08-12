@@ -1,9 +1,90 @@
-import { MapPin, Users, Star, DollarSign, Clock, CheckCircle, XCircle, Calendar } from 'lucide-react';
-import { MEDIA_BASE_URL } from '../../api';
-import { Modal, Badge, Button } from '../ui';
+import { useEffect, useState } from 'react';
+import { MapPin, Users, Star, DollarSign, Clock, CheckCircle, XCircle, Calendar, MessageSquare } from 'lucide-react';
+import { toast } from 'react-toastify';
+import { api, MEDIA_BASE_URL } from '../../api';
+import { Modal, Badge, Button, RatingStars } from '../ui';
 
-const ViewBoxModal = ({ isOpen, onClose, box }) => {
+/**
+ * Owner reply to a single review — self-contained so ViewBoxModal doesn't
+ * need to track per-review draft/submitting state itself.
+ */
+function ReviewRow({ boxId, review, onResponded }) {
+  const [draft, setDraft] = useState('');
+  const [replying, setReplying] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!draft.trim()) return;
+    setSubmitting(true);
+    try {
+      const response = await api.patch(`/boxes/owner/${boxId}/reviews/${review.id}/respond/`, { owner_response: draft.trim() });
+      onResponded(response.data);
+      setReplying(false);
+      toast.success('Reply posted');
+    } catch {
+      toast.error('Failed to post reply');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between gap-3 mb-1.5">
+        <span className="font-medium text-foreground">{review.user}</span>
+        <RatingStars rating={review.rating} />
+      </div>
+      {review.comment && <p className="text-sm text-muted-foreground">{review.comment}</p>}
+      <p className="text-xs text-muted-foreground mt-1">{review.date}</p>
+
+      {review.owner_response ? (
+        <div className="mt-3 ml-4 pl-3 border-l-2 border-primary/40">
+          <p className="text-xs font-medium text-primary mb-1">Your reply</p>
+          <p className="text-sm text-muted-foreground">{review.owner_response}</p>
+        </div>
+      ) : replying ? (
+        <div className="mt-3 space-y-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
+            className="w-full px-3 py-2 rounded-lg bg-elevated text-foreground border border-input text-sm outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+            placeholder="Write a reply..."
+          />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={handleSubmit} loading={submitting} disabled={!draft.trim()}>Post reply</Button>
+            <Button size="sm" variant="outline" onClick={() => setReplying(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setReplying(true)}
+          className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80"
+        >
+          <MessageSquare size={14} /> Reply
+        </button>
+      )}
+    </div>
+  );
+}
+
+const ViewBoxModal = ({ isOpen, onClose, box, onBoxUpdated }) => {
+  const [reviews, setReviews] = useState(box?.reviews || []);
+
+  // The modal instance is reused across boxes (same component, new `box`
+  // prop) rather than remounted, so local review state needs to reset
+  // whenever the box it's showing changes.
+  useEffect(() => {
+    setReviews(box?.reviews || []);
+  }, [box?.id]);
+
   if (!box) return null;
+
+  const handleReviewResponded = (updatedReview) => {
+    setReviews((prev) => prev.map((r) => (r.id === updatedReview.id ? updatedReview : r)));
+    onBoxUpdated?.();
+  };
 
   const getStatusTone = (status) => {
     switch (status?.toLowerCase()) {
@@ -169,6 +250,20 @@ const ViewBoxModal = ({ isOpen, onClose, box }) => {
           <div className="mb-6">
             <h3 className="text-lg font-display font-semibold text-foreground mb-3">Contact Information</h3>
             <p className="text-muted-foreground">{box.contact_info}</p>
+          </div>
+        )}
+
+        {/* Reviews */}
+        {reviews.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-lg font-display font-semibold text-foreground mb-3">
+              Reviews ({reviews.length})
+            </h3>
+            <div className="space-y-3">
+              {reviews.map((review) => (
+                <ReviewRow key={review.id} boxId={box.id} review={review} onResponded={handleReviewResponded} />
+              ))}
+            </div>
           </div>
         )}
 

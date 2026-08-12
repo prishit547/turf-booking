@@ -105,8 +105,12 @@ export const BoxCard = forwardRef(function BoxCard({ box, layout = 'grid' }, ref
 
                 <div className="mt-auto flex items-center justify-between gap-3 pt-2">
                     <p className="text-sm text-muted-foreground">
-                        <span className="font-display text-xl text-foreground">₹{box.price}</span>
+                        {box.pricing_rules?.length > 0 && <span className="mr-1">From</span>}
+                        <span className="font-display text-xl text-foreground">₹{box.min_price ?? box.price}</span>
                         /hour
+                        {box.pricing_rules?.length > 0 && (
+                            <span className="ml-1.5 text-xs text-primary">· peak pricing</span>
+                        )}
                     </p>
                     <Link
                         to={`/boxes/${box.id}`}

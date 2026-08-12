@@ -20,6 +20,7 @@ import {
   Activity,
   BarChart3,
   Sparkles,
+  UserPlus,
 } from 'lucide-react';
 
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement } from 'chart.js';
@@ -29,7 +30,7 @@ import {
   PeakHoursChart,
   MonthlySpendingChart,
 } from '../components/common/AdvancedCharts';
-import { Button, Card, Badge, Modal, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
+import { Button, Card, Badge, Modal, Input, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
 import AchievementBadge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
 
@@ -66,7 +67,7 @@ const BOOKING_STATUS_TONE = {
 
 const UserDashboard = () => {
   const { user, logout } = useAuth();
-  const { bookings, loading, error, fetchBookings, cancelBooking } = useBooking();
+  const { bookings, loading, error, fetchBookings, cancelBooking, inviteToBooking, searchUsers } = useBooking();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('overview');
@@ -80,6 +81,14 @@ const UserDashboard = () => {
   const [favoritesLoading, setFavoritesLoading] = useState(true);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [selectedBookingToCancel, setSelectedBookingToCancel] = useState(null);
+
+  // Group/split bookings: invite-someone modal, opened from a booker's own
+  // upcoming booking card (not shown to invited participants — see
+  // isOwnBooking below).
+  const [inviteModalBooking, setInviteModalBooking] = useState(null);
+  const [inviteQuery, setInviteQuery] = useState('');
+  const [inviteResults, setInviteResults] = useState([]);
+  const [invitingId, setInvitingId] = useState(null);
 
   // Fetch Analytics Data (memoized)
   const fetchAnalytics = useCallback(async () => {
@@ -202,6 +211,42 @@ const UserDashboard = () => {
     setSelectedBookingToCancel(null);
   };
 
+  const openInviteModal = (booking) => {
+    setInviteModalBooking(booking);
+    setInviteQuery('');
+    setInviteResults([]);
+  };
+
+  const closeInviteModal = () => {
+    setInviteModalBooking(null);
+    setInviteQuery('');
+    setInviteResults([]);
+  };
+
+  const handleInviteSearchChange = async (e) => {
+    const query = e.target.value;
+    setInviteQuery(query);
+    if (query.trim().length < 2) {
+      setInviteResults([]);
+      return;
+    }
+    setInviteResults(await searchUsers(query.trim()));
+  };
+
+  const handleSendInvite = async ({ invitedUserId, invitedEmail }) => {
+    const id = invitedUserId || invitedEmail;
+    setInvitingId(id);
+    const result = await inviteToBooking(inviteModalBooking.id, { invitedUserId, invitedEmail });
+    setInvitingId(null);
+    if (result.success) {
+      toast.success('Invite sent!');
+      closeInviteModal();
+      if (user?.id) fetchBookings(user.id);
+    } else {
+      toast.error(result.error || 'Failed to send invite.');
+    }
+  };
+
   // Confirm Cancellation
   const confirmCancelBooking = async () => {
     if (selectedBookingToCancel) {
@@ -299,7 +344,7 @@ const UserDashboard = () => {
           {activeTab === 'overview' && (
             <div className="space-y-8">
               {/* Stats Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 <StatTile
                   tone="primary"
                   icon={<Calendar size={22} />}
@@ -445,30 +490,60 @@ const UserDashboard = () => {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {upcomingBookings.map((booking) => (
-                          <article key={booking.id} className="rounded-2xl border border-border bg-card p-5">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <h2 className="font-display text-lg uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  {new Date(booking.date).toLocaleDateString()} · {booking.start_time} - {booking.end_time}
-                                </p>
+                        {upcomingBookings.map((booking) => {
+                          const isOwnBooking = user?.id && String(booking.user_id) === String(user.id);
+                          const acceptedInvites = (booking.invites || []).filter((i) => i.status === 'accepted');
+                          const participantCount = 1 + acceptedInvites.length;
+                          return (
+                            <article key={booking.id} className="rounded-2xl border border-border bg-card p-5">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <h2 className="font-display text-lg uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
+                                    {booking.recurring_group_id && <Badge tone="secondary" size="sm">Weekly</Badge>}
+                                    {!isOwnBooking && <Badge tone="secondary" size="sm">Shared with you</Badge>}
+                                  </div>
+                                  <p className="mt-1 text-sm text-muted-foreground">
+                                    {new Date(booking.date).toLocaleDateString()} · {booking.start_time} - {booking.end_time}
+                                  </p>
+                                </div>
+                                <StatusPill status={booking.booking_status} />
                               </div>
-                              <StatusPill status={booking.booking_status} />
-                            </div>
-                            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                              <span className="font-display text-xl tabular-nums">₹{booking.total_amount}</span>
-                              {booking.booking_status === 'Confirmed' && (
-                                <Button variant="danger" size="sm" icon={<XCircle size={16} />} onClick={() => openCancelModal(booking)}>
-                                  Cancel
-                                </Button>
+
+                              {(acceptedInvites.length > 0 || isOwnBooking) && (
+                                <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                  <Users size={14} />
+                                  {participantCount > 1 ? (
+                                    <span>
+                                      Split {participantCount} ways · ₹{(booking.total_amount / participantCount).toFixed(0)} each
+                                    </span>
+                                  ) : (
+                                    <span>Just you</span>
+                                  )}
+                                </div>
                               )}
-                            </div>
-                            <p className="mt-3 text-xs text-muted-foreground">
-                              Free cancellation up to 2 hours before booking time.
-                            </p>
-                          </article>
-                        ))}
+
+                              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                                <span className="font-display text-xl tabular-nums">₹{booking.total_amount}</span>
+                                {booking.booking_status === 'Confirmed' && isOwnBooking && (
+                                  <div className="flex gap-2">
+                                    <Button variant="outline" size="sm" icon={<UserPlus size={16} />} onClick={() => openInviteModal(booking)}>
+                                      Invite
+                                    </Button>
+                                    <Button variant="danger" size="sm" icon={<XCircle size={16} />} onClick={() => openCancelModal(booking)}>
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                              {isOwnBooking && (
+                                <p className="mt-3 text-xs text-muted-foreground">
+                                  Free cancellation up to 2 hours before booking time.
+                                </p>
+                              )}
+                            </article>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -484,18 +559,30 @@ const UserDashboard = () => {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {pastBookings.map((booking) => (
-                          <article key={booking.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5">
-                            <div>
-                              <h2 className="font-display text-base uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
-                              <p className="text-sm text-muted-foreground">{new Date(booking.date).toLocaleDateString()}</p>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm tabular-nums">₹{booking.total_amount}</span>
-                              <StatusPill status={booking.booking_status === 'Confirmed' ? 'Completed' : booking.booking_status} />
-                            </div>
-                          </article>
-                        ))}
+                        {pastBookings.map((booking) => {
+                          const boxId = booking.box?.id || booking.box_id
+                          return (
+                            <article key={booking.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5">
+                              <div>
+                                <h2 className="font-display text-base uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
+                                <p className="text-sm text-muted-foreground">{new Date(booking.date).toLocaleDateString()}</p>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm tabular-nums">₹{booking.total_amount}</span>
+                                <StatusPill status={booking.booking_status === 'Confirmed' ? 'Completed' : booking.booking_status} />
+                                {boxId && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => navigate(`/boxes/${boxId}`, { state: { prefillDuration: booking.duration } })}
+                                  >
+                                    Book again
+                                  </Button>
+                                )}
+                              </div>
+                            </article>
+                          )
+                        })}
                       </div>
                     )}
                   </div>
@@ -868,6 +955,61 @@ const UserDashboard = () => {
           Please note: Cancellations made within 2 hours of the booking time are not allowed.
           (This policy is handled by the backend.)
         </p>
+      </Modal>
+
+      {/* Invite Modal — group/split bookings. Search finds existing
+          accounts; typing a full email that doesn't match anyone still
+          sends an invite (claimed once they sign up), same backend action
+          either way (bookings/views.py's `invite`). */}
+      <Modal
+        isOpen={!!inviteModalBooking}
+        onClose={closeInviteModal}
+        title="Invite someone to this booking"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            They&rsquo;ll be able to see this booking&rsquo;s details once they accept.
+          </p>
+          <Input
+            label="Search by name or email"
+            placeholder="Type at least 2 characters..."
+            value={inviteQuery}
+            onChange={handleInviteSearchChange}
+          />
+
+          {inviteResults.length > 0 && (
+            <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+              {inviteResults.map((result) => (
+                <li key={result.id}>
+                  <button
+                    type="button"
+                    onClick={() => handleSendInvite({ invitedUserId: result.id })}
+                    disabled={invitingId === result.id}
+                    className="w-full flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left hover:border-primary/50 disabled:opacity-50"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{result.name || result.email}</p>
+                      <p className="text-xs text-muted-foreground">{result.email}</p>
+                    </div>
+                    <UserPlus size={16} className="text-primary shrink-0" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {inviteQuery.includes('@') && inviteResults.length === 0 && (
+            <Button
+              fullWidth
+              icon={<UserPlus size={16} />}
+              loading={invitingId === inviteQuery.trim()}
+              onClick={() => handleSendInvite({ invitedEmail: inviteQuery.trim() })}
+            >
+              Invite {inviteQuery.trim()}
+            </Button>
+          )}
+        </div>
       </Modal>
     </div>
   );

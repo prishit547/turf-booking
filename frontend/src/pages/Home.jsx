@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import { Link, useNavigate } from 'react-router-dom'
+import { Helmet } from 'react-helmet-async'
 import { ArrowRight, CalendarDays, MapPin, Search, Sparkles, Ticket, Zap } from 'lucide-react'
 import { useBox } from '../context/BoxContext'
 import { Loader } from '../components/ui'
@@ -63,6 +64,14 @@ const Home = () => {
 
   return (
     <div className="min-h-screen">
+      <Helmet>
+        <title>BookMyBox - Book Sports Boxes by the Hour</title>
+        <meta name="description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
+        <link rel="canonical" href={`${window.location.origin}/`} />
+        <meta property="og:title" content="BookMyBox - Book Sports Boxes by the Hour" />
+        <meta property="og:description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
+        <meta property="og:url" content={`${window.location.origin}/`} />
+      </Helmet>
       {/* Hero */}
       <section ref={heroRef} className="relative overflow-hidden">
         <motion.img

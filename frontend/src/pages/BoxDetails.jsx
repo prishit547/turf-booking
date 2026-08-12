@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { Helmet } from 'react-helmet-async';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, ArrowLeft, Heart, Check, Map as MapIcon, X } from 'lucide-react';
 import { useBooking } from '../context/BookingContext';
-import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars } from '../components/ui';
+import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown } from '../components/ui';
 import Chatbot from '../components/common/Chatbot';
 import AddReviewForm from '../components/common/AddReviewForm';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
@@ -24,13 +25,18 @@ const amenityIcons = {
 const BoxDetails = () => {
     const { id } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
+    // "Book again" from UserDashboard's history tab hands off a duration to
+    // prefill via router state — the rest of the form (date/slot) is still
+    // the user's own live choice, since the old date/slot are likely gone.
+    const prefillDuration = location.state?.prefillDuration;
     const [box, setBox] = useState(null);
     const [isFavorite, setIsFavorite] = useState(false);
     const [favoriteLoading, setFavoriteLoading] = useState(false);
     const [loading, setLoading] = useState(true);
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
-    const [duration, setDuration] = useState(1);
+    const [duration, setDuration] = useState(prefillDuration || 1);
     const [error, setError] = useState(null);
     const [bookedSlots, setBookedSlots] = useState([]);
     const [slotsLoading, setSlotsLoading] = useState(false);
@@ -38,7 +44,18 @@ const BoxDetails = () => {
     const [reservationLoading, setReservationLoading] = useState(false);
     const [lightbox, setLightbox] = useState(null);
     const [showMap, setShowMap] = useState(false);
-    const { reserveSlot } = useBooking();
+    const [repeatWeekly, setRepeatWeekly] = useState(false);
+    const [repeatWeeks, setRepeatWeeks] = useState(4);
+    const [recurringLoading, setRecurringLoading] = useState(false);
+    const [recurringResult, setRecurringResult] = useState(null);
+    const [waitlistEntries, setWaitlistEntries] = useState([]);
+    const [waitlistPending, setWaitlistPending] = useState(() => new Set());
+    // Resolved via /bookings/price-preview/ rather than a naive box.price *
+    // duration multiply, since a PricingRule can override the rate for
+    // this exact date/time (see boxes/pricing.py's resolve_box_price()).
+    // null while unresolved/loading — callers fall back to the flat rate.
+    const [priceEstimate, setPriceEstimate] = useState(null);
+    const { reserveSlot, createRecurringBooking, fetchMyWaitlist, joinWaitlist, leaveWaitlist } = useBooking();
     const { isAuthenticated, user } = useAuth();
 
     useEffect(() => {
@@ -76,6 +93,37 @@ const BoxDetails = () => {
         const intervalId = setInterval(refreshBookedSlots, 30000);
         return () => clearInterval(intervalId);
     }, [refreshBookedSlots]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !box?.id) {
+            setWaitlistEntries([]);
+            return;
+        }
+        let cancelled = false;
+        fetchMyWaitlist(box.id).then((entries) => {
+            if (!cancelled) setWaitlistEntries(entries);
+        });
+        return () => { cancelled = true; };
+    }, [isAuthenticated, box?.id, selectedDate, fetchMyWaitlist]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !box?.id || !selectedTimeSlot) {
+            setPriceEstimate(null);
+            return;
+        }
+        let cancelled = false;
+        api.post('/bookings/price-preview/', {
+            boxId: box.id,
+            date: formatLocalDate(selectedDate),
+            startTime: selectedTimeSlot,
+            duration,
+        }).then((response) => {
+            if (!cancelled) setPriceEstimate(response.data);
+        }).catch(() => {
+            if (!cancelled) setPriceEstimate(null);
+        });
+        return () => { cancelled = true; };
+    }, [isAuthenticated, box?.id, selectedDate, selectedTimeSlot, duration]);
 
     const toggleFavorite = async () => {
         if (!user) {
@@ -127,6 +175,15 @@ const BoxDetails = () => {
         fetchBoxDetails();
     }, [id]);
 
+    // "Book again" hand-off: once the box has loaded, jump straight to the
+    // slot picker so the user isn't left scrolling to find it.
+    useEffect(() => {
+        if (!loading && box && prefillDuration) {
+            document.getElementById('slot-picker')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loading, box]);
+
     // Every box has its own owner-configured opening/closing hours
     // (`box.opening_time`/`box.closing_time`, "HH:MM") — slots are generated
     // from those instead of a single hardcoded 06:00-22:00 range shared by
@@ -139,8 +196,13 @@ const BoxDetails = () => {
         timeSlots.push(`${h.toString().padStart(2, '0')}:00`);
     }
 
+    const isDateBlocked = box?.blocked_dates?.includes(formatLocalDate(selectedDate));
+
     const isTimeSlotAvailable = (timeSlot) => {
         if (!timeSlot) return true;
+        // A whole day the owner has blocked (holiday/maintenance) is never
+        // bookable, regardless of individual slot availability.
+        if (isDateBlocked) return false;
         const selectedHour = parseInt(timeSlot.split(':')[0]);
         // A duration that would run past closing time isn't offerable,
         // regardless of what's already booked.
@@ -155,6 +217,50 @@ const BoxDetails = () => {
     };
 
     const isTimeSlotBooked = (timeSlot) => bookedSlots.includes(timeSlot);
+
+    // Waitlist entries are fetched per box/date (see effect above); a slot
+    // "counts" for the currently-selected date only, since the same
+    // start_time on a different day is a different signature.
+    const selectedDateString = formatLocalDate(selectedDate);
+    const waitlistedSlots = new Set(
+        waitlistEntries.filter((e) => e.date === selectedDateString).map((e) => e.start_time)
+    );
+
+    const handleToggleWaitlist = async (timeSlot) => {
+        if (!isAuthenticated) {
+            toast.info('Please login to join the waitlist');
+            return;
+        }
+        const existing = waitlistEntries.find((e) => e.date === selectedDateString && e.start_time === timeSlot);
+        setWaitlistPending((prev) => new Set(prev).add(timeSlot));
+        try {
+            if (existing) {
+                const result = await leaveWaitlist(existing.id);
+                if (result.success) {
+                    setWaitlistEntries((prev) => prev.filter((e) => e.id !== existing.id));
+                    toast.info("You've left the waitlist for this slot.");
+                } else {
+                    toast.error(result.error || 'Could not leave the waitlist.');
+                }
+            } else {
+                const result = await joinWaitlist({
+                    boxId: box.id, date: selectedDateString, startTime: timeSlot, duration,
+                });
+                if (result.success) {
+                    setWaitlistEntries((prev) => [...prev, result.data]);
+                    toast.success("You'll be notified if this slot opens up.");
+                } else {
+                    toast.error(result.error || 'Could not join the waitlist.');
+                }
+            }
+        } finally {
+            setWaitlistPending((prev) => {
+                const next = new Set(prev);
+                next.delete(timeSlot);
+                return next;
+            });
+        }
+    };
 
     const handleReviewAdded = (newReview) => {
         setBox(prevBox => ({
@@ -238,6 +344,37 @@ const BoxDetails = () => {
         });
     };
 
+    // Weekly-repeat booking bypasses the reserve/hold + Checkout flow
+    // entirely (see BookingViewSet.recurring's docstring) — it's a direct
+    // multi-week write, so we book straight from here and show the
+    // per-week results rather than handing off to a payment-review screen.
+    const handleRecurringBook = async () => {
+        if (!isAuthenticated) {
+            toast.info('Please login to book a box');
+            return;
+        }
+        if (!selectedTimeSlot) {
+            toast.info('Please select a time slot');
+            return;
+        }
+        setRecurringLoading(true);
+        const result = await createRecurringBooking({
+            boxId: box.id,
+            date: formatLocalDate(selectedDate),
+            startTime: selectedTimeSlot,
+            duration,
+            weeks: repeatWeeks,
+        });
+        setRecurringLoading(false);
+
+        if (!result.success) {
+            toast.error(result.error || 'Could not create the recurring booking.');
+            return;
+        }
+        setRecurringResult(result);
+        refreshBookedSlots();
+    };
+
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center">
@@ -271,9 +408,21 @@ const BoxDetails = () => {
     }
 
     const images = box.images?.length ? box.images : [box.image];
+    const metaDescription = (box.description || `Book ${box.name} in ${box.location} by the hour on BookMyBox.`).slice(0, 160);
+    const pageUrl = `${window.location.origin}/boxes/${box.id}`;
 
     return (
         <div className="min-h-screen pb-28">
+            <Helmet>
+                <title>{box.name} - {box.location} | BookMyBox</title>
+                <meta name="description" content={metaDescription} />
+                <link rel="canonical" href={pageUrl} />
+                <meta property="og:title" content={`${box.name} - ${box.location}`} />
+                <meta property="og:description" content={metaDescription} />
+                <meta property="og:url" content={pageUrl} />
+                {images[0] && <meta property="og:image" content={images[0]} />}
+                <meta property="og:type" content="business.business" />
+            </Helmet>
             <div className="mx-auto max-w-6xl px-4 py-6">
                 <Link to="/boxes" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
                     <ArrowLeft className="h-4 w-4" /> All boxes
@@ -330,18 +479,46 @@ const BoxDetails = () => {
                 </p>
 
                 <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_320px]">
-                    <section className="min-w-0">
+                    <section id="slot-picker" className="min-w-0">
                         <h2 className="font-display text-2xl uppercase">Pick your slot</h2>
                         <div className="mt-4">
                             <DateStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} />
                         </div>
 
-                        <div className="mt-4 max-w-[12rem]">
-                            <Select label="Duration (hours)" value={duration} onChange={(e) => setDuration(parseInt(e.target.value))}>
-                                {[1, 2, 3, 4, 5, 6].map((hour) => (
-                                    <option key={hour} value={hour}>{hour} hour{hour > 1 ? 's' : ''}</option>
-                                ))}
-                            </Select>
+                        {isDateBlocked && (
+                            <p className="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm text-warning">
+                                This facility is closed on this date.
+                            </p>
+                        )}
+
+                        <div className="mt-4 flex flex-wrap items-end gap-4">
+                            <div className="max-w-[12rem]">
+                                <Select label="Duration (hours)" value={duration} onChange={(e) => setDuration(parseInt(e.target.value))}>
+                                    {[1, 2, 3, 4, 5, 6].map((hour) => (
+                                        <option key={hour} value={hour}>{hour} hour{hour > 1 ? 's' : ''}</option>
+                                    ))}
+                                </Select>
+                            </div>
+
+                            <label className="flex items-center gap-2 pb-2.5 text-sm text-foreground">
+                                <input
+                                    type="checkbox"
+                                    checked={repeatWeekly}
+                                    onChange={(e) => setRepeatWeekly(e.target.checked)}
+                                    className="h-4 w-4 rounded border-input accent-primary"
+                                />
+                                Repeat this booking weekly
+                            </label>
+
+                            {repeatWeekly && (
+                                <div className="max-w-[10rem]">
+                                    <Select label="For how many weeks" value={repeatWeeks} onChange={(e) => setRepeatWeeks(parseInt(e.target.value))}>
+                                        {[2, 4, 8, 12].map((w) => (
+                                            <option key={w} value={w}>{w} weeks</option>
+                                        ))}
+                                    </Select>
+                                </div>
+                            )}
                         </div>
 
                         <div className="mt-5">
@@ -353,6 +530,9 @@ const BoxDetails = () => {
                                 isTimeSlotAvailable={isTimeSlotAvailable}
                                 loading={slotsLoading}
                                 duration={duration}
+                                waitlistedSlots={waitlistedSlots}
+                                onToggleWaitlist={isAuthenticated ? handleToggleWaitlist : undefined}
+                                waitlistPending={waitlistPending}
                             />
                         </div>
                         <div className="mt-4">
@@ -360,6 +540,11 @@ const BoxDetails = () => {
                         </div>
 
                         <h2 className="mt-12 font-display text-2xl uppercase">Reviews</h2>
+                        {box.reviews?.length > 0 && (
+                            <div className="mt-4 rounded-2xl border border-border bg-card p-5">
+                                <RatingBreakdown reviews={box.reviews} />
+                            </div>
+                        )}
                         <div className="mt-4 space-y-3">
                             {isAuthenticated && (
                                 <Button onClick={() => setShowReviewModal(true)} size="sm" icon={<Star size={16} />}>
@@ -379,6 +564,26 @@ const BoxDetails = () => {
                                     </div>
                                     <p className="mt-2 text-sm text-muted-foreground">{review.comment}</p>
                                     <p className="mt-2 text-xs text-muted-foreground">{review.date}</p>
+                                    {review.images?.length > 0 && (
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            {review.images.map((imgUrl, i) => (
+                                                <button
+                                                    key={i}
+                                                    type="button"
+                                                    onClick={() => setLightbox(imgUrl)}
+                                                    className="h-16 w-16 rounded-lg overflow-hidden border border-border"
+                                                >
+                                                    <img src={imgUrl} alt={`Review photo ${i + 1}`} className="h-full w-full object-cover" />
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {review.owner_response && (
+                                        <div className="mt-3 ml-4 pl-3 border-l-2 border-primary/40">
+                                            <p className="text-xs font-medium text-primary mb-1">Response from the owner</p>
+                                            <p className="text-sm text-muted-foreground">{review.owner_response}</p>
+                                        </div>
+                                    )}
                                 </article>
                             ))}
                         </div>
@@ -444,9 +649,11 @@ const BoxDetails = () => {
                 date={selectedDate.toLocaleDateString()}
                 timeSlot={selectedTimeSlot}
                 duration={duration}
-                total={box.price * duration}
-                onContinue={handleBookNowClick}
-                loading={reservationLoading}
+                total={priceEstimate ? Number(priceEstimate.total) : box.price * duration}
+                onContinue={repeatWeekly ? handleRecurringBook : handleBookNowClick}
+                loading={repeatWeekly ? recurringLoading : reservationLoading}
+                buttonLabel={repeatWeekly ? `Book weekly ×${repeatWeeks}` : 'Continue to book'}
+                loadingLabel={repeatWeekly ? 'Booking weeks...' : 'Checking availability...'}
             />
 
             <AnimatePresence>
@@ -455,7 +662,7 @@ const BoxDetails = () => {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 grid place-items-center bg-background/95 p-6"
+                        className="fixed inset-0 z-[100] grid place-items-center bg-background/95 p-6"
                         onClick={() => setLightbox(null)}
                     >
                         <button
@@ -486,7 +693,40 @@ const BoxDetails = () => {
                 onReviewAdded={handleReviewAdded}
             />
 
-            <Chatbot />
+            {/* Recurring booking result — partial success (some weeks
+                already taken) is the expected outcome, not an error, so
+                this always shows a breakdown rather than a single toast. */}
+            <Modal
+                isOpen={!!recurringResult}
+                onClose={() => setRecurringResult(null)}
+                title="Weekly booking results"
+                size="sm"
+                footer={<Button onClick={() => setRecurringResult(null)}>Done</Button>}
+            >
+                {recurringResult && (
+                    <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                            {recurringResult.created?.length || 0} of {recurringResult.created?.length + (recurringResult.failed?.length || 0)} weeks booked.
+                        </p>
+                        <ul className="space-y-1.5 text-sm">
+                            {recurringResult.created?.map((b) => (
+                                <li key={b.id} className="flex items-center justify-between gap-3">
+                                    <span className="text-foreground">{b.date}</span>
+                                    <Badge tone="success">Booked</Badge>
+                                </li>
+                            ))}
+                            {recurringResult.failed?.map((f) => (
+                                <li key={f.date} className="flex items-center justify-between gap-3">
+                                    <span className="text-foreground">{f.date}</span>
+                                    <span className="text-xs text-danger">{f.reason}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </Modal>
+
+            <Chatbot raised={Boolean(selectedTimeSlot)} />
         </div>
     );
 };

@@ -7,7 +7,7 @@ import { API_BASE_URL } from '../api.jsx';
 // the Channels route lives at /ws/bookings/slot/... on the same host.
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api\/?$/, '');
 
-const IDLE_STATE = { status: 'idle', position: null, expiresAt: null };
+const IDLE_STATE = { status: 'idle', position: null, expiresAt: null, message: null };
 
 /**
  * Tracks live hold/queue status for one exact slot signature over the
@@ -92,8 +92,16 @@ export function useSlotReservation({
                     if (String(message.booked_by_user_id) === String(currentUserId)) {
                         setState(IDLE_STATE);
                     } else {
-                        setState({ status: 'lost', position: null, expiresAt: null });
+                        setState({ status: 'lost', position: null, expiresAt: null, message: null });
                     }
+                    break;
+                case 'owner_reserved':
+                    // The box owner claimed this exact slot directly (see
+                    // OwnerBookingViewSet.book), preempting whoever was
+                    // holding or queued for it — everyone in the group gets
+                    // this, there's no "was it me" check like slot_booked
+                    // since the owner never goes through this hook/socket.
+                    setState({ status: 'owner_reserved', position: null, expiresAt: null, message: message.message });
                     break;
                 case 'slot_released':
                 case 'idle':
@@ -120,5 +128,5 @@ export function useSlotReservation({
         return () => clearInterval(intervalId);
     }, [state.status, state.expiresAt]);
 
-    return { status: state.status, position: state.position, expiresAt: state.expiresAt, secondsRemaining };
+    return { status: state.status, position: state.position, expiresAt: state.expiresAt, secondsRemaining, message: state.message };
 }

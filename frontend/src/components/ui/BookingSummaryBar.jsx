@@ -5,7 +5,10 @@ import { Button } from './Button';
  * Sticky bottom bar shown once a time slot is selected — summarizes the
  * pick and hands off to the reservation flow (reserveSlot → Checkout).
  */
-export function BookingSummaryBar({ visible, boxName, date, timeSlot, duration, total, onContinue, loading }) {
+export function BookingSummaryBar({
+    visible, boxName, date, timeSlot, duration, total, onContinue, loading,
+    buttonLabel = 'Continue to book', loadingLabel = 'Checking availability...',
+}) {
     return (
         <AnimatePresence>
             {visible && (
@@ -29,7 +32,7 @@ export function BookingSummaryBar({ visible, boxName, date, timeSlot, duration, 
                                 <div className="font-display font-bold text-lg text-primary">₹{total}</div>
                             </div>
                             <Button onClick={onContinue} loading={loading} disabled={loading}>
-                                {loading ? 'Checking availability...' : 'Continue to book'}
+                                {loading ? loadingLabel : buttonLabel}
                             </Button>
                         </div>
                     </div>

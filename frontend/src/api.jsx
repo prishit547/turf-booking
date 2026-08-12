@@ -15,6 +15,24 @@ export const api = axios.create({
   },
 });
 
+// Registered once at module load (not inside a component effect) so it's
+// guaranteed to be attached before any request ever goes out — a component
+// that fires an authenticated call on mount (e.g. NotificationProvider)
+// mounts as a child of AuthProvider, and child effects run before parent
+// effects, so registering this inside AuthProvider's own useEffect let the
+// very first request on a fresh page load race ahead of it and go out with
+// no Authorization header.
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
 // Auth Context
 const AuthContext = createContext(null);
 
@@ -135,19 +153,11 @@ export const AuthProvider = ({ children }) => {
     }
   }, [refreshAuthToken, logout]);
 
-  // Axios interceptors
+  // Response interceptor (refresh-on-401 retry) — this one does need
+  // component state (refreshAuthToken), so it stays registered here. The
+  // request interceptor that attaches the Authorization header is
+  // registered once at module scope above, not here — see that comment.
   useEffect(() => {
-    const requestInterceptor = api.interceptors.request.use(
-      (config) => {
-        const token = localStorage.getItem('accessToken');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
-
     const responseInterceptor = api.interceptors.response.use(
       (response) => response,
       async (error) => {
@@ -168,7 +178,6 @@ export const AuthProvider = ({ children }) => {
     );
 
     return () => {
-      api.interceptors.request.eject(requestInterceptor);
       api.interceptors.response.eject(responseInterceptor);
     };
   }, [refreshAuthToken, logout]);

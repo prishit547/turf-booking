@@ -15,8 +15,15 @@ function addHours(time, hours) {
  * Each button shows the full start-end range for the currently selected
  * `duration` rather than just a bare start time, since a single time like
  * "09:00" doesn't tell the user when the booking would end.
+ *
+ * A booked slot renders as a non-disabled wrapper `div` (not a `<button
+ * disabled>`) so it can host a working nested "Notify me" button — a real
+ * nested `<button>` inside a disabled one never receives clicks.
  */
-export function SlotGrid({ timeSlots, selectedTimeSlot, onSelect, isTimeSlotBooked, isTimeSlotAvailable, loading, duration = 1 }) {
+export function SlotGrid({
+    timeSlots, selectedTimeSlot, onSelect, isTimeSlotBooked, isTimeSlotAvailable, loading, duration = 1,
+    waitlistedSlots, onToggleWaitlist, waitlistPending,
+}) {
     if (loading) {
         return (
             <div className="flex items-center justify-center py-4 gap-2 text-sm text-muted-foreground">
@@ -33,6 +40,36 @@ export function SlotGrid({ timeSlots, selectedTimeSlot, onSelect, isTimeSlotBook
                 const isSelected = selectedTimeSlot === time;
                 const canSelect = !isBooked && isTimeSlotAvailable(time);
 
+                if (isBooked) {
+                    const isWaitlisted = waitlistedSlots?.has(time);
+                    const isPending = waitlistPending?.has(time);
+                    return (
+                        <motion.div
+                            key={time}
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.2, delay: i * 0.015 }}
+                            className="slot-strike p-2 text-sm rounded-lg border bg-danger/10 text-danger border-danger/30 flex flex-col items-center gap-1"
+                        >
+                            <span>{time} - {addHours(time, duration)}</span>
+                            {onToggleWaitlist ? (
+                                <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); onToggleWaitlist(time); }}
+                                    disabled={isPending}
+                                    className={`text-xs font-medium underline decoration-dotted disabled:opacity-50 ${
+                                        isWaitlisted ? 'text-success' : 'text-danger/80 hover:text-danger'
+                                    }`}
+                                >
+                                    {isWaitlisted ? 'On waitlist ✓' : 'Notify me'}
+                                </button>
+                            ) : (
+                                <span className="text-xs font-medium">Booked</span>
+                            )}
+                        </motion.div>
+                    );
+                }
+
                 return (
                     <motion.button
                         key={time}
@@ -41,20 +78,17 @@ export function SlotGrid({ timeSlots, selectedTimeSlot, onSelect, isTimeSlotBook
                         transition={{ duration: 0.2, delay: i * 0.015 }}
                         whileHover={canSelect ? { scale: 1.03 } : undefined}
                         onClick={() => (canSelect ? onSelect(time) : null)}
-                        disabled={isBooked || !canSelect}
+                        disabled={!canSelect}
                         className={`p-2 text-sm rounded-lg border transition-colors duration-150 ${
-                            isBooked
-                                ? 'slot-strike bg-danger/10 text-danger border-danger/30 cursor-not-allowed'
-                                : isSelected
+                            isSelected
                                 ? 'slot-selected bg-primary text-primary-foreground border-primary'
                                 : canSelect
                                 ? 'bg-elevated text-foreground border-border hover:border-primary hover:bg-primary/10'
                                 : 'slot-strike bg-elevated/60 text-muted-foreground border-border cursor-not-allowed'
                         }`}
-                        title={isBooked ? 'This time slot is already booked' : canSelect ? 'Available' : 'Not available for selected duration'}
+                        title={canSelect ? 'Available' : 'Not available for selected duration'}
                     >
                         {time} - {addHours(time, duration)}
-                        {isBooked && <div className="text-xs mt-1 font-medium">Booked</div>}
                     </motion.button>
                 );
             })}

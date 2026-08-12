@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -14,6 +15,9 @@ import { useAuth } from './api.jsx'; // Correct path and extension
 const Home = lazy(() => import('./pages/Home'));
 const Login = lazy(() => import('./pages/Login'));
 const Signup = lazy(() => import('./pages/Signup'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const InviteClaim = lazy(() => import('./pages/InviteClaim'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const BoxListings = lazy(() => import('./pages/BoxListings'));
 const BoxDetails = lazy(() => import('./pages/BoxDetails'));
@@ -57,6 +61,15 @@ function App() {
 
   return (
       <div className="min-h-screen bg-background">
+        {/* Site-wide fallback — any route without its own <Helmet> (About,
+            dashboards, etc.) still gets a real description/OG tags instead
+            of none at all. Pages that render their own <Helmet> (Home,
+            BoxListings, BoxDetails) override these per-key automatically. */}
+        <Helmet>
+          <meta name="description" content="Book sports boxes by the hour on BookMyBox. Live availability, instant confirmation, no phone calls." />
+          <meta property="og:site_name" content="BookMyBox" />
+          <meta property="og:type" content="website" />
+        </Helmet>
         <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick pauseOnHover draggable theme="dark" />
         <ScrollToTop />
         <Header />
@@ -82,6 +95,9 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password/:token" element={<ResetPassword />} />
+            <Route path="/invites/:token" element={<InviteClaim />} />
             <Route path="/onboarding" element={<OnboardingPage />} />
             <Route path="/boxes" element={<BoxListings />} />
             <Route path="/boxes/:id" element={<BoxDetails />} />

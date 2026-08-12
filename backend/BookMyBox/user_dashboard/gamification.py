@@ -2,12 +2,16 @@
 Gamification service for BookMyBox
 Handles badge checking and awarding for users and owners
 """
+import logging
 
 from django.db.models import Count, Sum
 from datetime import datetime, timedelta
 from .models import Achievement, UserBadge, UserGameStats, OwnerGameStats
 from bookings.models import Booking
 from boxes.models import Box
+
+logger = logging.getLogger(__name__)
+
 
 class GamificationService:
     
@@ -245,7 +249,7 @@ class GamificationService:
                 defaults=ach_data
             )
             if created:
-                print(f"Created achievement: {achievement.name}")
+                logger.info("Created achievement: %s", achievement.name)
 
 def trigger_gamification_check(user, user_type='user'):
     """Trigger gamification check for a user"""

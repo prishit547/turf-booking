@@ -6,7 +6,7 @@ import { Card, Button, Input } from '../components/ui';
 import { MagneticButton } from '../components/motion/MagneticButton';
 import { useBooking } from '../context/BookingContext';
 import { useSlotReservation } from '../hooks/useSlotReservation';
-import { useAuth } from '../api.jsx';
+import { useAuth, api } from '../api.jsx';
 
 const PAYMENT_METHODS = [
     { id: 'upi', label: 'UPI', Icon: Smartphone },
@@ -20,10 +20,11 @@ const PAYMENT_METHODS = [
  * result BoxDetails.jsx already has), so status stays accurate across the
  * page navigation instead of freezing at whatever it was on handoff.
  *
- * The payment-method selector and coupon field are presentational only —
- * there's no payment gateway or coupon system behind this app. They're
- * included for visual parity with the reference design but never claim to
- * do anything; the only real action is "Confirm booking".
+ * The payment-method selector is still presentational only — there's no
+ * payment gateway behind this app. The coupon field, however, is real:
+ * "Apply" calls a server-side dry-run validate endpoint, and the applied
+ * code rides along with the confirm call so the discount is recomputed
+ * (and actually charged) server-side, never trusted from this component.
  */
 const Checkout = () => {
     const location = useLocation();
@@ -34,8 +35,16 @@ const Checkout = () => {
 
     const [selectedPayment, setSelectedPayment] = useState('upi');
     const [couponCode, setCouponCode] = useState('');
+    const [appliedCoupon, setAppliedCoupon] = useState(null);
+    const [applyingCoupon, setApplyingCoupon] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const [leaving, setLeaving] = useState(false);
+    // Resolved via /bookings/price-preview/ — draft.pricePerHour is the
+    // box's flat rate handed off from BoxDetails, but a PricingRule can
+    // override it for this exact date/time (see boxes/pricing.py's
+    // resolve_box_price()). null while unresolved — falls back to the
+    // naive flat-rate multiply below so the page never shows a blank total.
+    const [resolvedRate, setResolvedRate] = useState(null);
     const [details, setDetails] = useState({
         name: user?.name || '',
         phone: user?.phone || '',
@@ -60,8 +69,27 @@ const Checkout = () => {
         if (liveReservation.status === 'lost') {
             toast.error('This slot was just booked by someone else.');
             navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
+        } else if (liveReservation.status === 'owner_reserved') {
+            toast.error(liveReservation.message || 'This slot has been reserved by the turf owner. Please select another slot.');
+            navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
         }
-    }, [liveReservation.status, navigate, draft?.boxId]);
+    }, [liveReservation.status, liveReservation.message, navigate, draft?.boxId]);
+
+    useEffect(() => {
+        if (!draft) return undefined;
+        let cancelled = false;
+        api.post('/bookings/price-preview/', {
+            boxId: draft.boxId,
+            date: draft.date,
+            startTime: draft.timeSlot,
+            duration: draft.duration,
+        }).then((response) => {
+            if (!cancelled) setResolvedRate(response.data);
+        }).catch(() => {
+            if (!cancelled) setResolvedRate(null);
+        });
+        return () => { cancelled = true; };
+    }, [draft]);
 
     const wasQueuedRef = useRef(false);
     useEffect(() => {
@@ -85,18 +113,35 @@ const Checkout = () => {
         );
     }
 
-    const total = draft.pricePerHour * draft.duration;
+    const grossTotal = resolvedRate ? Number(resolvedRate.total) : draft.pricePerHour * draft.duration;
+    const total = appliedCoupon ? Number(appliedCoupon.final_amount) : grossTotal;
     const isQueued = liveReservation.status === 'queued';
 
-    const handleApplyCoupon = () => {
+    const handleApplyCoupon = async () => {
         if (!couponCode.trim()) return;
-        toast.info("Coupons aren't available yet — this slot is display only.");
+        setApplyingCoupon(true);
+        try {
+            const response = await api.post('/bookings/coupons/validate/', {
+                code: couponCode.trim(),
+                boxId: draft.boxId,
+                date: draft.date,
+                startTime: draft.timeSlot,
+                duration: draft.duration,
+            });
+            setAppliedCoupon(response.data);
+            toast.success(`Coupon applied — you save ₹${Number(response.data.discount_amount).toFixed(0)}.`);
+        } catch (error) {
+            setAppliedCoupon(null);
+            toast.error(error.response?.data?.detail || 'Invalid coupon code.');
+        } finally {
+            setApplyingCoupon(false);
+        }
     };
 
     const handleConfirm = async () => {
         setConfirming(true);
         try {
-            const result = await confirmReservation(draft.holdToken);
+            const result = await confirmReservation(draft.holdToken, appliedCoupon?.code);
             if (result.success) {
                 navigate(`/booking/${result.data.id}`, {
                     state: {
@@ -208,15 +253,32 @@ const Checkout = () => {
                             <h3 className="font-display font-semibold text-foreground mb-4 flex items-center gap-2">
                                 <Ticket size={18} className="text-primary" /> Offer code
                             </h3>
-                            <div className="flex gap-3">
-                                <input
-                                    value={couponCode}
-                                    onChange={(e) => setCouponCode(e.target.value)}
-                                    placeholder="Enter code"
-                                    className="flex-1 px-4 py-2.5 rounded-lg bg-elevated border border-input text-foreground outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary placeholder-muted-foreground"
-                                />
-                                <Button variant="outline" onClick={handleApplyCoupon}>Apply</Button>
-                            </div>
+                            {appliedCoupon ? (
+                                <div className="flex items-center justify-between rounded-lg border border-success/30 bg-success/10 px-4 py-2.5">
+                                    <span className="text-sm font-medium text-success">
+                                        {appliedCoupon.code} applied — you save ₹{Number(appliedCoupon.discount_amount).toFixed(0)}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setAppliedCoupon(null); setCouponCode(''); }}
+                                        className="text-xs text-muted-foreground hover:text-foreground underline"
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex gap-3">
+                                    <input
+                                        value={couponCode}
+                                        onChange={(e) => setCouponCode(e.target.value)}
+                                        placeholder="Enter code"
+                                        className="flex-1 px-4 py-2.5 rounded-lg bg-elevated border border-input text-foreground outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary placeholder-muted-foreground"
+                                    />
+                                    <Button variant="outline" onClick={handleApplyCoupon} loading={applyingCoupon} disabled={applyingCoupon}>
+                                        Apply
+                                    </Button>
+                                </div>
+                            )}
                         </Card>
                     </div>
 
@@ -229,6 +291,12 @@ const Checkout = () => {
                                 <div className="flex justify-between"><span>Duration</span><span className="text-foreground">{draft.duration} hour{draft.duration > 1 ? 's' : ''}</span></div>
                             </div>
                             <div className="border-t border-border pt-4 mb-6">
+                                {appliedCoupon && (
+                                    <div className="flex justify-between text-sm text-muted-foreground mb-1.5">
+                                        <span>Subtotal</span>
+                                        <span className="line-through">₹{grossTotal}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between items-center font-display font-bold text-lg text-foreground">
                                     <span>Total</span>
                                     <span className="text-primary">₹{total}</span>

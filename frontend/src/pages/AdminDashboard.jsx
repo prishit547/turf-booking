@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Trash2, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText } from 'lucide-react'
+import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus } from 'lucide-react'
 import { Line, Doughnut, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -17,8 +17,14 @@ import {
 import { toast } from 'react-toastify'
 import { useAuth, api } from '../api.jsx'
 import { useBox } from '../context/BoxContext'
-import { Button, Card, Badge, Modal, Loader, StatTile, Input, Select } from '../components/ui'
+import { Button, Card, Badge, Modal, Loader, StatTile, Input, Select, Pagination, RatingStars } from '../components/ui'
+import { PeakHoursChart } from '../components/common/AdvancedCharts'
 import { useChartTheme } from '../utils/chartTheme'
+import { useDebounce } from '../hooks/useDebounce'
+
+const USERS_PAGE_SIZE = 20
+const BOOKINGS_PAGE_SIZE = 20
+const REVIEWS_PAGE_SIZE = 20
 
 ChartJS.register(
   CategoryScale,
@@ -43,6 +49,9 @@ const TABS = [
   { id: 'approvals', label: 'Box Approvals', icon: CheckCircle },
   { id: 'users', label: 'Users', icon: Users },
   { id: 'bookings', label: 'Bookings', icon: Calendar },
+  { id: 'reviews', label: 'Reviews', icon: Star },
+  { id: 'payouts', label: 'Payouts', icon: Wallet },
+  { id: 'coupons', label: 'Coupons', icon: Ticket },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'reports', label: 'Reports', icon: FileText },
 ]
@@ -90,21 +99,273 @@ const exportToCsv = (filename, rows) => {
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview')
   const [searchTerm, setSearchTerm] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
   const [bookingSearch, setBookingSearch] = useState('')
   const [bookingStatusFilter, setBookingStatusFilter] = useState('')
+  const [bookingDateFrom, setBookingDateFrom] = useState('')
+  const [bookingDateTo, setBookingDateTo] = useState('')
+  const [bookingsPage, setBookingsPage] = useState(1)
+  const [bookingsResult, setBookingsResult] = useState({ results: [], count: 0 })
+  const [bookingsLoading, setBookingsLoading] = useState(false)
   const [selectedBox, setSelectedBox] = useState(null)
   const [showApprovalModal, setShowApprovalModal] = useState(false)
   const [rejectionReason, setRejectionReason] = useState('')
+  const [showChangesModal, setShowChangesModal] = useState(false)
+  const [changesReason, setChangesReason] = useState('')
   const [adminData, setAdminData] = useState(null)
   const [loadingAdmin, setLoadingAdmin] = useState(false)
   const [adminError, setAdminError] = useState(null)
+
+  // Users tab: its own paginated/filtered fetch against /user/users/,
+  // separate from the adminData summary payload above (which still backs
+  // the Reports tab's CSV export and the Overview stat tiles).
+  const [usersPage, setUsersPage] = useState(1)
+  const [usersResult, setUsersResult] = useState({ results: [], count: 0 })
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [showUserViewModal, setShowUserViewModal] = useState(false)
+  const [showUserEditModal, setShowUserEditModal] = useState(false)
+  const [editingUser, setEditingUser] = useState(null)
+  const [editRole, setEditRole] = useState('user')
+  const [editActive, setEditActive] = useState(true)
+  const [savingUser, setSavingUser] = useState(false)
+
+  // Reviews tab: paginated moderation list against /boxes/admin/reviews/.
+  const [reviewSearch, setReviewSearch] = useState('')
+  const [reviewsPage, setReviewsPage] = useState(1)
+  const [reviewsResult, setReviewsResult] = useState({ results: [], count: 0 })
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [reviewToDelete, setReviewToDelete] = useState(null)
+  const [deletingReview, setDeletingReview] = useState(false)
+
+  // Payouts tab: per-owner balance summary + a "record payout" action.
+  const [payoutsBalance, setPayoutsBalance] = useState([])
+  const [payoutsLoading, setPayoutsLoading] = useState(false)
+  const [payoutTarget, setPayoutTarget] = useState(null)
+  const [payoutAmount, setPayoutAmount] = useState('')
+  const [payoutNote, setPayoutNote] = useState('')
+  const [recordingPayout, setRecordingPayout] = useState(false)
+
+  // Coupons tab: create/list/deactivate discount codes.
+  const [coupons, setCoupons] = useState([])
+  const [couponsLoading, setCouponsLoading] = useState(false)
+  const [showCreateCouponModal, setShowCreateCouponModal] = useState(false)
+  const [newCoupon, setNewCoupon] = useState({ code: '', discount_type: 'percent', value: '', max_uses: '' })
+  const [creatingCoupon, setCreatingCoupon] = useState(false)
+
   const { user } = useAuth()
-  const { pendingBoxes, fetchPendingBoxes, approveBox, rejectBox } = useBox()
+  const { pendingBoxes, fetchPendingBoxes, approveBox, rejectBox, requestBoxChanges } = useBox()
   const chartTheme = useChartTheme()
+  const debouncedUserSearch = useDebounce(searchTerm, 300)
+  const debouncedBookingSearch = useDebounce(bookingSearch, 300)
+  const debouncedReviewSearch = useDebounce(reviewSearch, 300)
 
   useEffect(() => {
     fetchPendingBoxes()
   }, [fetchPendingBoxes])
+
+  const fetchUsers = useCallback(async () => {
+    setUsersLoading(true)
+    try {
+      const params = new URLSearchParams({ page: usersPage, page_size: USERS_PAGE_SIZE })
+      if (debouncedUserSearch) params.set('search', debouncedUserSearch)
+      if (roleFilter) params.set('role', roleFilter)
+      const response = await api.get(`/user/users/?${params.toString()}`)
+      setUsersResult({ results: response.data.results, count: response.data.count })
+    } catch (err) {
+      console.error('Error fetching users:', err)
+      toast.error('Failed to load users')
+    } finally {
+      setUsersLoading(false)
+    }
+  }, [usersPage, debouncedUserSearch, roleFilter])
+
+  useEffect(() => {
+    if (activeTab === 'users') fetchUsers()
+  }, [activeTab, fetchUsers])
+
+  // Reset to page 1 whenever the search/role filter changes.
+  useEffect(() => {
+    setUsersPage(1)
+  }, [debouncedUserSearch, roleFilter])
+
+  const fetchBookings = useCallback(async () => {
+    setBookingsLoading(true)
+    try {
+      const params = new URLSearchParams({ page: bookingsPage, page_size: BOOKINGS_PAGE_SIZE })
+      if (debouncedBookingSearch) params.set('search', debouncedBookingSearch)
+      if (bookingStatusFilter) params.set('status', bookingStatusFilter)
+      if (bookingDateFrom) params.set('date_from', bookingDateFrom)
+      if (bookingDateTo) params.set('date_to', bookingDateTo)
+      const response = await api.get(`/bookings/admin/?${params.toString()}`)
+      setBookingsResult({ results: response.data.results, count: response.data.count })
+    } catch (err) {
+      console.error('Error fetching bookings:', err)
+      toast.error('Failed to load bookings')
+    } finally {
+      setBookingsLoading(false)
+    }
+  }, [bookingsPage, debouncedBookingSearch, bookingStatusFilter, bookingDateFrom, bookingDateTo])
+
+  useEffect(() => {
+    if (activeTab === 'bookings') fetchBookings()
+  }, [activeTab, fetchBookings])
+
+  useEffect(() => {
+    setBookingsPage(1)
+  }, [debouncedBookingSearch, bookingStatusFilter, bookingDateFrom, bookingDateTo])
+
+  const fetchReviews = useCallback(async () => {
+    setReviewsLoading(true)
+    try {
+      const params = new URLSearchParams({ page: reviewsPage, page_size: REVIEWS_PAGE_SIZE })
+      if (debouncedReviewSearch) params.set('search', debouncedReviewSearch)
+      const response = await api.get(`/boxes/admin/reviews/?${params.toString()}`)
+      setReviewsResult({ results: response.data.results, count: response.data.count })
+    } catch (err) {
+      console.error('Error fetching reviews:', err)
+      toast.error('Failed to load reviews')
+    } finally {
+      setReviewsLoading(false)
+    }
+  }, [reviewsPage, debouncedReviewSearch])
+
+  useEffect(() => {
+    if (activeTab === 'reviews') fetchReviews()
+  }, [activeTab, fetchReviews])
+
+  useEffect(() => {
+    setReviewsPage(1)
+  }, [debouncedReviewSearch])
+
+  const handleConfirmDeleteReview = async () => {
+    if (!reviewToDelete) return
+    setDeletingReview(true)
+    try {
+      await api.delete(`/boxes/admin/reviews/${reviewToDelete.id}/`)
+      toast.success('Review deleted')
+      setReviewToDelete(null)
+      fetchReviews()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete review')
+    } finally {
+      setDeletingReview(false)
+    }
+  }
+
+  const fetchPayoutsBalance = useCallback(async () => {
+    setPayoutsLoading(true)
+    try {
+      const response = await api.get('/owner_dashboard/payouts/balance/')
+      setPayoutsBalance(response.data)
+    } catch (err) {
+      console.error('Error fetching payout balances:', err)
+      toast.error('Failed to load payout balances')
+    } finally {
+      setPayoutsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'payouts') fetchPayoutsBalance()
+  }, [activeTab, fetchPayoutsBalance])
+
+  const openRecordPayoutModal = (owner) => {
+    setPayoutTarget(owner)
+    setPayoutAmount('')
+    setPayoutNote('')
+  }
+
+  const handleRecordPayout = async () => {
+    if (!payoutTarget || !payoutAmount || Number(payoutAmount) <= 0) return
+    setRecordingPayout(true)
+    try {
+      await api.post('/owner_dashboard/payouts/', {
+        owner: payoutTarget.owner_id, amount: payoutAmount, note: payoutNote,
+      })
+      toast.success('Payout recorded')
+      setPayoutTarget(null)
+      fetchPayoutsBalance()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to record payout')
+    } finally {
+      setRecordingPayout(false)
+    }
+  }
+
+  const fetchCoupons = useCallback(async () => {
+    setCouponsLoading(true)
+    try {
+      const response = await api.get('/bookings/admin/coupons/')
+      setCoupons(response.data.results || response.data)
+    } catch (err) {
+      console.error('Error fetching coupons:', err)
+      toast.error('Failed to load coupons')
+    } finally {
+      setCouponsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'coupons') fetchCoupons()
+  }, [activeTab, fetchCoupons])
+
+  const handleCreateCoupon = async () => {
+    if (!newCoupon.code.trim() || !newCoupon.value) return
+    setCreatingCoupon(true)
+    try {
+      await api.post('/bookings/admin/coupons/', {
+        code: newCoupon.code.trim(),
+        discount_type: newCoupon.discount_type,
+        value: newCoupon.value,
+        max_uses: newCoupon.max_uses || null,
+      })
+      toast.success('Coupon created')
+      setShowCreateCouponModal(false)
+      setNewCoupon({ code: '', discount_type: 'percent', value: '', max_uses: '' })
+      fetchCoupons()
+    } catch (err) {
+      toast.error(err.response?.data?.code?.[0] || err.response?.data?.detail || 'Failed to create coupon')
+    } finally {
+      setCreatingCoupon(false)
+    }
+  }
+
+  const handleToggleCouponActive = async (coupon) => {
+    try {
+      await api.patch(`/bookings/admin/coupons/${coupon.id}/`, { active: !coupon.active })
+      fetchCoupons()
+    } catch {
+      toast.error('Failed to update coupon')
+    }
+  }
+
+  const openViewUserModal = (u) => {
+    setEditingUser(u)
+    setShowUserViewModal(true)
+  }
+
+  const openEditUserModal = (u) => {
+    setEditingUser(u)
+    setEditRole(u.role)
+    setEditActive(u.is_active)
+    setShowUserEditModal(true)
+  }
+
+  const handleSaveUser = async () => {
+    if (!editingUser) return
+    setSavingUser(true)
+    try {
+      await api.patch(`/user/users/${editingUser.id}/admin-update/`, { role: editRole, is_active: editActive })
+      toast.success('User updated')
+      setShowUserEditModal(false)
+      setEditingUser(null)
+      fetchUsers()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update user')
+    } finally {
+      setSavingUser(false)
+    }
+  }
 
   const fetchAdminData = useCallback(async () => {
     setLoadingAdmin(true)
@@ -231,21 +492,34 @@ const AdminDashboard = () => {
     setRejectionReason('')
   }
 
+  const handleRequestChanges = async (boxId) => {
+    if (!changesReason.trim()) {
+      toast.error('Please explain what needs to change.')
+      return
+    }
+    const result = await requestBoxChanges(boxId, changesReason)
+    if (result.success) {
+      toast.success('Changes requested — the owner has been notified')
+      closeChangesModal()
+      fetchPendingBoxes()
+      fetchAdminData()
+    } else {
+      toast.error(result.error || 'Failed to request changes')
+    }
+  }
+
+  const openChangesModal = (box) => {
+    setSelectedBox(box)
+    setShowChangesModal(true)
+  }
+
+  const closeChangesModal = () => {
+    setShowChangesModal(false)
+    setSelectedBox(null)
+    setChangesReason('')
+  }
+
   const totalPlatformRevenue = adminData?.stats?.platform_revenue || 0
-  const filteredUsers = users.filter(u =>
-    (u.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    (u.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    (u.role?.toLowerCase() || '').includes(searchTerm.toLowerCase())
-  )
-  const filteredBookings = bookings.filter((b) => {
-    const q = bookingSearch.toLowerCase()
-    const matchesSearch = !q
-      || (b.user?.toLowerCase() || '').includes(q)
-      || (b.box?.toLowerCase() || '').includes(q)
-      || (b.owner?.toLowerCase() || '').includes(q)
-    const matchesStatus = !bookingStatusFilter || b.status === bookingStatusFilter
-    return matchesSearch && matchesStatus
-  })
   const recentActivity = adminData?.recent_activity || []
   const topCities = adminData?.top_cities || []
 
@@ -292,9 +566,24 @@ const AdminDashboard = () => {
         id: b.id, date: b.date, user: b.user, box: b.box, status: b.status,
       }))),
     },
-    { icon: TrendingUp, tone: 'text-warning', title: 'Performance report', text: 'Platform performance and operational metrics', disabled: true },
-    { icon: Shield, tone: 'text-danger', title: 'Security report', text: 'Security incidents, user activity, and system logs', disabled: true },
-    { icon: Eye, tone: 'text-muted-foreground', title: 'Custom report', text: 'Create custom reports with specific parameters', disabled: true },
+    {
+      icon: TrendingUp, tone: 'text-warning', title: 'Performance report',
+      text: 'Top boxes and owners by revenue, ranked side by side',
+      onClick: () => exportToCsv('performance-report.csv', [
+        ...(adminData?.top_boxes_by_revenue || []).map((b) => ({ type: 'Box', name: b.name, revenue: b.revenue, bookings: b.bookings })),
+        ...(adminData?.owner_performance_ranking || []).map((o) => ({ type: 'Owner', name: o.owner, revenue: o.revenue, bookings: o.bookings })),
+      ]),
+    },
+    {
+      icon: Shield, tone: 'text-danger', title: 'Security report',
+      text: 'Requires a security-event/audit log, which doesn’t exist yet — not included in this round',
+      disabled: true,
+    },
+    {
+      icon: Eye, tone: 'text-muted-foreground', title: 'Custom report',
+      text: 'An open-ended report builder is a separate feature on its own — not included in this round',
+      disabled: true,
+    },
   ]
 
   return (
@@ -347,7 +636,7 @@ const AdminDashboard = () => {
         )}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
           <StatTile
             tone="primary"
             icon={<Users size={22} />}
@@ -605,9 +894,12 @@ const AdminDashboard = () => {
                           )}
                         </div>
 
-                        <div className="flex gap-3 mt-auto">
+                        <div className="flex flex-wrap gap-3 mt-auto">
                           <Button variant="outline" fullWidth icon={<X size={16} />} onClick={() => openRejectModal(box)}>
                             Reject
+                          </Button>
+                          <Button variant="outline" fullWidth icon={<AlertTriangle size={16} />} onClick={() => openChangesModal(box)}>
+                            Request changes
                           </Button>
                           <Button fullWidth icon={<CheckCircle size={16} />} onClick={() => handleApproveBox(box.id)}>
                             Approve
@@ -626,13 +918,21 @@ const AdminDashboard = () => {
             <div className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <h3 className="text-2xl font-display font-semibold text-foreground">User management</h3>
-                <div className="w-full sm:w-72">
-                  <Input
-                    leadingIcon={<Search size={16} />}
-                    placeholder="Search users..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                  <div className="w-full sm:w-64">
+                    <Input
+                      leadingIcon={<Search size={16} />}
+                      placeholder="Search users..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                  <Select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+                    <option value="">All roles</option>
+                    <option value="user">User</option>
+                    <option value="owner">Owner</option>
+                    <option value="admin">Admin</option>
+                  </Select>
                 </div>
               </div>
 
@@ -641,57 +941,74 @@ const AdminDashboard = () => {
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
-                        {['User', 'Email', 'Role', 'Status', 'Bookings', 'Join date', 'Actions'].map((h) => (
+                        {['User', 'Email', 'Role', 'Status', 'Join date', 'Actions'].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {filteredUsers.length === 0 ? (
+                      {usersLoading ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-10 text-muted-foreground">
-                            {users.length === 0 ? 'No users yet' : 'No users match your search'}
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">Loading users...</td>
+                        </tr>
+                      ) : usersResult.results.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">
+                            {debouncedUserSearch || roleFilter ? 'No users match your filters' : 'No users yet'}
                           </td>
                         </tr>
-                      ) : filteredUsers.map((u) => (
-                        <tr key={u.id} className="hover:bg-elevated/60 transition-colors">
-                          <td className="py-3 px-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
-                                {initial(u.name)}
+                      ) : usersResult.results.map((u) => {
+                        const displayName = u.full_name || u.email
+                        const roleLabel = u.role ? u.role.charAt(0).toUpperCase() + u.role.slice(1) : 'User'
+                        const statusLabel = u.is_active ? 'Active' : 'Inactive'
+                        const isSelf = u.id === user?.id
+                        return (
+                          <tr key={u.id} className="hover:bg-elevated/60 transition-colors">
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
+                                  {initial(displayName)}
+                                </div>
+                                <span className="font-medium text-foreground whitespace-nowrap">{displayName}</span>
                               </div>
-                              <span className="font-medium text-foreground whitespace-nowrap">{u.name}</span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 text-muted-foreground">{u.email}</td>
-                          <td className="py-3 px-4"><Badge tone={ROLE_TONE[u.role] || 'neutral'}>{u.role}</Badge></td>
-                          <td className="py-3 px-4"><Badge tone={USER_STATUS_TONE[u.status] || 'neutral'}>{u.status}</Badge></td>
-                          <td className="py-3 px-4 text-muted-foreground tabular-nums">{u.bookings}</td>
-                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{formatDate(u.joinDate)}</td>
-                          <td className="py-3 px-4">
-                            <div className="flex items-center gap-1">
-                              {[
-                                { Icon: Eye, label: 'View user' },
-                                { Icon: Edit, label: 'Edit user' },
-                                { Icon: Trash2, label: 'Delete user' },
-                              ].map(({ Icon, label }) => (
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground">{u.email}</td>
+                            <td className="py-3 px-4"><Badge tone={ROLE_TONE[roleLabel] || 'neutral'}>{roleLabel}</Badge></td>
+                            <td className="py-3 px-4"><Badge tone={USER_STATUS_TONE[statusLabel] || 'neutral'}>{statusLabel}</Badge></td>
+                            <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{formatDate(u.date_joined)}</td>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-1">
                                 <button
-                                  key={label}
-                                  disabled
-                                  title={`${label} — coming soon`}
-                                  aria-label={`${label} — coming soon`}
-                                  className="p-1.5 rounded-md text-muted-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+                                  onClick={() => openViewUserModal(u)}
+                                  title="View user"
+                                  aria-label="View user"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-elevated transition-colors"
                                 >
-                                  <Icon size={16} />
+                                  <Eye size={16} />
                                 </button>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                                <button
+                                  onClick={() => openEditUserModal(u)}
+                                  disabled={isSelf}
+                                  title={isSelf ? "You can't edit your own role/status" : 'Edit role/status'}
+                                  aria-label="Edit role and status"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                                >
+                                  <Edit size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
+                <Pagination
+                  page={usersPage}
+                  pageSize={USERS_PAGE_SIZE}
+                  count={usersResult.count}
+                  onPageChange={setUsersPage}
+                />
               </Card>
             </div>
           )}
@@ -699,10 +1016,10 @@ const AdminDashboard = () => {
           {/* Bookings */}
           {activeTab === 'bookings' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 <h3 className="text-2xl font-display font-semibold text-foreground">Booking management</h3>
-                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                  <div className="w-full sm:w-64">
+                <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full lg:w-auto">
+                  <div className="w-full sm:w-56">
                     <Input
                       leadingIcon={<Search size={16} />}
                       placeholder="Search bookings..."
@@ -716,6 +1033,20 @@ const AdminDashboard = () => {
                     <option value="Completed">Completed</option>
                     <option value="Cancelled">Cancelled</option>
                   </Select>
+                  <input
+                    type="date"
+                    value={bookingDateFrom}
+                    onChange={(e) => setBookingDateFrom(e.target.value)}
+                    aria-label="From date"
+                    className="px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={bookingDateTo}
+                    onChange={(e) => setBookingDateTo(e.target.value)}
+                    aria-label="To date"
+                    className="px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary text-sm"
+                  />
                 </div>
               </div>
 
@@ -730,31 +1061,232 @@ const AdminDashboard = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {filteredBookings.length === 0 ? (
+                      {bookingsLoading ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">Loading bookings...</td>
+                        </tr>
+                      ) : bookingsResult.results.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="text-center py-10 text-muted-foreground">
-                            {bookings.length === 0 ? 'No bookings yet' : 'No bookings match your filters'}
+                            {debouncedBookingSearch || bookingStatusFilter || bookingDateFrom || bookingDateTo
+                              ? 'No bookings match your filters' : 'No bookings yet'}
                           </td>
                         </tr>
-                      ) : filteredBookings.map((booking) => (
+                      ) : bookingsResult.results.map((booking) => (
                         <tr key={booking.id} className="hover:bg-elevated/60 transition-colors">
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
-                                {initial(booking.user)}
+                                {initial(booking.booking_source === 'owner_manual' ? (booking.customer_name || 'Walk-in') : booking.user_name)}
                               </div>
-                              <span className="text-foreground whitespace-nowrap">{booking.user}</span>
+                              <div className="min-w-0">
+                                <span className="text-foreground whitespace-nowrap block">
+                                  {booking.booking_source === 'owner_manual' ? (booking.customer_name || 'Walk-in') : booking.user_name}
+                                </span>
+                                {booking.booking_source === 'owner_manual' && <Badge tone="secondary" size="sm">Walk-in</Badge>}
+                              </div>
                             </div>
                           </td>
-                          <td className="py-3 px-4 text-muted-foreground">{booking.box}</td>
-                          <td className="py-3 px-4 text-muted-foreground">{booking.owner}</td>
+                          <td className="py-3 px-4 text-muted-foreground">{booking.box_name}</td>
+                          <td className="py-3 px-4 text-muted-foreground">{booking.owner_email}</td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{booking.date}</td>
-                          <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{booking.amount}</td>
-                          <td className="py-3 px-4 font-medium text-success tabular-nums">
-                            ₹{Math.round(booking.amount * 0.1)}
+                          <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{booking.total_amount}</td>
+                          <td className="py-3 px-4 font-medium text-success tabular-nums">₹{booking.commission}</td>
+                          <td className="py-3 px-4">
+                            <Badge tone={BOOKING_STATUS_TONE[booking.booking_status] || 'neutral'}>{booking.booking_status}</Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination
+                  page={bookingsPage}
+                  pageSize={BOOKINGS_PAGE_SIZE}
+                  count={bookingsResult.count}
+                  onPageChange={setBookingsPage}
+                />
+              </Card>
+            </div>
+          )}
+
+          {/* Reviews */}
+          {activeTab === 'reviews' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <h3 className="text-2xl font-display font-semibold text-foreground">Review moderation</h3>
+                <div className="w-full sm:w-64">
+                  <Input
+                    leadingIcon={<Search size={16} />}
+                    placeholder="Search reviews..."
+                    value={reviewSearch}
+                    onChange={(e) => setReviewSearch(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['Box', 'Reviewer', 'Rating', 'Comment', 'Date', ''].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {reviewsLoading ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">Loading reviews...</td>
+                        </tr>
+                      ) : reviewsResult.results.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">
+                            {debouncedReviewSearch ? 'No reviews match your search' : 'No reviews yet'}
+                          </td>
+                        </tr>
+                      ) : reviewsResult.results.map((review) => (
+                        <tr key={review.id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4 text-foreground whitespace-nowrap">{review.box_name}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{review.user_name}</td>
+                          <td className="py-3 px-4"><RatingStars rating={review.rating} /></td>
+                          <td className="py-3 px-4 text-muted-foreground max-w-xs truncate" title={review.comment}>{review.comment}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{review.date}</td>
+                          <td className="py-3 px-4">
+                            <button
+                              onClick={() => setReviewToDelete(review)}
+                              title="Delete review"
+                              aria-label="Delete review"
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination
+                  page={reviewsPage}
+                  pageSize={REVIEWS_PAGE_SIZE}
+                  count={reviewsResult.count}
+                  onPageChange={setReviewsPage}
+                />
+              </Card>
+            </div>
+          )}
+
+          {/* Payouts */}
+          {activeTab === 'payouts' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-2xl font-display font-semibold text-foreground">Owner payouts</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Net revenue (after the 10% platform commission) minus what&apos;s already been paid out.
+                  Recording a payout here is a manual ledger entry — settle the actual transfer outside the app first.
+                </p>
+              </div>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['Owner', 'Gross revenue', 'Commission', 'Net revenue', 'Paid out', 'Balance due', ''].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {payoutsLoading ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">Loading balances...</td>
+                        </tr>
+                      ) : payoutsBalance.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">No owners yet</td>
+                        </tr>
+                      ) : payoutsBalance.map((row) => (
+                        <tr key={row.owner_id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
+                                {initial(row.owner_name)}
+                              </div>
+                              <span className="font-medium text-foreground whitespace-nowrap">{row.owner_name}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground tabular-nums">₹{row.gross_revenue.toLocaleString()}</td>
+                          <td className="py-3 px-4 text-muted-foreground tabular-nums">₹{row.commission.toLocaleString()}</td>
+                          <td className="py-3 px-4 text-foreground font-medium tabular-nums">₹{row.net_revenue.toLocaleString()}</td>
+                          <td className="py-3 px-4 text-success tabular-nums">₹{row.total_paid.toLocaleString()}</td>
+                          <td className="py-3 px-4 font-medium tabular-nums">
+                            <span className={row.balance_due > 0 ? 'text-warning' : 'text-muted-foreground'}>
+                              ₹{row.balance_due.toLocaleString()}
+                            </span>
                           </td>
                           <td className="py-3 px-4">
-                            <Badge tone={BOOKING_STATUS_TONE[booking.status] || 'neutral'}>{booking.status}</Badge>
+                            <Button variant="outline" size="sm" onClick={() => openRecordPayoutModal(row)}>
+                              Record payout
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* Coupons */}
+          {activeTab === 'coupons' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-2xl font-display font-semibold text-foreground">Discount coupons</h3>
+                <Button onClick={() => setShowCreateCouponModal(true)} icon={<Plus size={16} />}>
+                  New coupon
+                </Button>
+              </div>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['Code', 'Discount', 'Uses', 'Valid until', 'Status', ''].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {couponsLoading ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">Loading coupons...</td>
+                        </tr>
+                      ) : coupons.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">No coupons yet</td>
+                        </tr>
+                      ) : coupons.map((c) => (
+                        <tr key={c.id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4 font-mono font-medium text-foreground whitespace-nowrap">{c.code}</td>
+                          <td className="py-3 px-4 text-muted-foreground">
+                            {c.discount_type === 'percent' ? `${Number(c.value)}% off` : `₹${Number(c.value)} off`}
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground tabular-nums">
+                            {c.used_count}{c.max_uses ? ` / ${c.max_uses}` : ''}
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{c.valid_until || 'No expiry'}</td>
+                          <td className="py-3 px-4">
+                            <Badge tone={c.active ? 'success' : 'neutral'}>{c.active ? 'Active' : 'Inactive'}</Badge>
+                          </td>
+                          <td className="py-3 px-4">
+                            <Button variant="outline" size="sm" onClick={() => handleToggleCouponActive(c)}>
+                              {c.active ? 'Deactivate' : 'Activate'}
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -772,12 +1304,73 @@ const AdminDashboard = () => {
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                 <Card padding="md">
-                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Revenue growth</h4>
-                  {hasRevenueData ? <Line data={revenueData} options={chartOptions} /> : <ChartEmptyState label="No revenue data yet" />}
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Peak booking hours</h4>
+                  {(adminData?.peak_booking_hours?.data || []).length > 0 ? (
+                    <PeakHoursChart data={{ labels: adminData.peak_booking_hours.labels, values: adminData.peak_booking_hours.data }} />
+                  ) : (
+                    <ChartEmptyState label="No booking-hour data yet" />
+                  )}
                 </Card>
                 <Card padding="md">
-                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">User acquisition</h4>
-                  {hasUserGrowthData ? <Bar data={userGrowthData} options={chartOptions} /> : <ChartEmptyState label="No user growth data yet" />}
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Growth &amp; reliability</h4>
+                  <dl className="space-y-3 text-sm">
+                    {[
+                      ['Revenue growth (MoM)', `${adminData?.stats?.mom_revenue_growth_pct >= 0 ? '+' : ''}${adminData?.stats?.mom_revenue_growth_pct ?? 0}%`],
+                      ['Bookings growth (MoM)', `${adminData?.stats?.mom_bookings_growth_pct >= 0 ? '+' : ''}${adminData?.stats?.mom_bookings_growth_pct ?? 0}%`],
+                      ['Cancellation rate', `${adminData?.stats?.cancellation_rate_pct ?? 0}%`],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex justify-between items-center">
+                        <dt className="text-muted-foreground">{label}</dt>
+                        <dd className="font-medium text-foreground tabular-nums">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Top boxes by revenue</h4>
+                  <div className="space-y-3">
+                    {(adminData?.top_boxes_by_revenue || []).length > 0 ? adminData.top_boxes_by_revenue.map((box, i) => {
+                      const max = adminData.top_boxes_by_revenue[0].revenue || 1
+                      return (
+                        <div key={`${box.name}-${i}`} className="space-y-1.5">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-foreground">{box.name}</span>
+                            <span className="font-medium text-muted-foreground tabular-nums">₹{box.revenue.toLocaleString()}</span>
+                          </div>
+                          <div className="w-full bg-elevated rounded-full h-2 overflow-hidden">
+                            <div className="bg-primary h-full rounded-full transition-all duration-500" style={{ width: `${(box.revenue / max) * 100}%` }} />
+                          </div>
+                        </div>
+                      )
+                    }) : (
+                      <div className="text-center py-8 text-muted-foreground">No box revenue data available</div>
+                    )}
+                  </div>
+                </Card>
+
+                <Card padding="md">
+                  <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Top owners by revenue</h4>
+                  <div className="space-y-3">
+                    {(adminData?.owner_performance_ranking || []).length > 0 ? adminData.owner_performance_ranking.map((owner, i) => {
+                      const max = adminData.owner_performance_ranking[0].revenue || 1
+                      return (
+                        <div key={`${owner.owner}-${i}`} className="space-y-1.5">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-foreground">{owner.owner}</span>
+                            <span className="font-medium text-muted-foreground tabular-nums">₹{owner.revenue.toLocaleString()}</span>
+                          </div>
+                          <div className="w-full bg-elevated rounded-full h-2 overflow-hidden">
+                            <div className="bg-turf h-full rounded-full transition-all duration-500" style={{ width: `${(owner.revenue / max) * 100}%` }} />
+                          </div>
+                        </div>
+                      )
+                    }) : (
+                      <div className="text-center py-8 text-muted-foreground">No owner revenue data available</div>
+                    )}
+                  </div>
                 </Card>
               </div>
 
@@ -822,9 +1415,9 @@ const AdminDashboard = () => {
                   <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Box status</h4>
                   <dl className="space-y-3 text-sm">
                     {[
-                      ['Approved', boxes.filter(b => b.status === 'Approved' || b.status === 'approved').length],
-                      ['Pending', boxes.filter(b => b.status === 'Pending' || b.status === 'pending').length],
-                      ['Rejected', boxes.filter(b => b.status === 'Rejected' || b.status === 'rejected').length],
+                      ['Approved', adminData?.stats?.approved_boxes_count || 0],
+                      ['Pending', adminData?.stats?.pending_boxes_count || 0],
+                      ['Rejected', adminData?.stats?.rejected_boxes_count || 0],
                       ['Total owners', adminData?.stats?.total_owners || 0],
                     ].map(([label, value]) => (
                       <div key={label} className="flex justify-between items-center">
@@ -898,6 +1491,225 @@ const AdminDashboard = () => {
               placeholder="Provide a reason for rejection to help the owner improve their application..."
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* Request Changes Modal — the middle ground between approve/reject:
+          the box goes back to the owner with required notes instead of
+          being killed outright. */}
+      <Modal
+        isOpen={showChangesModal}
+        onClose={closeChangesModal}
+        title="Request changes"
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={closeChangesModal}>Cancel</Button>
+            <Button variant="primary" onClick={() => handleRequestChanges(selectedBox?.id)}>Send request</Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <p className="text-muted-foreground">
+            Tell the owner what needs to change on{' '}
+            <span className="font-semibold text-foreground">{selectedBox?.name}</span> before it can be approved.
+            They&rsquo;ll be notified, and the listing will re-enter your approval queue once they update it.
+          </p>
+
+          <div className="space-y-1.5">
+            <label htmlFor="changes-reason" className="block text-sm font-medium text-foreground">
+              What needs to change
+            </label>
+            <textarea
+              id="changes-reason"
+              value={changesReason}
+              onChange={(e) => setChangesReason(e.target.value)}
+              rows={3}
+              className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+              placeholder="e.g. Please add clearer photos of the facility and confirm the opening hours..."
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* View User Modal — read-only, no extra fetch needed since the row's
+          already-fetched data has everything this shows. */}
+      <Modal
+        isOpen={showUserViewModal}
+        onClose={() => { setShowUserViewModal(false); setEditingUser(null) }}
+        title="User details"
+        size="sm"
+      >
+        {editingUser && (
+          <dl className="space-y-3 text-sm">
+            {[
+              ['Name', editingUser.full_name || editingUser.email],
+              ['Email', editingUser.email],
+              ['Phone', editingUser.phone || '—'],
+              ['Role', editingUser.role],
+              ['Status', editingUser.is_active ? 'Active' : 'Inactive'],
+              ['Verified', editingUser.is_verified ? 'Yes' : 'No'],
+              ['Location', editingUser.location || '—'],
+              ['Business name', editingUser.business_name || '—'],
+              ['Joined', formatDate(editingUser.date_joined)],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between items-center gap-4">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="font-medium text-foreground text-right">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </Modal>
+
+      {/* Edit User Modal — role + suspend/reactivate. */}
+      <Modal
+        isOpen={showUserEditModal}
+        onClose={() => { setShowUserEditModal(false); setEditingUser(null) }}
+        title="Edit user"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => { setShowUserEditModal(false); setEditingUser(null) }}>Cancel</Button>
+            <Button onClick={handleSaveUser} loading={savingUser}>Save changes</Button>
+          </>
+        )}
+      >
+        {editingUser && (
+          <div className="space-y-4">
+            <p className="text-muted-foreground text-sm">
+              Editing <span className="font-medium text-foreground">{editingUser.full_name || editingUser.email}</span>
+            </p>
+            <Select label="Role" value={editRole} onChange={(e) => setEditRole(e.target.value)}>
+              <option value="user">User</option>
+              <option value="owner">Owner</option>
+              <option value="admin">Admin</option>
+            </Select>
+            <Select
+              label="Status"
+              value={editActive ? 'active' : 'suspended'}
+              onChange={(e) => setEditActive(e.target.value === 'active')}
+            >
+              <option value="active">Active</option>
+              <option value="suspended">Suspended (cannot log in)</option>
+            </Select>
+          </div>
+        )}
+      </Modal>
+
+      {/* Delete Review Modal */}
+      <Modal
+        isOpen={!!reviewToDelete}
+        onClose={() => setReviewToDelete(null)}
+        title="Delete review"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setReviewToDelete(null)}>Cancel</Button>
+            <Button variant="danger" onClick={handleConfirmDeleteReview} loading={deletingReview}>Delete review</Button>
+          </>
+        )}
+      >
+        {reviewToDelete && (
+          <p className="text-muted-foreground">
+            Delete <span className="font-semibold text-foreground">{reviewToDelete.user_name}</span>&apos;s review on{' '}
+            <span className="font-semibold text-foreground">{reviewToDelete.box_name}</span>? This cannot be undone,
+            and the box&apos;s average rating will be recalculated.
+          </p>
+        )}
+      </Modal>
+
+      {/* Record Payout Modal */}
+      <Modal
+        isOpen={!!payoutTarget}
+        onClose={() => setPayoutTarget(null)}
+        title="Record a payout"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setPayoutTarget(null)}>Cancel</Button>
+            <Button onClick={handleRecordPayout} loading={recordingPayout} disabled={!payoutAmount || Number(payoutAmount) <= 0}>
+              Record payout
+            </Button>
+          </>
+        )}
+      >
+        {payoutTarget && (
+          <div className="space-y-4">
+            <p className="text-muted-foreground text-sm">
+              Recording a payout to <span className="font-medium text-foreground">{payoutTarget.owner_name}</span>.
+              Current balance due: <span className="font-medium text-foreground">₹{payoutTarget.balance_due.toLocaleString()}</span>.
+            </p>
+            <Input
+              label="Amount (₹)"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={payoutAmount}
+              onChange={(e) => setPayoutAmount(e.target.value)}
+              placeholder={String(payoutTarget.balance_due)}
+            />
+            <div className="space-y-1.5">
+              <label htmlFor="payout-note" className="block text-sm font-medium text-foreground">Note (optional)</label>
+              <textarea
+                id="payout-note"
+                value={payoutNote}
+                onChange={(e) => setPayoutNote(e.target.value)}
+                rows={2}
+                className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+                placeholder="e.g. Bank transfer, ref #12345"
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Create Coupon Modal */}
+      <Modal
+        isOpen={showCreateCouponModal}
+        onClose={() => setShowCreateCouponModal(false)}
+        title="New coupon"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setShowCreateCouponModal(false)}>Cancel</Button>
+            <Button onClick={handleCreateCoupon} loading={creatingCoupon} disabled={!newCoupon.code.trim() || !newCoupon.value}>
+              Create coupon
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <Input
+            label="Code"
+            value={newCoupon.code}
+            onChange={(e) => setNewCoupon((c) => ({ ...c, code: e.target.value.toUpperCase() }))}
+            placeholder="SUMMER25"
+          />
+          <Select
+            label="Discount type"
+            value={newCoupon.discount_type}
+            onChange={(e) => setNewCoupon((c) => ({ ...c, discount_type: e.target.value }))}
+          >
+            <option value="percent">Percent off</option>
+            <option value="flat">Flat amount off (₹)</option>
+          </Select>
+          <Input
+            label={newCoupon.discount_type === 'percent' ? 'Value (%)' : 'Value (₹)'}
+            type="number"
+            min="0"
+            value={newCoupon.value}
+            onChange={(e) => setNewCoupon((c) => ({ ...c, value: e.target.value }))}
+            placeholder={newCoupon.discount_type === 'percent' ? '10' : '100'}
+          />
+          <Input
+            label="Max uses (optional)"
+            type="number"
+            min="1"
+            value={newCoupon.max_uses}
+            onChange={(e) => setNewCoupon((c) => ({ ...c, max_uses: e.target.value }))}
+            placeholder="Unlimited"
+          />
         </div>
       </Modal>
     </div>

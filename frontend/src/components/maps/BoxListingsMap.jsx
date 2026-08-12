@@ -1,18 +1,22 @@
 import { useState, useEffect } from 'react';
-import { APIProvider, Map, AdvancedMarker, InfoWindow } from '@vis.gl/react-google-maps';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import { motion } from 'framer-motion';
 import { MapPin, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../ui';
 import { toast } from 'react-toastify';
 
-import { DARK_MODE_STYLES } from './shared/googleMapStyles';
+import { DARK_TILE_URL, DARK_TILE_ATTRIBUTION } from './shared/tileLayer';
+import { createBoxIcon, createUserLocationIcon } from './shared/markerIcons';
 import { calculateDistance } from './shared/geo';
 import MapControlsPanel from './shared/MapControlsPanel';
 import BoxMarkerPopup from './shared/BoxMarkerPopup';
 import MapBoxCard from './shared/MapBoxCard';
+import RecenterMap from './shared/RecenterMap';
 
 const MUMBAI_DEFAULT = { lat: 19.0760, lng: 72.8777 };
+const userLocationIcon = createUserLocationIcon();
 
 const BoxListingsMap = ({ isOpen, onClose, boxes = [] }) => {
     const [userLocation, setUserLocation] = useState(null);
@@ -21,9 +25,6 @@ const BoxListingsMap = ({ isOpen, onClose, boxes = [] }) => {
 
     const [mapCenter, setMapCenter] = useState(MUMBAI_DEFAULT);
     const [mapZoom, setMapZoom] = useState(13);
-
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-    const hasApiKey = apiKey && apiKey !== 'your_google_maps_api_key_here';
 
     // Fetch user location
     useEffect(() => {
@@ -108,10 +109,8 @@ const BoxListingsMap = ({ isOpen, onClose, boxes = [] }) => {
 
     if (!isOpen) return null;
 
-    const mapStyles = DARK_MODE_STYLES;
-
     return (
-        <div className="fixed inset-0 z-50 bg-background/80 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[100] bg-background/80 flex items-center justify-center p-4">
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -138,89 +137,54 @@ const BoxListingsMap = ({ isOpen, onClose, boxes = [] }) => {
 
                 <div className="flex flex-1 overflow-hidden">
                     {/* Map Area */}
-                    <div className="flex-1 relative">
-                        {hasApiKey ? (
-                            <APIProvider apiKey={apiKey}>
-                                <div style={{ height: '100%', width: '100%' }}>
-                                    <Map
-                                        center={mapCenter}
-                                        zoom={mapZoom}
-                                        onCenterChanged={(ev) => setMapCenter(ev.detail.center)}
-                                        onZoomChanged={(ev) => setMapZoom(ev.detail.zoom)}
-                                        mapId="DEMO_MAP_ID"
-                                        options={{
-                                            styles: mapStyles,
-                                            disableDefaultUI: false,
-                                            fullscreenControl: false,
-                                            mapTypeControl: false,
-                                        }}
+                    <div className="flex-1 relative leaflet-dark">
+                        <MapContainer
+                            center={[mapCenter.lat, mapCenter.lng]}
+                            zoom={mapZoom}
+                            style={{ height: '100%', width: '100%' }}
+                        >
+                            <RecenterMap center={[mapCenter.lat, mapCenter.lng]} zoom={mapZoom} />
+                            <TileLayer url={DARK_TILE_URL} attribution={DARK_TILE_ATTRIBUTION} />
+
+                            {/* User location marker */}
+                            {userLocation && (
+                                <Marker position={[userLocation.lat, userLocation.lng]} icon={userLocationIcon} />
+                            )}
+
+                            {/* Render boxes as markers */}
+                            {filteredBoxes.map((box) => (
+                                <Marker
+                                    key={box.id}
+                                    position={[box.coordinates[0], box.coordinates[1]]}
+                                    icon={createBoxIcon({ selected: selectedBox?.id === box.id })}
+                                    eventHandlers={{ click: () => handleSelectBox(box) }}
+                                />
+                            ))}
+
+                            {/* Popup for selected box */}
+                            {selectedBox && (
+                                <Popup
+                                    position={[selectedBox.coordinates[0], selectedBox.coordinates[1]]}
+                                    eventHandlers={{ remove: () => setSelectedBox(null) }}
+                                >
+                                    <BoxMarkerPopup
+                                        box={selectedBox}
+                                        sportLabel={selectedBox.sport || 'Multi-sport'}
+                                        userLocation={userLocation}
                                     >
-                                        {/* User location marker */}
-                                        {userLocation && (
-                                            <AdvancedMarker position={userLocation}>
-                                                <div className="w-8 h-8 rounded-full border-2 border-white bg-turf shadow-lg flex items-center justify-center animate-pulse">
-                                                    <span className="text-white text-xs">👤</span>
-                                                </div>
-                                            </AdvancedMarker>
-                                        )}
-
-                                        {/* Render boxes as markers */}
-                                        {filteredBoxes.map((box) => {
-                                            const boxPos = { lat: box.coordinates[0], lng: box.coordinates[1] };
-                                            return (
-                                                <AdvancedMarker
-                                                    key={box.id}
-                                                    position={boxPos}
-                                                    onClick={() => handleSelectBox(box)}
-                                                >
-                                                    <div className={`w-7 h-7 rounded-full border-2 border-white shadow-lg flex items-center justify-center transition-all cursor-pointer ${selectedBox?.id === box.id ? 'scale-125 bg-amber-500 z-10' : 'bg-primary'}`}>
-                                                        <span className="text-white text-[10px]">📍</span>
-                                                    </div>
-                                                </AdvancedMarker>
-                                            );
-                                        })}
-
-                                        {/* InfoWindow for selected box */}
-                                        {selectedBox && (
-                                            <InfoWindow
-                                                position={{ lat: selectedBox.coordinates[0], lng: selectedBox.coordinates[1] }}
-                                                onCloseClick={() => setSelectedBox(null)}
-                                            >
-                                                <BoxMarkerPopup
-                                                    box={selectedBox}
-                                                    sportLabel={selectedBox.sport || 'Multi-sport'}
-                                                    userLocation={userLocation}
-                                                >
-                                                    <Link
-                                                        to={`/boxes/${selectedBox.id}`}
-                                                        onClick={onClose}
-                                                        className="block mt-4 text-center"
-                                                    >
-                                                        <Button size="sm" fullWidth>
-                                                            View Details
-                                                        </Button>
-                                                    </Link>
-                                                </BoxMarkerPopup>
-                                            </InfoWindow>
-                                        )}
-                                    </Map>
-                                </div>
-                            </APIProvider>
-                        ) : (
-                            <div className="w-full h-full bg-elevated flex flex-col items-center justify-center p-6 text-center border border-border m-2 rounded-xl">
-                                <MapPin size={48} className="text-muted-foreground mb-4 animate-bounce" />
-                                <h4 className="text-xl font-semibold text-foreground mb-2">Google Maps API Key Required</h4>
-                                <p className="text-muted-foreground max-w-sm mb-4">
-                                    To display the interactive map of boxes, please add your Google Maps API Key to the <code>.env</code> file:
-                                </p>
-                                <pre className="bg-elevated text-foreground p-3 rounded-lg text-sm select-all mb-4">
-                                    VITE_GOOGLE_MAPS_API_KEY=your_actual_api_key_here
-                                </pre>
-                                <p className="text-xs text-muted-foreground max-w-xs">
-                                    You can obtain an API key from the Google Maps Platform Console. Make sure to enable the Maps JavaScript API.
-                                </p>
-                            </div>
-                        )}
+                                        <Link
+                                            to={`/boxes/${selectedBox.id}`}
+                                            onClick={onClose}
+                                            className="block mt-4 text-center"
+                                        >
+                                            <Button size="sm" fullWidth>
+                                                View Details
+                                            </Button>
+                                        </Link>
+                                    </BoxMarkerPopup>
+                                </Popup>
+                            )}
+                        </MapContainer>
 
                         <MapControlsPanel searchRadius={searchRadius} onSearchRadiusChange={setSearchRadius} />
                     </div>

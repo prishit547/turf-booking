@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, LayoutDashboard, User, LogOut, Map, ChevronDown } from 'lucide-react'
 import { useAuth } from '../../api.jsx'
 import NearbyBoxesMap from '../maps/NearbyBoxesMap'
+import NotificationBell from './NotificationBell'
 
 const nav = [
   { to: '/boxes', label: 'Browse Boxes' },
@@ -82,6 +83,11 @@ const Header = () => {
           </nav>
 
           <div className="flex items-center gap-2">
+            {isAuthenticated && (
+              <div className="hidden md:block">
+                <NotificationBell />
+              </div>
+            )}
             {isAuthenticated ? (
               <div className="relative hidden md:block">
                 <button
@@ -180,6 +186,9 @@ const Header = () => {
             </button>
             {isAuthenticated ? (
               <>
+                <div className="px-3 py-2">
+                  <NotificationBell />
+                </div>
                 <Link
                   to={getDashboardRoute()}
                   onClick={() => setIsMenuOpen(false)}

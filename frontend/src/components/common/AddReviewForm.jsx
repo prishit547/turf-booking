@@ -1,17 +1,31 @@
 import { useState } from 'react';
-import { Star, Send } from 'lucide-react';
+import { Star, Send, ImagePlus, X } from 'lucide-react';
 import { api } from '../../api.jsx';
 import { toast } from 'react-toastify';
 import { Modal, Button } from '../ui';
 
 const RATING_LABELS = { 1: 'Poor', 2: 'Fair', 3: 'Good', 4: 'Very Good', 5: 'Excellent' };
+const MAX_REVIEW_IMAGES = 4;
 
 const AddReviewForm = ({ isOpen, onClose, boxId, onReviewAdded }) => {
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
   const [comment, setComment] = useState('');
+  const [images, setImages] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  const handleImageChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) {
+      setImages((prev) => [...prev, ...files].slice(0, MAX_REVIEW_IMAGES));
+    }
+    e.target.value = '';
+  };
+
+  const removeImage = (index) => {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -30,9 +44,13 @@ const AddReviewForm = ({ isOpen, onClose, boxId, onReviewAdded }) => {
     setError('');
 
     try {
-      const response = await api.post(`/boxes/public/${boxId}/add_review/`, {
-        rating: rating,
-        comment: comment.trim()
+      const formData = new FormData();
+      formData.append('rating', rating);
+      formData.append('comment', comment.trim());
+      images.forEach((file) => formData.append('images', file));
+
+      const response = await api.post(`/boxes/public/${boxId}/add_review/`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
 
       toast.success('Review added successfully!');
@@ -42,6 +60,7 @@ const AddReviewForm = ({ isOpen, onClose, boxId, onReviewAdded }) => {
       // Reset form
       setRating(0);
       setComment('');
+      setImages([]);
     } catch (err) {
       console.error('Error adding review:', err);
       const errorMessage = err.response?.data?.detail ||
@@ -58,6 +77,7 @@ const AddReviewForm = ({ isOpen, onClose, boxId, onReviewAdded }) => {
     setRating(0);
     setHoverRating(0);
     setComment('');
+    setImages([]);
     setError('');
     onClose();
   };
@@ -115,6 +135,37 @@ const AddReviewForm = ({ isOpen, onClose, boxId, onReviewAdded }) => {
               {comment.length}/500 characters
             </span>
           </div>
+        </div>
+
+        {/* Photos */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-foreground mb-2">
+            Photos (optional, up to {MAX_REVIEW_IMAGES})
+          </label>
+          {images.length < MAX_REVIEW_IMAGES && (
+            <label htmlFor="review-images" className="inline-flex items-center gap-2 cursor-pointer text-sm font-medium text-primary hover:text-primary/80">
+              <ImagePlus size={18} />
+              Add photos
+              <input id="review-images" type="file" className="sr-only" multiple accept="image/*" onChange={handleImageChange} />
+            </label>
+          )}
+          {images.length > 0 && (
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {images.map((file, i) => (
+                <div key={i} className="relative">
+                  <img src={URL.createObjectURL(file)} alt="preview" className="h-16 w-full object-cover rounded-md" />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(i)}
+                    className="absolute -top-1.5 -right-1.5 bg-danger text-white rounded-full p-0.5"
+                    aria-label="Remove photo"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Error Message */}

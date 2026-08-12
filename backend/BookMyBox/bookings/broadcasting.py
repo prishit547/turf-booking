@@ -38,3 +38,16 @@ def broadcast_slot_booked(sig, booked_by_user_id):
     # broadcast_promoted's new_user_id, for the same reason (see that
     # function and useSlotReservation.js's 'promoted' handler).
     _send(sig, {'type': 'slot_booked', 'booked_by_user_id': booked_by_user_id})
+
+
+def broadcast_owner_reserved(sig, owner_user_id):
+    # Sent when the box owner preempts a held/queued slot (see
+    # reservation.preempt_slot + OwnerBookingViewSet.book) — every displaced
+    # holder/queued watcher is still a member of this group, so one send
+    # reaches all of them. Distinct from slot_booked: the reason a customer
+    # lost this slot matters for the message shown, not just that they lost it.
+    _send(sig, {
+        'type': 'owner_reserved',
+        'owner_user_id': owner_user_id,
+        'message': 'This slot has been reserved by the turf owner. Please select another slot.',
+    })

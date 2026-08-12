@@ -17,7 +17,7 @@ const getLevel = (points) => LEVELS.find((l) => points >= l.min) || LEVELS[LEVEL
 const GamificationStats = ({ userStats, loading }) => {
   if (loading) {
     return (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {[...Array(4)].map((_, i) => (
           <Card key={i} padding="md" className="space-y-3">
             <SkeletonLine width="w-20" />
@@ -72,7 +72,7 @@ const GamificationStats = ({ userStats, loading }) => {
       </div>
 
       {/* Stats grid — same StatTile convention as the dashboards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatTile tone="primary" icon={<Zap size={22} />} value={points} label="Total points" />
         <StatTile tone="success" icon={<TrendingUp size={22} />} value={currentLevel.level} label="Current level" />
         <StatTile tone="warning" icon={<Trophy size={22} />} value={userStats.badges_earned || 0} label="Badges earned" />

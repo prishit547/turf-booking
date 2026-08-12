@@ -17,9 +17,10 @@ class Box(models.Model):
         ('pending', 'Pending Approval'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
+        ('changes_requested', 'Changes Requested'),
     ]
     status = models.CharField(
-        max_length=10,
+        max_length=20,
         choices=STATUS_CHOICES,
         default='pending',
         help_text="The approval status of the box."
@@ -59,13 +60,15 @@ class Box(models.Model):
     def __str__(self):
         return self.name
 
-# --- NO CHANGES to Review or UserFavoriteBox models ---
 class Review(models.Model):
     box = models.ForeignKey(Box, related_name='reviews', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     rating = models.IntegerField(choices=[(i, str(i)) for i in range(1, 6)])
     comment = models.TextField(blank=True)
     date = models.DateField(auto_now_add=True)
+    owner_response = models.TextField(blank=True, default='')
+    owner_response_at = models.DateTimeField(null=True, blank=True)
+    images = models.JSONField(default=list, blank=True, help_text="Relative storage paths of up to 4 review photos.")
 
     def __str__(self):
         return f"Review by {self.user.username} for {self.box.name}" 
@@ -76,6 +79,51 @@ class Review(models.Model):
             models.UniqueConstraint(fields=['box', 'user'], name='unique_review_per_user_box')
         ]
         
+class BlockedDate(models.Model):
+    """A whole day the owner has marked their box unavailable for (holiday,
+    maintenance) without deleting the box itself. See
+    bookings/services.py's validate_booking_request()/create_booking_row()
+    for where this is enforced against new bookings."""
+    box = models.ForeignKey(Box, related_name='blocked_dates', on_delete=models.CASCADE)
+    date = models.DateField()
+    reason = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['date']
+        unique_together = ('box', 'date')
+
+    def __str__(self):
+        return f"{self.box.name} blocked on {self.date}"
+
+
+class PricingRule(models.Model):
+    """An owner-defined price override for a weekday/weekend/all-days time
+    window (e.g. "weekend evenings cost more") — a flat replacement price,
+    not a multiplier. Falls back to Box.price when no rule matches a given
+    booking's start_time. See boxes/pricing.py's resolve_box_price() for
+    resolution and boxes/serializers.py's PricingRuleSerializer for the
+    non-overlap validation that keeps resolution unambiguous."""
+    APPLIES_TO_CHOICES = [
+        ('weekday', 'Weekdays (Mon-Fri)'),
+        ('weekend', 'Weekends (Sat-Sun)'),
+        ('all', 'Every day'),
+    ]
+    box = models.ForeignKey(Box, related_name='pricing_rules', on_delete=models.CASCADE)
+    applies_to = models.CharField(max_length=10, choices=APPLIES_TO_CHOICES)
+    start_time = models.CharField(max_length=5, help_text="HH:MM, 24-hour")
+    end_time = models.CharField(max_length=5, help_text="HH:MM, 24-hour")
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    label = models.CharField(max_length=100, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['applies_to', 'start_time']
+
+    def __str__(self):
+        return f"{self.box.name}: {self.get_applies_to_display()} {self.start_time}-{self.end_time} @ {self.price}"
+
+
 class UserFavoriteBox(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='favorite_boxes')
     box = models.ForeignKey(Box, on_delete=models.CASCADE)

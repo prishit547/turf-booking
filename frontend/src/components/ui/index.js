@@ -12,3 +12,5 @@ export { StatusPill } from './StatusPill';
 export { DateStrip } from './DateStrip';
 export { SlotGrid, SlotLegend } from './SlotGrid';
 export { BookingSummaryBar } from './BookingSummaryBar';
+export { Pagination } from './Pagination';
+export { RatingBreakdown } from './RatingBreakdown';

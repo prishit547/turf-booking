@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
 import { useAuth } from '../api.jsx';
+import { PENDING_INVITE_KEY } from './InviteClaim';
 import GoogleLoginButton from '../components/common/GoogleLoginButton.jsx';
 import { AuthShell } from '../components/auth/AuthShell';
 import { Input } from '../components/ui';
@@ -46,6 +47,14 @@ const Login = () => {
       const result = await login({ email: formData.email, password: formData.password });
 
       if (result.success) {
+        // A pending booking invite (see InviteClaim.jsx) takes priority
+        // over the normal role-based redirect — the user came from that
+        // link and expects to land back on it, not their dashboard.
+        const pendingInviteToken = localStorage.getItem(PENDING_INVITE_KEY);
+        if (pendingInviteToken) {
+          navigate(`/invites/${pendingInviteToken}`);
+          return;
+        }
         const userRole = result.user?.role;
         switch (userRole) {
           case 'admin': navigate('/admin-dashboard'); break;
@@ -122,9 +131,9 @@ const Login = () => {
             />
             <label htmlFor="remember-me" className="text-sm text-muted-foreground">Remember me</label>
           </div>
-          <span className="text-sm text-muted-foreground" title="Please contact support to reset your password">
-            Forgot password? Contact support
-          </span>
+          <Link to="/forgot-password" className="text-sm font-medium text-primary hover:text-primary/80">
+            Forgot password?
+          </Link>
         </div>
 
         <MagneticButton type="submit" disabled={loading} className="w-full">

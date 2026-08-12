@@ -1,9 +1,14 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from bookings.models import Booking
 from boxes.models import Box
+
+from .models import PasswordResetToken
 
 User = get_user_model()
 
@@ -136,3 +141,96 @@ class AdminDashboardTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.user_token}')
         response = self.client.get('/api/user/admin-dashboard/')
         self.assertEqual(response.status_code, 403)
+
+
+class PasswordResetTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='player@example.com',
+            username='player@example.com',
+            password='oldpass123',
+            role='user',
+        )
+
+    @patch('user.views.send_email_task.delay')
+    def test_request_reset_creates_token_and_queues_email_for_known_user(self, mock_delay):
+        response = self.client.post('/api/user/password-reset/', {'email': 'player@example.com'}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PasswordResetToken.objects.filter(user=self.user, used_at__isnull=True).count(), 1)
+        mock_delay.assert_called_once()
+
+    @patch('user.views.send_email_task.delay')
+    def test_request_reset_is_silent_no_op_for_unknown_email(self, mock_delay):
+        response = self.client.post('/api/user/password-reset/', {'email': 'nobody@example.com'}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PasswordResetToken.objects.count(), 0)
+        mock_delay.assert_not_called()
+
+    @patch('user.views.send_email_task.delay')
+    def test_requesting_again_invalidates_prior_token(self, mock_delay):
+        self.client.post('/api/user/password-reset/', {'email': 'player@example.com'}, format='json')
+        first_token = PasswordResetToken.objects.get(user=self.user)
+        self.client.post('/api/user/password-reset/', {'email': 'player@example.com'}, format='json')
+        first_token.refresh_from_db()
+        self.assertIsNotNone(first_token.used_at)
+        self.assertEqual(PasswordResetToken.objects.filter(user=self.user, used_at__isnull=True).count(), 1)
+
+    def test_confirm_with_valid_token_changes_password(self):
+        reset_token = PasswordResetToken.objects.create(
+            user=self.user, expires_at=timezone.now() + timezone.timedelta(minutes=30),
+        )
+        response = self.client.post('/api/user/password-reset/confirm/', {
+            'token': reset_token.token,
+            'new_password': 'brandnewpass123',
+            'confirm_new_password': 'brandnewpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('brandnewpass123'))
+        reset_token.refresh_from_db()
+        self.assertIsNotNone(reset_token.used_at)
+
+    def test_confirm_rejects_expired_token(self):
+        reset_token = PasswordResetToken.objects.create(
+            user=self.user, expires_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+        response = self.client.post('/api/user/password-reset/confirm/', {
+            'token': reset_token.token,
+            'new_password': 'brandnewpass123',
+            'confirm_new_password': 'brandnewpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('oldpass123'))
+
+    def test_confirm_rejects_already_used_token(self):
+        reset_token = PasswordResetToken.objects.create(
+            user=self.user,
+            expires_at=timezone.now() + timezone.timedelta(minutes=30),
+            used_at=timezone.now(),
+        )
+        response = self.client.post('/api/user/password-reset/confirm/', {
+            'token': reset_token.token,
+            'new_password': 'brandnewpass123',
+            'confirm_new_password': 'brandnewpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_confirm_rejects_mismatched_passwords(self):
+        reset_token = PasswordResetToken.objects.create(
+            user=self.user, expires_at=timezone.now() + timezone.timedelta(minutes=30),
+        )
+        response = self.client.post('/api/user/password-reset/confirm/', {
+            'token': reset_token.token,
+            'new_password': 'brandnewpass123',
+            'confirm_new_password': 'somethingelse456',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_confirm_rejects_unknown_token(self):
+        response = self.client.post('/api/user/password-reset/confirm/', {
+            'token': 'not-a-real-token',
+            'new_password': 'brandnewpass123',
+            'confirm_new_password': 'brandnewpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)

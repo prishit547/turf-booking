@@ -1,8 +1,10 @@
 # bookings/models.py
+import secrets
 
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.conf import settings  # For AUTH_USER_MODEL
+from django.utils import timezone
 
 
 class Booking(models.Model):
@@ -40,6 +42,46 @@ class Booking(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cancelled_bookings',
+        help_text="Who cancelled this booking (customer, owner, or admin) — null if never cancelled.",
+    )
+    cancellation_reason = models.TextField(blank=True, default='')
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    BOOKING_SOURCE_CHOICES = [
+        ('online', 'Online'),
+        ('owner_manual', 'Owner (walk-in/manual)'),
+    ]
+    booking_source = models.CharField(
+        max_length=20,
+        choices=BOOKING_SOURCE_CHOICES,
+        default='online',
+        help_text="Whether a customer booked this online, or the box owner created it directly (walk-in/manual).",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_bookings',
+        help_text="Who actually created this row — the booking customer for an online booking, or the box owner for a manual/walk-in one.",
+    )
+    customer_name = models.CharField(max_length=150, blank=True, default='')
+    customer_phone = models.CharField(max_length=20, blank=True, default='')
+
+    recurring_group_id = models.UUIDField(
+        null=True, blank=True, db_index=True,
+        help_text="Links sibling occurrences of the same recurring-booking request — null for a one-off booking.",
+    )
+
+    coupon_code = models.CharField(max_length=30, blank=True, default='')
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         ordering = ['date', 'start_time']
@@ -98,3 +140,109 @@ class Booking(models.Model):
 
     def __str__(self):
         return f"Booking by {self.user.email} for {self.box.name} on {self.date} at {self.start_time}"
+
+
+class Coupon(models.Model):
+    """A platform-wide discount code — deliberately simple (not per-user,
+    no stacking): a code, a percent-or-flat discount, an optional validity
+    window, an optional total-use cap. See bookings/services.py's
+    apply_coupon() for validation + bookings/services.py's
+    create_booking_row() for how the discount is applied."""
+    DISCOUNT_TYPE_CHOICES = [
+        ('percent', 'Percent off'),
+        ('flat', 'Flat amount off'),
+    ]
+
+    code = models.CharField(max_length=30, unique=True)
+    discount_type = models.CharField(max_length=10, choices=DISCOUNT_TYPE_CHOICES)
+    value = models.DecimalField(max_digits=10, decimal_places=2, help_text="Percent (0-100) or flat ₹ amount, depending on discount_type.")
+    active = models.BooleanField(default=True)
+    valid_from = models.DateField(null=True, blank=True)
+    valid_until = models.DateField(null=True, blank=True)
+    max_uses = models.PositiveIntegerField(null=True, blank=True, help_text="Leave blank for unlimited uses.")
+    used_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='coupons_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def save(self, *args, **kwargs):
+        self.code = (self.code or '').strip().upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.code
+
+
+class WaitlistEntry(models.Model):
+    """A user's request to be notified if a specific, currently-booked slot
+    (exact box/date/start_time/duration) frees up. Distinct from the
+    short-lived Redis hold/queue in reservation.py, which only matters
+    during an active checkout hold — this is a persistent, one-shot signup
+    that survives until either the slot opens up (see
+    bookings/services.py's cancel_booking(), which notifies + deletes
+    matching entries) or the user leaves the waitlist themselves."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='waitlist_entries')
+    box = models.ForeignKey('boxes.Box', on_delete=models.CASCADE, related_name='waitlist_entries')
+    date = models.DateField()
+    start_time = models.CharField(max_length=5)
+    duration = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('user', 'box', 'date', 'start_time', 'duration')
+
+    def __str__(self):
+        return f"{self.user.email} waiting for {self.box.name} on {self.date} at {self.start_time}"
+
+
+def _generate_invite_token():
+    return secrets.token_urlsafe(32)
+
+
+class BookingInvite(models.Model):
+    """A booker's invite for someone else to join their booking (group/
+    split bookings) — either an existing account (invited_user set
+    directly) or a raw email address that may not have an account yet
+    (invited_user filled in once they claim the invite). Deliberately a
+    separate model rather than a Booking.participants M2M: `Booking.user`
+    (the sole booker) is relied on throughout this codebase for ownership
+    checks, admin/owner aggregations, and cancellation — participants are
+    additive, read-only viewers of the same row, not co-owners.
+
+    Acceptance is token-authorized, not email-matched: whoever is
+    authenticated when they open the invite link and accept it claims it,
+    same as most real invite-link products (Google Docs, etc.) — no hard
+    requirement that the accepting account's email equals invited_email."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+        ('expired', 'Expired'),
+    ]
+    booking = models.ForeignKey(Booking, related_name='invites', on_delete=models.CASCADE)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_booking_invites')
+    invited_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='booking_invites', help_text="Set once an existing account is invited, or once a raw-email invite is claimed.",
+    )
+    invited_email = models.EmailField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    token = models.CharField(max_length=64, unique=True, default=_generate_invite_token)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def is_claimable(self):
+        return self.status == 'pending' and timezone.now() < self.expires_at
+
+    def __str__(self):
+        return f"Invite to {self.invited_email} for booking #{self.booking_id} ({self.status})"

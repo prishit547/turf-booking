@@ -4,10 +4,18 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer # Needed for CustomTokenObtainPairSerializer inheritance
 from rest_framework_simplejwt.tokens import RefreshToken # Needed in CustomTokenObtainPairSerializer
 
-from .models import User # Assuming your custom User model is here
+from .models import Notification, PasswordResetToken, User # Assuming your custom User model is here
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'title', 'message', 'link', 'is_read', 'created_at']
+        read_only_fields = fields
 
 # --- User Data Serializer ---
 # This serializer is used to represent the User model in API responses
@@ -21,10 +29,34 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'username', 'first_name', 'last_name',
             'full_name', 'phone', 'role', # <-- 'role' is consistently included here
-            'business_name', 'location', 'is_verified',
+            'business_name', 'location', 'is_verified', 'is_active', 'date_joined',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'username'] # username is often read-only after creation
+        # role/is_verified/is_active are display-only on this serializer —
+        # mutating them goes through AdminUserUpdateSerializer instead, so a
+        # PATCH through this serializer (e.g. a user editing their own
+        # profile) can never silently reassign a role or reactivate/suspend
+        # an account.
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'username',
+            'role', 'is_verified', 'is_active', 'date_joined',
+        ]
+
+
+# --- Admin-only user mutation serializer ---
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    """Backs the admin-only role/suspend action — deliberately separate from
+    UserSerializer so the two writable fields it exposes can never be
+    reached through a regular profile-update request."""
+
+    class Meta:
+        model = User
+        fields = ['role', 'is_active']
+
+    def validate_role(self, value):
+        if value not in ('user', 'owner', 'admin'):
+            raise serializers.ValidationError("Role must be one of: user, owner, admin.")
+        return value
 
 # --- User Registration Serializer ---
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -151,6 +183,57 @@ class PasswordChangeSerializer(serializers.Serializer):
         user.set_password(self.validated_data['new_password'])
         user.save()
         return user
+
+class UserSearchResultSerializer(serializers.ModelSerializer):
+    """Minimal shape for the "invite someone" search-as-you-type — no
+    phone/location/role, just enough to identify and display a match."""
+    name = serializers.CharField(source='full_name', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'email']
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, min_length=6)
+    confirm_new_password = serializers.CharField(write_only=True)
+
+    def validate_token(self, value):
+        try:
+            reset_token = PasswordResetToken.objects.select_related('user').get(token=value)
+        except PasswordResetToken.DoesNotExist:
+            raise serializers.ValidationError("This reset link is invalid.")
+        if not reset_token.is_valid():
+            raise serializers.ValidationError("This reset link has expired or was already used.")
+        self.context['reset_token'] = reset_token
+        return value
+
+    def validate_new_password(self, value):
+        try:
+            validate_password(value)
+        except ValidationError as e:
+            raise serializers.ValidationError(e.messages)
+        return value
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_new_password']:
+            raise serializers.ValidationError("New passwords do not match.")
+        return attrs
+
+    def save(self):
+        reset_token = self.context['reset_token']
+        user = reset_token.user
+        user.set_password(self.validated_data['new_password'])
+        user.save()
+        reset_token.used_at = timezone.now()
+        reset_token.save(update_fields=['used_at'])
+        return user
+
 
 # --- User Update Serializer ---
 class UserUpdateSerializer(serializers.ModelSerializer):

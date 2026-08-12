@@ -51,9 +51,19 @@ describe('BookingContext reservation actions', () => {
 
     const response = await result.current.confirmReservation('abc')
 
-    expect(api.post).toHaveBeenCalledWith('/bookings/confirm/abc/')
+    expect(api.post).toHaveBeenCalledWith('/bookings/confirm/abc/', {})
     expect(response).toEqual({ success: true, data: booking })
     await waitFor(() => expect(result.current.bookings).toContainEqual(booking))
+  })
+
+  it('confirmReservation sends a coupon code when provided', async () => {
+    const booking = { id: 43, box: { id: 1 }, date: '2030-01-15' }
+    api.post.mockResolvedValueOnce({ data: booking })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    await result.current.confirmReservation('abc', 'SAVE10')
+
+    expect(api.post).toHaveBeenCalledWith('/bookings/confirm/abc/', { couponCode: 'SAVE10' })
   })
 
   it('confirmReservation surfaces a 409 error without throwing', async () => {
@@ -73,5 +83,70 @@ describe('BookingContext reservation actions', () => {
 
     expect(api.post).toHaveBeenCalledWith('/bookings/release_hold/abc/')
     expect(response).toEqual({ success: true, data: { status: 'promoted' } })
+  })
+})
+
+describe('BookingContext group-invite actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('inviteToBooking posts invited_user_id and invited_email', async () => {
+    api.post.mockResolvedValueOnce({ data: { id: 1, status: 'pending' } })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    const response = await result.current.inviteToBooking(42, { invitedUserId: 7 })
+
+    expect(api.post).toHaveBeenCalledWith('/bookings/42/invite/', { invited_user_id: 7, invited_email: undefined })
+    expect(response).toEqual({ success: true, data: { id: 1, status: 'pending' } })
+  })
+
+  it('inviteToBooking surfaces an error without throwing', async () => {
+    api.post.mockRejectedValueOnce({ response: { data: { detail: "You can't invite yourself." } } })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    const response = await result.current.inviteToBooking(42, { invitedEmail: 'me@example.com' })
+
+    expect(response).toEqual({ success: false, error: "You can't invite yourself." })
+  })
+
+  it('respondToInvite posts to the accept endpoint', async () => {
+    const booking = { id: 42 }
+    api.post.mockResolvedValueOnce({ data: booking })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    const response = await result.current.respondToInvite('tok123', 'accept')
+
+    expect(api.post).toHaveBeenCalledWith('/bookings/invites/tok123/accept/')
+    expect(response).toEqual({ success: true, data: booking })
+  })
+
+  it('respondToInvite posts to the decline endpoint', async () => {
+    api.post.mockResolvedValueOnce({ data: { status: 'declined' } })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    await result.current.respondToInvite('tok123', 'decline')
+
+    expect(api.post).toHaveBeenCalledWith('/bookings/invites/tok123/decline/')
+  })
+
+  it('getInviteDetail fetches the public invite lookup', async () => {
+    const details = { valid: true, box_name: 'Elite Sports Complex' }
+    api.get.mockResolvedValueOnce({ data: details })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    const response = await result.current.getInviteDetail('tok123')
+
+    expect(api.get).toHaveBeenCalledWith('/bookings/invites/tok123/')
+    expect(response).toEqual({ success: true, data: details })
+  })
+
+  it('searchUsers returns [] on failure instead of throwing', async () => {
+    api.get.mockRejectedValueOnce(new Error('network error'))
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    const response = await result.current.searchUsers('jan')
+
+    expect(response).toEqual([])
   })
 })

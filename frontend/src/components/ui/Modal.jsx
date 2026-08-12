@@ -29,7 +29,7 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md', c
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-50 overflow-y-auto">
+                <div className="fixed inset-0 z-[100] overflow-y-auto">
                     <div className="flex items-center justify-center min-h-screen px-4 py-8">
                         <motion.div
                             initial={{ opacity: 0 }}

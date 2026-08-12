@@ -1,8 +1,10 @@
 # user/views.py
 
+import logging
+
 from django.conf import settings
 from django.db.models import Sum, Count, DecimalField, Q
-from django.db.models.functions import TruncMonth
+from django.db.models.functions import TruncMonth, Coalesce
 from django.utils import timezone
 from rest_framework import status, generics, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -11,20 +13,34 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import authenticate
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters as drf_filters
 
 from boxes.models import Box
 from bookings.models import Booking
 
-from .models import User
+from .models import PasswordResetToken, User
+from .filters import UserFilter
+from .permissions import IsAdminUser
 from .serializers import (
     UserRegistrationSerializer,
     # UserLoginSerializer,  # <--- CONFIRMED: This line should be commented out or removed
     UserSerializer,
     UserUpdateSerializer,
+    AdminUserUpdateSerializer,
     PasswordChangeSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    UserSearchResultSerializer,
     CustomTokenObtainPairSerializer, # <--- CORRECTED: This now matches the name in serializers.py
 )
 from .google_auth import GoogleAuthSerializer
+from BookMyBox.pagination import StandardResultsPagination
+from BookMyBox.tasks import send_email_task
+
+PASSWORD_RESET_TOKEN_TTL_MINUTES = 45
+
+logger = logging.getLogger(__name__)
 
 # --- Simple JWT Custom Login View ---
 # This is the PRIMARY view for user login and token generation.
@@ -244,6 +260,70 @@ def change_password(request):
     }, status=status.HTTP_400_BAD_REQUEST)
 
 
+# --- Self-service password reset ---
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_password_reset(request):
+    """Starts the reset flow. Always returns success (even for an unknown
+    email) so this endpoint can't be used to enumerate registered accounts —
+    the actual email only goes out if a matching user exists."""
+    serializer = PasswordResetRequestSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    email = serializer.validated_data['email']
+
+    user = User.objects.filter(email__iexact=email).first()
+    if user:
+        # Invalidate any prior unused token for this user before issuing a
+        # new one — only the most recent reset link should ever work.
+        PasswordResetToken.objects.filter(user=user, used_at__isnull=True).update(used_at=timezone.now())
+        reset_token = PasswordResetToken.objects.create(
+            user=user,
+            expires_at=timezone.now() + timezone.timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES),
+        )
+        reset_link = f"{settings.FRONTEND_URL}/reset-password/{reset_token.token}"
+        send_email_task.delay(
+            user.email,
+            'Reset your BookMyBox password',
+            f"<p>Hi {user.first_name or user.email},</p>"
+            f"<p>Click the link below to set a new password. This link expires in "
+            f"{PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes and can only be used once.</p>"
+            f'<p><a href="{reset_link}">{reset_link}</a></p>'
+            f"<p>If you didn't request this, you can safely ignore this email.</p>",
+        )
+
+    return Response({
+        'success': True,
+        'message': "If that email is registered, we've sent a password reset link.",
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def confirm_password_reset(request):
+    serializer = PasswordResetConfirmSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'success': True, 'message': 'Password reset successfully.'})
+    return Response({'success': False, 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- User search (for inviting someone to a booking) ---
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_search(request):
+    """Lightweight search-as-you-type for BookingInvite's "invite an
+    existing user" flow — distinct from UserListView, which is admin-only
+    and returns full profile fields. Any authenticated user can call this,
+    but only ever gets back {id, name, email} for a handful of matches."""
+    query = request.query_params.get('q', '').strip()
+    if len(query) < 2:
+        return Response([])
+    matches = User.objects.filter(
+        Q(email__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query)
+    ).exclude(id=request.user.id)[:10]
+    return Response(UserSearchResultSerializer(matches, many=True).data)
+
+
 # --- Get Demo Credentials (Optional) ---
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -315,29 +395,61 @@ class UserListView(generics.ListAPIView):
     """
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsPagination
+    filter_backends = [DjangoFilterBackend, drf_filters.SearchFilter]
+    filterset_class = UserFilter
+    search_fields = ['email', 'first_name', 'last_name']
 
     def get_queryset(self):
         # Admins can see all users, others can only see their own profile in a list context
         if self.request.user.is_authenticated and self.request.user.role == 'admin':
-            return User.objects.all()
+            return User.objects.all().order_by('-date_joined')
         return User.objects.filter(id=self.request.user.id) # Non-admins retrieve only themselves
 
 
-class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
+class UserDetailView(generics.RetrieveAPIView):
     """
-    Retrieves, updates, or deletes a specific user by ID.
-    Access is restricted to admins or the user owning the profile.
+    Retrieves a specific user by ID. Read-only for everyone (self or admin)
+    — mutating role/is_active goes through AdminUserUpdateView instead, and
+    there is deliberately no user-delete endpoint (see AdminUserUpdateView's
+    docstring for why).
     """
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'pk' # Assumes primary key is used for lookup
 
     def get_queryset(self):
-        # Admins can interact with any user profile.
-        # Non-admins can only interact with their own profile.
+        # Admins can view any user profile.
+        # Non-admins can only view their own profile.
         if self.request.user.is_authenticated and self.request.user.role == 'admin':
             return User.objects.all()
         return User.objects.filter(id=self.request.user.id)
+
+
+class AdminUserUpdateView(generics.UpdateAPIView):
+    """Admin-only: change a user's role or suspend/reactivate their account
+    (is_active). Deliberately no delete — hard-deleting a user would cascade
+    into their bookings/boxes/reviews, so suspension is the supported way to
+    disable an account."""
+    queryset = User.objects.all()
+    serializer_class = AdminUserUpdateSerializer
+    permission_classes = [IsAdminUser]
+    http_method_names = ['patch']
+
+    def patch(self, request, *args, **kwargs):
+        target = self.get_object()
+        if target.id == request.user.id:
+            return Response(
+                {'detail': "You cannot change your own role or status."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        response = self.partial_update(request, *args, **kwargs)
+        logger.info(
+            "Admin %s updated user %s: role=%s is_active=%s",
+            request.user.email, target.email,
+            request.data.get('role', target.role), request.data.get('is_active', target.is_active),
+        )
+        return response
 
 
 @api_view(['GET'])
@@ -345,32 +457,44 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
 def admin_dashboard_data(request):
     """
     Returns aggregated stats and lists for the admin dashboard.
+
+    Rebuilt to use grouped ORM aggregation (TruncMonth/annotate, following
+    the same pattern as user_dashboard/views.py's DashboardAnalyticsView)
+    instead of iterating full tables in Python, and to annotate users/boxes
+    in a single query each instead of issuing a per-row .count()/.aggregate()
+    call (the previous version's N+1). `boxes_overview` was dropped — it was
+    an unfiltered duplicate of `boxes` truncated to 50 that the frontend
+    never actually reached (its fallback-only reference to it is dead code
+    since `boxes` is always present).
     """
     if request.user.role != 'admin':
         return Response({'detail': 'Admin access required.'}, status=status.HTTP_403_FORBIDDEN)
 
+    ACTIVE_STATUSES = ['Confirmed', 'Completed']
+
     total_users = User.objects.count()
     total_owners = User.objects.filter(role='owner').count()
-    total_bookings = Booking.objects.filter(
-        booking_status__in=['Confirmed', 'Completed']
-    ).count()
+    total_bookings = Booking.objects.filter(booking_status__in=ACTIVE_STATUSES).count()
     platform_revenue = Booking.objects.filter(
-        booking_status__in=['Confirmed', 'Completed']
+        booking_status__in=ACTIVE_STATUSES
     ).aggregate(
         total=Sum('total_amount', default=0.0, output_field=DecimalField())
     )['total']
+
+    total_bookings_all = Booking.objects.count()
+    cancelled_bookings = Booking.objects.filter(booking_status='Cancelled').count()
+    cancellation_rate_pct = round((cancelled_bookings / total_bookings_all) * 100, 1) if total_bookings_all else 0.0
+
+    approved_boxes_count = Box.objects.filter(status='approved').count()
+    rejected_boxes_count = Box.objects.filter(status='rejected').count()
     pending_boxes = Box.objects.filter(status='pending').order_by('-submitted_at')
+    pending_boxes_count = pending_boxes.count()
 
-    # Full lists used in the Users / Bookings / Boxes tabs
-    all_users = User.objects.order_by('-date_joined')
-    all_bookings = Booking.objects.select_related('user', 'box', 'box__owner').order_by('-created_at')
-    all_boxes = Box.objects.select_related('owner').order_by('-submitted_at')
+    recent_users = User.objects.order_by('-date_joined')[:10]
+    recent_bookings = Booking.objects.select_related('user', 'box', 'box__owner').order_by('-created_at')[:10]
 
-    recent_users = all_users[:10]
-    recent_bookings = all_bookings[:10]
-    boxes_overview = all_boxes[:50]
-
-    # Monthly chart data for the last 6 calendar months
+    # Monthly chart data for the last 6 calendar months — one grouped query
+    # per metric instead of a Python loop over the full table.
     today = timezone.now().date()
     months = []
     labels = []
@@ -384,59 +508,105 @@ def admin_dashboard_data(request):
         months.append(month_key)
         labels.append(month_key.strftime('%b'))
 
-    revenue_by_month = {m: 0 for m in months}
-    users_by_month = {m: 0 for m in months}
-    bookings_by_month = {m: 0 for m in months}
+    revenue_by_month = {
+        row['month']: float(row['revenue'])
+        for row in Booking.objects.filter(booking_status__in=ACTIVE_STATUSES, created_at__date__gte=months[0])
+        .annotate(month=TruncMonth('created_at')).values('month')
+        .annotate(revenue=Coalesce(Sum('total_amount'), 0.0, output_field=DecimalField()))
+    }
+    users_by_month = {
+        row['month']: row['count']
+        for row in User.objects.filter(date_joined__date__gte=months[0])
+        .annotate(month=TruncMonth('date_joined')).values('month')
+        .annotate(count=Count('id'))
+    }
+    bookings_by_month = {
+        row['month']: row['count']
+        for row in Booking.objects.filter(created_at__date__gte=months[0])
+        .annotate(month=TruncMonth('created_at')).values('month')
+        .annotate(count=Count('id'))
+    }
 
-    for booking in Booking.objects.filter(
-        booking_status__in=['Confirmed', 'Completed'],
-        created_at__date__gte=months[0],
-        created_at__date__lte=today,
-    ):
-        key = booking.created_at.date().replace(day=1)
-        if key in revenue_by_month:
-            revenue_by_month[key] += float(booking.total_amount or 0)
+    revenue_chart_data = [revenue_by_month.get(m, 0) for m in months]
+    user_growth_data = [users_by_month.get(m, 0) for m in months]
+    booking_trend_data = [bookings_by_month.get(m, 0) for m in months]
 
-    for user in User.objects.filter(
-        date_joined__date__gte=months[0],
-        date_joined__date__lte=today,
-    ):
-        key = user.date_joined.date().replace(day=1)
-        if key in users_by_month:
-            users_by_month[key] += 1
+    def _mom_growth_pct(series):
+        if len(series) < 2:
+            return 0.0
+        prev, curr = series[-2], series[-1]
+        if prev:
+            return round((curr - prev) / prev * 100, 1)
+        return 100.0 if curr else 0.0
 
-    for booking in Booking.objects.filter(
-        created_at__date__gte=months[0],
-        created_at__date__lte=today,
-    ):
-        key = booking.created_at.date().replace(day=1)
-        if key in bookings_by_month:
-            bookings_by_month[key] += 1
-
-    revenue_chart_data = [revenue_by_month[m] for m in months]
-    user_growth_data = [users_by_month[m] for m in months]
-    booking_trend_data = [bookings_by_month[m] for m in months]
+    mom_revenue_growth_pct = _mom_growth_pct(revenue_chart_data)
+    mom_bookings_growth_pct = _mom_growth_pct(booking_trend_data)
 
     # Sports distribution across approved boxes
-    sports_distribution = {}
-    for box in Box.objects.filter(status='approved'):
-        sport = box.sport or 'Other'
-        sports_distribution[sport] = sports_distribution.get(sport, 0) + 1
+    sports_distribution = {
+        (row['sport'] or 'Other'): row['count']
+        for row in Box.objects.filter(status='approved').values('sport').annotate(count=Count('id'))
+    }
 
     # Top cities by confirmed/completed bookings
-    city_bookings = {}
-    for booking in Booking.objects.filter(booking_status__in=['Confirmed', 'Completed']):
-        city = booking.box.location if booking.box and booking.box.location else 'Unknown'
-        city_bookings[city] = city_bookings.get(city, 0) + 1
-    total_city_bookings = sum(city_bookings.values()) or 1
-    top_cities = sorted(
-        [
-            {'city': city, 'bookings': count, 'percentage': round((count / total_city_bookings) * 100)}
-            for city, count in city_bookings.items()
-        ],
-        key=lambda x: x['bookings'],
-        reverse=True,
-    )[:5]
+    city_rows = list(
+        Booking.objects.filter(booking_status__in=ACTIVE_STATUSES)
+        .values('box__location').annotate(count=Count('id')).order_by('-count')[:5]
+    )
+    total_city_bookings = sum(row['count'] for row in city_rows) or 1
+    top_cities = [
+        {
+            'city': row['box__location'] or 'Unknown',
+            'bookings': row['count'],
+            'percentage': round((row['count'] / total_city_bookings) * 100),
+        }
+        for row in city_rows
+    ]
+
+    # Peak booking hours — grouped by distinct start_time (bounded by the
+    # number of distinct times, not the number of bookings), then bucketed
+    # to the hour in Python since start_time is a raw "HH:MM" string, not a
+    # TimeField the DB can group by hour directly.
+    hours_tally = {}
+    for row in Booking.objects.filter(booking_status__in=ACTIVE_STATUSES).values('start_time').annotate(count=Count('id')):
+        hour = (row['start_time'] or '')[:2]
+        if hour:
+            hours_tally[hour] = hours_tally.get(hour, 0) + row['count']
+    total_hour_bookings = sum(hours_tally.values()) or 1
+    peak_hours_sorted = sorted(hours_tally.items(), key=lambda kv: kv[0])
+    peak_booking_hours = {
+        'labels': [f"{h}:00" for h, _ in peak_hours_sorted],
+        'data': [round((c / total_hour_bookings) * 100, 1) for _, c in peak_hours_sorted],
+    }
+
+    # Owner performance ranking — top 10 owners by revenue across all their boxes
+    owner_performance_ranking = [
+        {'owner': (o.full_name or o.email), 'revenue': float(o.revenue), 'bookings': o.booking_count}
+        for o in User.objects.filter(role='owner').annotate(
+            revenue=Coalesce(
+                Sum('owned_boxes__bookings__total_amount', filter=Q(owned_boxes__bookings__booking_status__in=ACTIVE_STATUSES)),
+                0.0, output_field=DecimalField(),
+            ),
+            booking_count=Coalesce(
+                Count('owned_boxes__bookings', filter=Q(owned_boxes__bookings__booking_status__in=ACTIVE_STATUSES)), 0,
+            ),
+        ).order_by('-revenue')[:10]
+        if o.revenue or o.booking_count
+    ]
+
+    # Boxes list (Boxes/Analytics tabs) + top-boxes-by-revenue ranking share
+    # this one annotated query instead of a per-box aggregate call each.
+    boxes_qs = list(Box.objects.select_related('owner').annotate(
+        booking_count=Coalesce(Count('bookings', filter=Q(bookings__booking_status__in=ACTIVE_STATUSES)), 0),
+        revenue=Coalesce(
+            Sum('bookings__total_amount', filter=Q(bookings__booking_status__in=ACTIVE_STATUSES)),
+            0.0, output_field=DecimalField(),
+        ),
+    ).order_by('-submitted_at'))
+    top_boxes_by_revenue = [
+        {'name': b.name, 'revenue': float(b.revenue), 'bookings': b.booking_count}
+        for b in sorted(boxes_qs, key=lambda b: b.revenue, reverse=True)[:10]
+    ]
 
     # Recent activity stream (latest 10 events)
     recent_activity = []
@@ -474,7 +644,12 @@ def admin_dashboard_data(request):
             'total_owners': total_owners,
             'total_bookings': total_bookings,
             'platform_revenue': platform_revenue,
-            'pending_boxes_count': pending_boxes.count(),
+            'pending_boxes_count': pending_boxes_count,
+            'approved_boxes_count': approved_boxes_count,
+            'rejected_boxes_count': rejected_boxes_count,
+            'cancellation_rate_pct': cancellation_rate_pct,
+            'mom_revenue_growth_pct': mom_revenue_growth_pct,
+            'mom_bookings_growth_pct': mom_bookings_growth_pct,
         },
         'pending_boxes': [
             {
@@ -496,10 +671,12 @@ def admin_dashboard_data(request):
                 'email': user.email,
                 'role': user.role.capitalize(),
                 'status': 'Active' if user.is_active else 'Inactive',
-                'bookings': user.bookings.filter(booking_status__in=['Confirmed', 'Completed']).count(),
+                'bookings': user.booking_count,
                 'joinDate': user.date_joined.date().isoformat(),
             }
-            for user in all_users
+            for user in User.objects.annotate(
+                booking_count=Coalesce(Count('bookings', filter=Q(bookings__booking_status__in=ACTIVE_STATUSES)), 0)
+            ).order_by('-date_joined')
         ],
         'bookings': [
             {
@@ -512,7 +689,7 @@ def admin_dashboard_data(request):
                 'commission': str(round(float(b.total_amount or 0) * 0.1, 2)),
                 'status': b.booking_status,
             }
-            for b in all_bookings
+            for b in Booking.objects.select_related('user', 'box', 'box__owner').order_by('-created_at')
         ],
         'boxes': [
             {
@@ -522,16 +699,10 @@ def admin_dashboard_data(request):
                 'sport': box.sport,
                 'location': box.location,
                 'status': box.status.capitalize(),
-                'bookings': box.bookings.filter(
-                    booking_status__in=['Confirmed', 'Completed']
-                ).count(),
-                'revenue': box.bookings.filter(
-                    booking_status__in=['Confirmed', 'Completed']
-                ).aggregate(
-                    total=Sum('total_amount', default=0.0, output_field=DecimalField())
-                )['total'],
+                'bookings': box.booking_count,
+                'revenue': box.revenue,
             }
-            for box in all_boxes
+            for box in boxes_qs
         ],
         'recent_users': UserSerializer(recent_users, many=True).data,
         'recent_bookings': [
@@ -545,25 +716,6 @@ def admin_dashboard_data(request):
                 'created_at': b.created_at,
             }
             for b in recent_bookings
-        ],
-        'boxes_overview': [
-            {
-                'id': box.id,
-                'name': box.name,
-                'owner': box.owner.email if box.owner else None,
-                'sport': box.sport,
-                'location': box.location,
-                'status': box.status,
-                'bookings': box.bookings.filter(
-                    booking_status__in=['Confirmed', 'Completed']
-                ).count(),
-                'revenue': box.bookings.filter(
-                    booking_status__in=['Confirmed', 'Completed']
-                ).aggregate(
-                    total=Sum('total_amount', default=0.0, output_field=DecimalField())
-                )['total'],
-            }
-            for box in boxes_overview
         ],
         'revenue_chart': {
             'labels': labels,
@@ -582,6 +734,9 @@ def admin_dashboard_data(request):
             'data': list(sports_distribution.values()),
         },
         'top_cities': top_cities,
+        'peak_booking_hours': peak_booking_hours,
+        'owner_performance_ranking': owner_performance_ranking,
+        'top_boxes_by_revenue': top_boxes_by_revenue,
         'recent_activity': [
             {
                 'type': event['type'],

@@ -1,22 +1,37 @@
 # bookings/views.py
-from rest_framework import viewsets, status
+import uuid
+from datetime import datetime, timedelta
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.db.models import Q
+from django.utils import timezone
+from rest_framework import mixins, viewsets, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError
-from django.db import transaction
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from user.permissions import IsAdminUser
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from datetime import datetime, timedelta, time, date
-from django.conf import settings
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters as drf_filters
 
 from BookMyBox.rate_limit import check_rate_limit
-from . import broadcasting, reservation
-from .models import Booking
-from .serializers import BookingSerializer
+from BookMyBox.pagination import StandardResultsPagination
+from BookMyBox.tasks import send_email_task
+from . import broadcasting, reservation, services
+from .filters import AdminBookingFilter
+from .models import Booking, BookingInvite, Coupon, WaitlistEntry
+from .serializers import AdminBookingSerializer, BookingInviteSerializer, BookingSerializer, CouponSerializer, WaitlistEntrySerializer
+from .services import BookingWriteError, CancellationError, cancel_booking
 from .tasks import expire_hold_task, promote_and_broadcast
 from boxes.models import Box
+from boxes.pricing import resolve_box_price
+from user.notifications import notify
+
+User = get_user_model()
+
+INVITE_TOKEN_TTL_DAYS = 7
 
 # Deliberately tighter than the chatbot's 20/60s: a reserve() call claims a
 # real contended resource (or a queue slot for one), not just a chat
@@ -24,18 +39,6 @@ from boxes.models import Box
 # comparing a few time slots in a row is still well within this budget.
 RESERVE_RATE_LIMIT = 10
 RESERVE_RATE_LIMIT_WINDOW_SECONDS = 60
-
-
-class BookingWriteError(Exception):
-    """Raised by _create_booking_row for any expected failure (box missing,
-    not approved, overlap conflict) so both create() and confirm() can share
-    one code path for turning it into an HTTP response, instead of each
-    reimplementing the same box-lock-and-check logic."""
-
-    def __init__(self, detail, status_code):
-        self.detail = detail
-        self.status_code = status_code
-        super().__init__(detail)
 
 
 class BookingViewSet(viewsets.ModelViewSet):
@@ -46,120 +49,256 @@ class BookingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.request.user.is_authenticated and self.request.user.role == 'admin':
             return self.queryset
-        return self.queryset.filter(user=self.request.user)
-
-    def _parse_time(self, time_str):
-        try:
-            hour, minute = map(int, time_str.split(':'))
-            return time(hour, minute)
-        except (ValueError, IndexError, AttributeError):
-            raise ValidationError("Invalid time format. Use HH:MM.")
-
-    def _compute_end_time_str(self, booking_date, start_time_str, duration_hours):
-        start_time_obj = self._parse_time(start_time_str)
-        start_datetime = datetime.combine(booking_date, start_time_obj)
-        end_datetime = start_datetime + timedelta(hours=duration_hours)
-        # Bookings must end by 23:00 at the latest
-        if end_datetime.hour > 23 or (end_datetime.hour == 23 and end_datetime.minute > 0):
-            raise ValidationError("Booking cannot extend past 23:00.")
-        return end_datetime.time().strftime("%H:%M")
-
-    def _validate_booking_request(self, data):
-        """Shared by create() (direct booking) and reserve() (two-phase
-        hold/queue booking) — both accept the same {boxId, date, startTime,
-        duration} shape and need identical validation."""
-        box_id = data.get('boxId')
-        date_str = data.get('date')
-        start_time_str = data.get('startTime')
-        duration_hours = data.get('duration')
-
-        if not all([box_id, date_str, start_time_str, duration_hours]):
-            raise ValidationError("Missing required booking details (boxId, date, startTime, duration).")
-
-        try:
-            duration_hours = int(duration_hours)
-            if not (1 <= duration_hours <= 6):
-                raise ValidationError("Duration must be between 1 and 6 hours.")
-        except (ValueError, TypeError):
-            raise ValidationError("Invalid duration format.")
-
-        try:
-            booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        except ValueError:
-            raise ValidationError("Invalid date format. Use YYYY-MM-DD.")
-
-        if booking_date < timezone.now().date():
-            raise ValidationError("Cannot book a slot in the past.")
-
-        end_time_str = self._compute_end_time_str(booking_date, start_time_str, duration_hours)
-
-        try:
-            box = Box.objects.get(pk=box_id)
-        except Box.DoesNotExist:
-            raise ValidationError("Box not found.")
-
-        if start_time_str < box.opening_time or end_time_str > box.closing_time:
-            raise ValidationError(
-                f"This facility is only bookable between {box.opening_time} and {box.closing_time}."
-            )
-
-        return {
-            'box_id': box_id,
-            'booking_date': booking_date,
-            'start_time_str': start_time_str,
-            'duration_hours': duration_hours,
-            'end_time_str': end_time_str,
-        }
-
-    def _create_booking_row(self, user, box_id, booking_date, start_time_str, duration_hours, end_time_str):
-        """The existing transaction.atomic() + select_for_update() + overlaps()
-        DB write — the authoritative safety net, reused as-is by both create()
-        (direct booking) and confirm() (two-phase hold/queue booking) rather
-        than reimplemented. Redis (reservation.py) is a fast-path/UX layer on
-        top of this, never a replacement for it."""
-        with transaction.atomic():
-            # Lock the box row to prevent race conditions while checking availability.
-            try:
-                box = Box.objects.select_for_update().get(pk=box_id)
-            except Box.DoesNotExist:
-                raise BookingWriteError("Box not found.", status.HTTP_400_BAD_REQUEST)
-
-            if box.status != 'approved':
-                raise BookingWriteError("This facility is not available for booking yet.", status.HTTP_400_BAD_REQUEST)
-
-            expected_total_amount = box.price * duration_hours
-
-            # Check overlap against all non-cancelled bookings for this box/date.
-            existing_bookings = Booking.objects.filter(
-                box=box,
-                date=booking_date,
-                booking_status__in=['Confirmed', 'Completed']
-            )
-
-            if any(existing.overlaps(booking_date, start_time_str, end_time_str) for existing in existing_bookings):
-                raise BookingWriteError("This time slot overlaps with an existing booking.", status.HTTP_409_CONFLICT)
-
-            return Booking.objects.create(
-                user=user,
-                box=box,
-                date=booking_date,
-                start_time=start_time_str,
-                end_time=end_time_str,
-                duration=duration_hours,
-                total_amount=expected_total_amount,
-                payment_status='Not Required',
-                payment_id=None,
-                booking_status='Confirmed'
-            )
+        # A participant who accepted a group-booking invite (see
+        # BookingInvite) can see the booking here too, alongside the
+        # booker's own rows — but stays read-only: `cancel` below still
+        # gates on `booking.user`, not this broadened visibility.
+        own_or_participant = Q(user=self.request.user) | Q(
+            invites__invited_user=self.request.user, invites__status='accepted',
+        )
+        return self.queryset.filter(own_or_participant).distinct().prefetch_related('invites')
 
     def create(self, request, *args, **kwargs):
-        parsed = self._validate_booking_request(request.data)
+        parsed = services.validate_booking_request(request.data)
         try:
-            booking = self._create_booking_row(request.user, **parsed)
+            booking = services.create_booking_row(
+                request.user, **parsed, coupon_code=request.data.get('couponCode'),
+            )
         except BookingWriteError as e:
             return Response({'detail': e.detail}, status=e.status_code)
+        notify(
+            booking.box.owner,
+            'New booking received',
+            f"{request.user.full_name or request.user.email} booked {booking.box.name} on "
+            f"{booking.date} at {booking.start_time}.",
+        )
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def recurring(self, request):
+        """Book the same slot weekly for N occurrences in one action.
+        Deliberately bypasses the Redis hold/queue system entirely (same
+        as the owner-manual booking path in OwnerBookingViewSet.book) —
+        these are proactive future bookings, not typically hot-contested
+        slots, so N sequential hold+confirm round trips would add
+        complexity for no real benefit. Each occurrence is validated and
+        written independently so one already-booked week doesn't block
+        the rest — partial success is the expected, correct outcome."""
+        try:
+            weeks = int(request.data.get('weeks'))
+        except (TypeError, ValueError):
+            return Response({'detail': 'weeks must be a number.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not (2 <= weeks <= 12):
+            return Response({'detail': 'weeks must be between 2 and 12.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            base_date = datetime.strptime(request.data.get('date', ''), '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        box = Box.objects.filter(pk=request.data.get('boxId')).first()
+
+        group_id = uuid.uuid4()
+        created, failed = [], []
+        for i in range(weeks):
+            occurrence_date = base_date + timedelta(weeks=i)
+            occurrence_data = {**request.data, 'date': occurrence_date.isoformat()}
+            try:
+                parsed = services.validate_booking_request(occurrence_data)
+                booking = services.create_booking_row(request.user, **parsed, recurring_group_id=group_id)
+                created.append(self.get_serializer(booking).data)
+            except ValidationError as e:
+                reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+                failed.append({'date': occurrence_date.isoformat(), 'reason': str(reason)})
+            except BookingWriteError as e:
+                failed.append({'date': occurrence_date.isoformat(), 'reason': e.detail})
+
+        if created and box:
+            notify(
+                box.owner,
+                'New recurring booking',
+                f"{request.user.full_name or request.user.email} booked {box.name} weekly — "
+                f"{len(created)} of {weeks} weeks confirmed starting {base_date}.",
+            )
+
+        return Response(
+            {'created': created, 'failed': failed, 'group_id': str(group_id)},
+            status=status.HTTP_201_CREATED if created else status.HTTP_409_CONFLICT,
+        )
+
+    @action(detail=False, methods=['post'], url_path='coupons/validate', permission_classes=[IsAuthenticated])
+    def validate_coupon(self, request):
+        """Dry-run coupon check for Checkout's "Apply" button — calls the
+        same services.apply_coupon() used for real at confirm-time, but
+        never increments used_count (see that function's docstring). The
+        real, authoritative application happens again inside
+        create_booking_row()'s locked transaction; this is purely a preview."""
+        box = Box.objects.filter(pk=request.data.get('boxId')).first()
+        if not box:
+            return Response({'valid': False, 'detail': 'Box not found.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            duration_hours = int(request.data.get('duration'))
+        except (TypeError, ValueError):
+            return Response({'valid': False, 'detail': 'Invalid duration.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            booking_date = datetime.strptime(request.data.get('date', ''), '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'valid': False, 'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+        start_time_str = request.data.get('startTime', '')
+
+        try:
+            coupon, discount_amount = services.apply_coupon(
+                box, duration_hours, request.data.get('code'), booking_date, start_time_str,
+            )
+        except ValidationError as e:
+            reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+            return Response({'valid': False, 'detail': str(reason)}, status=status.HTTP_400_BAD_REQUEST)
+
+        gross = resolve_box_price(box, booking_date, start_time_str) * duration_hours
+        return Response({
+            'valid': True,
+            'code': coupon.code,
+            'discount_amount': str(discount_amount),
+            'final_amount': str(gross - discount_amount),
+        })
+
+    @action(detail=False, methods=['post'], url_path='price-preview', permission_classes=[IsAuthenticated])
+    def price_preview(self, request):
+        """Dry-run price resolution for BoxDetails' live total-estimate,
+        mirroring validate_coupon's exact pattern — returns the resolved
+        per-hour rate and gross total for a given box/date/startTime/
+        duration, so the frontend doesn't have to duplicate
+        resolve_box_price()'s peak-pricing lookup in JS."""
+        box = Box.objects.filter(pk=request.data.get('boxId')).first()
+        if not box:
+            return Response({'detail': 'Box not found.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            duration_hours = int(request.data.get('duration'))
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid duration.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            booking_date = datetime.strptime(request.data.get('date', ''), '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+        start_time_str = request.data.get('startTime', '')
+
+        rate = resolve_box_price(box, booking_date, start_time_str)
+        return Response({
+            'rate_per_hour': str(rate),
+            'total': str(rate * duration_hours),
+            'is_peak_rate': rate != box.price,
+        })
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def invite(self, request, pk=None):
+        """Invite someone to a booking the caller made (group/split
+        bookings). Only the original booker can invite — a booking visible
+        to the caller only via an already-accepted invite (see
+        get_queryset()) is read-only, same as `cancel` below. Accepts
+        either {invited_user_id} (an existing account, resolved by search)
+        or {invited_email} (works even if no account exists yet — the
+        invite is claimed on signup/login via the emailed link)."""
+        booking = self.get_object()
+        if booking.user_id != request.user.id:
+            return Response({'detail': 'Only the booker can invite others.'}, status=status.HTTP_403_FORBIDDEN)
+
+        invited_user = None
+        invited_user_id = request.data.get('invited_user_id')
+        if invited_user_id:
+            invited_user = User.objects.filter(pk=invited_user_id).first()
+            if not invited_user:
+                return Response({'detail': 'User not found.'}, status=status.HTTP_400_BAD_REQUEST)
+            invited_email = invited_user.email
+        else:
+            invited_email = (request.data.get('invited_email') or '').strip().lower()
+            if not invited_email:
+                return Response({'detail': 'invited_user_id or invited_email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+            # An existing account with this email can skip the claim step
+            # entirely — resolve it now so they see the invite in-app
+            # immediately, same as being invited by search.
+            invited_user = User.objects.filter(email__iexact=invited_email).first()
+
+        if invited_user and invited_user.id == request.user.id:
+            return Response({'detail': "You can't invite yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        invite = BookingInvite.objects.create(
+            booking=booking, invited_by=request.user, invited_user=invited_user,
+            invited_email=invited_email, expires_at=timezone.now() + timedelta(days=INVITE_TOKEN_TTL_DAYS),
+        )
+
+        claim_link = f"{settings.FRONTEND_URL}/invites/{invite.token}"
+        send_email_task.delay(
+            invited_email,
+            f"{request.user.full_name or request.user.email} invited you to a booking",
+            f"<p>{request.user.full_name or request.user.email} invited you to join their booking at "
+            f"{booking.box.name} on {booking.date} at {booking.start_time}.</p>"
+            f'<p><a href="{claim_link}">{claim_link}</a></p>'
+            f"<p>This invite expires in {INVITE_TOKEN_TTL_DAYS} days.</p>",
+        )
+        if invited_user:
+            notify(
+                invited_user,
+                "You're invited to a booking",
+                f"{request.user.full_name or request.user.email} invited you to join their booking at "
+                f"{booking.box.name} on {booking.date} at {booking.start_time}.",
+                link=f'/invites/{invite.token}',
+            )
+
+        return Response(BookingInviteSerializer(invite).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='invites/(?P<token>[^/.]+)', permission_classes=[AllowAny])
+    def invite_detail(self, request, token=None):
+        """Public lookup so the /invites/:token landing page can show
+        "X invited you to Y" before the visitor is authenticated — accept/
+        decline themselves still require login."""
+        invite = get_object_or_404(BookingInvite, token=token)
+        return Response({
+            'valid': invite.is_claimable(),
+            'status': invite.status,
+            'invited_by_name': invite.invited_by.full_name or invite.invited_by.email,
+            'box_name': invite.booking.box.name,
+            'date': invite.booking.date,
+            'start_time': invite.booking.start_time,
+            'duration': invite.booking.duration,
+        })
+
+    @action(detail=False, methods=['post'], url_path='invites/(?P<token>[^/.]+)/accept', permission_classes=[IsAuthenticated])
+    def accept_invite(self, request, token=None):
+        invite = get_object_or_404(BookingInvite, token=token)
+        if not invite.is_claimable():
+            return Response({'detail': 'This invite is no longer valid.'}, status=status.HTTP_409_CONFLICT)
+
+        invite.invited_user = request.user
+        invite.status = 'accepted'
+        invite.responded_at = timezone.now()
+        invite.save(update_fields=['invited_user', 'status', 'responded_at'])
+
+        notify(
+            invite.invited_by,
+            'Invite accepted',
+            f"{request.user.full_name or request.user.email} accepted your invite to "
+            f"{invite.booking.box.name} on {invite.booking.date} at {invite.booking.start_time}.",
+        )
+        return Response(self.get_serializer(invite.booking).data)
+
+    @action(detail=False, methods=['post'], url_path='invites/(?P<token>[^/.]+)/decline', permission_classes=[IsAuthenticated])
+    def decline_invite(self, request, token=None):
+        invite = get_object_or_404(BookingInvite, token=token)
+        if not invite.is_claimable():
+            return Response({'detail': 'This invite is no longer valid.'}, status=status.HTTP_409_CONFLICT)
+
+        invite.status = 'declined'
+        invite.responded_at = timezone.now()
+        invite.save(update_fields=['status', 'responded_at'])
+
+        notify(
+            invite.invited_by,
+            'Invite declined',
+            f"{request.user.full_name or request.user.email} declined your invite to "
+            f"{invite.booking.box.name} on {invite.booking.date} at {invite.booking.start_time}.",
+        )
+        return Response({'status': 'declined'})
 
     def update(self, request, *args, **kwargs):
         # Disallow full updates on bookings; use cancellation or create a new booking instead.
@@ -177,24 +316,15 @@ class BookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def cancel(self, request, pk=None):
         booking = self.get_object()
-        
+
         if booking.user != request.user and request.user.role != 'admin':
             return Response({'detail': 'You do not have permission to cancel this booking.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Timezone-aware cancellation deadline check
-        booking_dt = datetime.combine(booking.date, time.fromisoformat(booking.start_time))
-        if settings.USE_TZ:
-            booking_dt = timezone.make_aware(booking_dt)
-        now = timezone.now()
+        try:
+            cancel_booking(booking, cancelled_by=request.user, reason=request.data.get('reason'))
+        except CancellationError as e:
+            return Response({'detail': e.detail}, status=e.status_code)
 
-        if now > booking_dt - timedelta(hours=2):
-            return Response({'detail': 'Cancellation not allowed within 2 hours of booking time.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if booking.booking_status == 'Cancelled':
-            return Response({'detail': 'Booking already cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        booking.booking_status = 'Cancelled'
-        booking.save()
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -216,7 +346,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        parsed = self._validate_booking_request(request.data)
+        parsed = services.validate_booking_request(request.data)
 
         # Cheap read-only pre-check: if a real booking already covers this
         # exact slot, don't even touch Redis.
@@ -258,7 +388,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     def confirm(self, request, hold_token=None):
         """Second phase: finalize a held slot into a real Booking row. The
         DB-level transaction.atomic()+select_for_update()+overlaps() check
-        in _create_booking_row remains authoritative — Redis said this user
+        in create_booking_row remains authoritative — Redis said this user
         may proceed, but the DB gets the final word (see the module-level
         scoping-decision note in reservation.py for why that can matter)."""
         result = reservation.confirm_reservation(hold_token, user_id=request.user.id)
@@ -269,18 +399,20 @@ class BookingViewSet(viewsets.ModelViewSet):
             )
 
         slot = reservation.parse_slot_signature(result.sig)
+        slot_date = datetime.strptime(slot['date'], '%Y-%m-%d').date()
         try:
-            booking = self._create_booking_row(
+            booking = services.create_booking_row(
                 user=request.user,
                 box_id=slot['box_id'],
-                booking_date=datetime.strptime(slot['date'], '%Y-%m-%d').date(),
+                booking_date=slot_date,
                 start_time_str=slot['start_time'],
                 duration_hours=slot['duration'],
-                end_time_str=self._compute_end_time_str(
-                    datetime.strptime(slot['date'], '%Y-%m-%d').date(),
+                end_time_str=services.compute_end_time_str(
+                    slot_date,
                     slot['start_time'],
                     slot['duration'],
                 ),
+                coupon_code=request.data.get('couponCode'),
             )
         except BookingWriteError as e:
             # Redis said we could confirm, but the DB's authoritative check
@@ -298,6 +430,12 @@ class BookingViewSet(viewsets.ModelViewSet):
         # so they receive their own broadcast too — booked_by_user_id lets
         # the frontend tell that apart from an actual "someone else took it".
         broadcasting.broadcast_slot_booked(result.sig, request.user.id)
+        notify(
+            booking.box.owner,
+            'New booking received',
+            f"{request.user.full_name or request.user.email} booked {booking.box.name} on "
+            f"{booking.date} at {booking.start_time}.",
+        )
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -384,8 +522,94 @@ class BookingViewSet(viewsets.ModelViewSet):
             self.permission_classes = [IsAuthenticated]
         elif self.action == 'destroy':
             self.permission_classes = [IsAdminUser]
-        elif self.action == 'booked_slots':
+        elif self.action in ('booked_slots', 'invite_detail'):
             self.permission_classes = []
         else:
             self.permission_classes = [IsAuthenticated]
         return super().get_permissions()
+
+
+class AdminBookingViewSet(viewsets.ReadOnlyModelViewSet):
+    """Dedicated paginated/filterable/searchable bookings list for the admin
+    Bookings tab — separate from BookingViewSet (which is the booking
+    customer's own CRUD surface) so admin-scale listing doesn't have to
+    contend with that viewset's per-user get_queryset()."""
+    serializer_class = AdminBookingSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
+    filter_backends = [DjangoFilterBackend, drf_filters.SearchFilter, drf_filters.OrderingFilter]
+    filterset_class = AdminBookingFilter
+    search_fields = ['user__email', 'user__first_name', 'user__last_name', 'box__name', 'box__owner__email']
+    ordering_fields = ['date', 'created_at', 'total_amount']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        return Booking.objects.select_related('user', 'box', 'box__owner').all()
+
+
+class AdminCouponViewSet(viewsets.ModelViewSet):
+    """Admin CRUD for discount coupons — create/list/deactivate. Mounted at
+    its own 'admin/coupons' router prefix, included before the base
+    BookingViewSet router in urls.py, same collision-avoidance reasoning
+    already documented there for AdminBookingViewSet."""
+    serializer_class = CouponSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
+    queryset = Coupon.objects.all()
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class WaitlistViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """A user's own persistent "notify me if this slot opens up" signups —
+    distinct from the short-lived Redis hold/queue in reservation.py, which
+    only matters during an active checkout. See _notify_and_clear_waitlist()
+    in services.py for the notify+clear-on-cancel side of this."""
+    serializer_class = WaitlistEntrySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return WaitlistEntry.objects.filter(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        box_id = request.data.get('boxId') or request.data.get('box')
+        date_str = request.data.get('date')
+        start_time = request.data.get('startTime') or request.data.get('start_time')
+        duration = request.data.get('duration')
+        if not all([box_id, date_str, start_time, duration]):
+            return Response(
+                {'detail': 'boxId, date, startTime, and duration are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Waitlisting only makes sense for a slot that's actually taken —
+        # an open slot should just be booked directly.
+        already_booked = Booking.objects.filter(
+            box_id=box_id, date=date_str, start_time=start_time,
+            booking_status__in=['Confirmed', 'Completed'],
+        ).exists()
+        if not already_booked:
+            return Response({'detail': 'This slot is not currently booked.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        entry, created = WaitlistEntry.objects.get_or_create(
+            user=request.user, box_id=box_id, date=date_str, start_time=start_time, duration=duration,
+        )
+        return Response(
+            self.get_serializer(entry).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=['get'])
+    def mine(self, request):
+        """Just the slot signatures (+id, so the caller can un-waitlist)
+        the frontend needs to know which booked slots already show 'On
+        waitlist' — cheaper than the full list() with its box_name lookups.
+        Optional ?box=<id> narrows to one box, since BoxDetails.jsx only
+        ever cares about its own box's slots."""
+        entries = self.get_queryset()
+        box_id = request.query_params.get('box')
+        if box_id:
+            entries = entries.filter(box_id=box_id)
+        entries = entries.values('id', 'box_id', 'date', 'start_time', 'duration')
+        return Response(list(entries))

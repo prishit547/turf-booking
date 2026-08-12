@@ -4,7 +4,13 @@ import { MessageCircle, X, Send, Bot, User } from 'lucide-react';
 import { api } from '../../api';
 import { Button } from '../ui';
 
-const Chatbot = () => {
+/**
+ * `raised`: shifts the floating button/window up above a page's sticky
+ * bottom bar (e.g. BoxDetails' BookingSummaryBar) so the two don't overlap
+ * — otherwise this fixed bottom-right widget sits directly on top of that
+ * bar's "Continue to book" button on narrow screens.
+ */
+const Chatbot = ({ raised = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [sessionId, setSessionId] = useState(null);
     const [messages, setMessages] = useState([
@@ -106,7 +112,7 @@ const Chatbot = () => {
         <>
             {/* Floating Chat Icon */}
             <motion.div
-                className="fixed bottom-6 right-6 z-50"
+                className={`fixed right-6 z-50 transition-[bottom] duration-200 ${raised ? 'bottom-24' : 'bottom-6'}`}
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ delay: 1, type: "spring", stiffness: 260, damping: 20 }}
@@ -148,7 +154,7 @@ const Chatbot = () => {
             <AnimatePresence>
                 {isOpen && (
                     <motion.div
-                        className="fixed bottom-6 right-6 z-50 w-96 h-[500px] bg-card rounded-2xl shadow-lift border border-border flex flex-col overflow-hidden"
+                        className={`fixed left-6 right-6 z-50 h-[70vh] max-h-[500px] sm:left-auto sm:w-96 sm:h-[500px] bg-card rounded-2xl shadow-lift border border-border flex flex-col overflow-hidden transition-[bottom] duration-200 ${raised ? 'bottom-24' : 'bottom-6'}`}
                         initial={{ opacity: 0, scale: 0.8, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.8, y: 20 }}

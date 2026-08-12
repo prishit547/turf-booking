@@ -199,6 +199,23 @@ export const BoxProvider = ({ children }) => {
         }
     }, [fetchOwnerBoxes, setLoadingFor, setErrorFor]);
 
+    const deleteBox = useCallback(async (boxId) => {
+        setLoadingFor('owner', true);
+        setErrorFor('owner', null);
+        try {
+            await api.delete(`/boxes/owner/${boxId}/`);
+            await fetchOwnerBoxes();
+            return { success: true };
+        } catch (err) {
+            console.error('Error deleting box:', err.response?.data);
+            const errorMessage = err.response?.data?.detail || 'Failed to delete the box.';
+            setErrorFor('owner', errorMessage);
+            return { success: false, error: errorMessage };
+        } finally {
+            setLoadingFor('owner', false);
+        }
+    }, [fetchOwnerBoxes, setLoadingFor, setErrorFor]);
+
     const fetchPendingBoxes = useCallback(async () => {
         setLoadingFor('pending', true);
         setErrorFor('pending', null);
@@ -233,6 +250,21 @@ export const BoxProvider = ({ children }) => {
         } catch (err) {
             console.error('Error rejecting box:', err);
             const errorMessage = err.response?.data?.detail || 'Failed to reject box.';
+            return { success: false, error: errorMessage };
+        }
+    }, [fetchPendingBoxes]);
+
+    // Middle ground between approve/reject — the box goes back to the
+    // owner with notes instead of being killed outright. Editing it (see
+    // OwnerBoxViewSet.perform_update()) auto-resubmits it to pending.
+    const requestBoxChanges = useCallback(async (boxId, reason) => {
+        try {
+            await api.post(`/boxes/admin/${boxId}/request-changes/`, { reason });
+            await fetchPendingBoxes();
+            return { success: true };
+        } catch (err) {
+            console.error('Error requesting box changes:', err);
+            const errorMessage = err.response?.data?.detail || 'Failed to request changes.';
             return { success: false, error: errorMessage };
         }
     }, [fetchPendingBoxes]);
@@ -333,8 +365,10 @@ export const BoxProvider = ({ children }) => {
         fetchPendingBoxes,
         addBox,
         updateBox,
+        deleteBox,
         approveBox,
         rejectBox,
+        requestBoxChanges,
         filters,
         setFilters,
         loadingMap,
@@ -350,7 +384,7 @@ export const BoxProvider = ({ children }) => {
             fetchPopularBoxes();
             fetchOwnerBoxes();
         }
-    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, addBox, updateBox, approveBox, rejectBox, filters]);
+    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, addBox, updateBox, deleteBox, approveBox, rejectBox, requestBoxChanges, filters]);
 
     return (
         <BoxContext.Provider value={contextValue}>

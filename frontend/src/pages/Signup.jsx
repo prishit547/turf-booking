@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Eye, EyeOff, Mail, Lock, Phone, MapPin, BriefcaseBusiness } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { useAuth } from '../api.jsx'
+import { PENDING_INVITE_KEY } from './InviteClaim'
 import GoogleLoginButton from '../components/common/GoogleLoginButton.jsx'
 import { AuthShell } from '../components/auth/AuthShell'
 import { Input, Select } from '../components/ui'
@@ -84,6 +85,13 @@ const Signup = () => {
 
       if (result.success) {
         toast.success('Registration successful! Welcome to BookMyBox.')
+        // A pending booking invite (see InviteClaim.jsx) takes priority
+        // over the normal role-based redirect.
+        const pendingInviteToken = localStorage.getItem(PENDING_INVITE_KEY)
+        if (pendingInviteToken) {
+          navigate(`/invites/${pendingInviteToken}`)
+          return
+        }
         const userRole = result.user?.role
         switch (userRole) {
           case 'admin': navigate('/admin-dashboard'); break

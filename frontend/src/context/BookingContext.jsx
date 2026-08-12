@@ -159,10 +159,12 @@ export const BookingProvider = ({ children }) => {
         }
     }, []);
 
-    // Second phase: finalize a held slot into a real booking.
-    const confirmReservation = useCallback(async (holdToken) => {
+    // Second phase: finalize a held slot into a real booking. couponCode is
+    // optional — the backend re-validates it from scratch (never trusts a
+    // discount amount computed client-side).
+    const confirmReservation = useCallback(async (holdToken, couponCode) => {
         try {
-            const response = await api.post(`/bookings/confirm/${holdToken}/`);
+            const response = await api.post(`/bookings/confirm/${holdToken}/`, couponCode ? { couponCode } : {});
             dispatch({ type: 'ADD_BOOKING', payload: response.data });
             return { success: true, data: response.data };
         } catch (error) {
@@ -183,6 +185,106 @@ export const BookingProvider = ({ children }) => {
         }
     }, []);
 
+    // Books the same slot weekly for `weeks` occurrences in one request,
+    // bypassing the reserve/hold flow entirely (see backend docstring on
+    // BookingViewSet.recurring). Always resolves successfully (never
+    // throws) — the caller inspects `created`/`failed` to report which
+    // weeks landed, since partial success is the expected outcome.
+    const createRecurringBooking = useCallback(async ({ boxId, date, startTime, duration, weeks }) => {
+        try {
+            const response = await api.post('/bookings/recurring/', { boxId, date, startTime, duration, weeks });
+            response.data.created?.forEach((booking) => dispatch({ type: 'ADD_BOOKING', payload: booking }));
+            return { success: true, ...response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to create recurring booking.';
+            return { success: false, error: errorMessage };
+        }
+    }, [dispatch]);
+
+    // Fetches the caller's own waitlist entries (id + slot signature),
+    // optionally narrowed to one box — cheap enough to refetch on every
+    // date change (see BoxDetails.jsx). Returns [] on failure rather than
+    // throwing, since this backs a passive "which slots show ✓" display.
+    const fetchMyWaitlist = useCallback(async (boxId) => {
+        try {
+            const response = await api.get('/bookings/waitlist/mine/', { params: boxId ? { box: boxId } : {} });
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching waitlist:', error.response?.data || error.message);
+            return [];
+        }
+    }, []);
+
+    const joinWaitlist = useCallback(async ({ boxId, date, startTime, duration }) => {
+        try {
+            const response = await api.post('/bookings/waitlist/', { boxId, date, startTime, duration });
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to join waitlist.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
+    const leaveWaitlist = useCallback(async (entryId) => {
+        try {
+            await api.delete(`/bookings/waitlist/${entryId}/`);
+            return { success: true };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to leave waitlist.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
+    // Group/split bookings: invite someone to a booking the caller made.
+    // `invitedUserId` (an existing account, from searchUsers) or
+    // `invitedEmail` (works even without an account — claimed on signup).
+    const inviteToBooking = useCallback(async (bookingId, { invitedUserId, invitedEmail }) => {
+        try {
+            const response = await api.post(`/bookings/${bookingId}/invite/`, {
+                invited_user_id: invitedUserId,
+                invited_email: invitedEmail,
+            });
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to send invite.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
+    // action is 'accept' or 'decline' — both are token-authorized (see
+    // bookings/views.py's accept_invite/decline_invite docstrings).
+    const respondToInvite = useCallback(async (token, action) => {
+        try {
+            const response = await api.post(`/bookings/invites/${token}/${action}/`);
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || `Failed to ${action} invite.`;
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
+    // Public — no auth required (see invite_detail's permission_classes),
+    // so InviteClaim.jsx can show "X invited you to Y" before login.
+    const getInviteDetail = useCallback(async (token) => {
+        try {
+            const response = await api.get(`/bookings/invites/${token}/`);
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'This invite could not be found.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
+    const searchUsers = useCallback(async (query) => {
+        try {
+            const response = await api.get('/user/search/', { params: { q: query } });
+            return response.data;
+        } catch (error) {
+            console.error('Error searching users:', error.response?.data || error.message);
+            return [];
+        }
+    }, []);
+
     const value = {
         ...state,
         fetchBookings,
@@ -190,8 +292,16 @@ export const BookingProvider = ({ children }) => {
         updateBooking,
         cancelBooking,
         reserveSlot,
+        createRecurringBooking,
         confirmReservation,
-        releaseHold
+        releaseHold,
+        fetchMyWaitlist,
+        joinWaitlist,
+        leaveWaitlist,
+        inviteToBooking,
+        respondToInvite,
+        getInviteDetail,
+        searchUsers,
     };
 
     return (
