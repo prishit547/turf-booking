@@ -25,8 +25,9 @@ from user.models import User
 from user.notifications import notify
 from user.permissions import IsAdminOrOwner, IsOwnerUser
 from BookMyBox.pagination import StandardResultsPagination
-from .models import Payout
-from .serializers import OwnerDashboardStatsSerializer, PayoutSerializer
+from .models import Payout, PayoutSchedule
+from .serializers import OwnerDashboardStatsSerializer, PayoutScheduleSerializer, PayoutSerializer
+from .services import compute_owner_earnings
 
 
 class OwnerDashboardAPIView(APIView):
@@ -360,9 +361,6 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
     permission_classes = [IsAdminOrOwner]
     pagination_class = StandardResultsPagination
 
-    COMMISSION_RATE = 0.1
-    ACTIVE_STATUSES = ["Confirmed", "Completed"]
-
     def get_queryset(self):
         if self.request.user.role == "admin":
             return Payout.objects.select_related("owner").all()
@@ -379,11 +377,8 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
         )
 
     def _balance_for_owner(self, owner):
-        revenue = Booking.objects.filter(
-            box__owner=owner, booking_status__in=self.ACTIVE_STATUSES,
-        ).aggregate(total=Coalesce(Sum("total_amount"), 0.0, output_field=DecimalField()))["total"]
-        commission = float(revenue) * self.COMMISSION_RATE
-        net = float(revenue) - commission
+        earnings = compute_owner_earnings(owner)
+        net = float(earnings["net_revenue"])
         paid = Payout.objects.filter(owner=owner).aggregate(
             total=Coalesce(Sum("amount"), 0.0, output_field=DecimalField())
         )["total"]
@@ -391,11 +386,21 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
             "owner_id": owner.id,
             "owner_email": owner.email,
             "owner_name": owner.full_name or owner.email,
-            "gross_revenue": round(float(revenue), 2),
-            "commission": round(commission, 2),
+            "gross_revenue": round(float(earnings["gross_revenue"]), 2),
+            "commission": round(float(earnings["commission"]), 2),
             "net_revenue": round(net, 2),
             "total_paid": round(float(paid), 2),
             "balance_due": round(net - float(paid), 2),
+            "by_sport": [
+                {
+                    "sport": row["sport"],
+                    "rate": round(float(row["rate"]) * 100, 2),
+                    "gross": round(float(row["gross"]), 2),
+                    "commission": round(float(row["commission"]), 2),
+                    "net": round(float(row["net"]), 2),
+                }
+                for row in earnings["by_sport"]
+            ],
         }
 
     @action(detail=False, methods=["get"])
@@ -407,3 +412,31 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
             data = sorted((self._balance_for_owner(o) for o in owners), key=lambda d: d["balance_due"], reverse=True)
             return Response(data)
         return Response(self._balance_for_owner(request.user))
+
+class PayoutScheduleViewSet(viewsets.ModelViewSet):
+    """Admin sets/edits an owner's payout cadence; the owner can read their
+    own schedule (used for the "Next payout: ..." readout) but can't write
+    it — write access to money-timing config stays admin-only."""
+    serializer_class = PayoutScheduleSerializer
+    permission_classes = [IsAdminOrOwner]
+
+    def get_queryset(self):
+        if self.request.user.role == "admin":
+            return PayoutSchedule.objects.select_related("owner").all()
+        return PayoutSchedule.objects.filter(owner=self.request.user)
+
+    def check_write_permission(self):
+        if self.request.user.role != "admin":
+            raise PermissionDenied("Only admins can set a payout schedule.")
+
+    def perform_create(self, serializer):
+        self.check_write_permission()
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self.check_write_permission()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self.check_write_permission()
+        instance.delete()

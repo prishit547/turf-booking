@@ -1,11 +1,12 @@
 # owner_dashboard/urls.py
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from .views import OwnerAnalyticsView, OwnerBookingViewSet, OwnerDashboardAPIView, PayoutViewSet
+from .views import OwnerAnalyticsView, OwnerBookingViewSet, OwnerDashboardAPIView, PayoutScheduleViewSet, PayoutViewSet
 
 router = DefaultRouter()
 router.register(r'bookings', OwnerBookingViewSet, basename='owner-booking')
 router.register(r'payouts', PayoutViewSet, basename='payout')
+router.register(r'payout-schedules', PayoutScheduleViewSet, basename='payout-schedule')
 
 urlpatterns = [
     # A single endpoint to get all dashboard data at once

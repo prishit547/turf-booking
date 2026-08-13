@@ -15,6 +15,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -111,6 +112,7 @@ INSTALLED_APPS = [
     'owner_dashboard',
     'user_dashboard',
     'chatbot',
+    'rewards',
 ]
 
 MIDDLEWARE = [
@@ -400,6 +402,30 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+# Beat schedule — this app only ever scheduled one-shot eta= tasks before
+# (bookings/tasks.py's hold-expiry cascade), never a recurring job, so a
+# `celery beat` process wasn't running at all. mark-completed-bookings is
+# what actually flips a past-dated Confirmed booking to Completed (nothing
+# else in the codebase does this) — cashback/scratch-card/spin-wheel grants
+# all hang off that transition. run-scheduled-payouts is added by the
+# per-owner-per-sport commission + scheduled payouts feature.
+CELERY_BEAT_SCHEDULE = {
+    'mark-completed-bookings': {
+        'task': 'bookings.tasks.mark_completed_bookings_task',
+        'schedule': crontab(minute=0),  # hourly
+    },
+    'run-scheduled-payouts': {
+        'task': 'owner_dashboard.tasks.run_scheduled_payouts_task',
+        'schedule': crontab(hour=2, minute=0),  # daily, 2am
+    },
+}
+
+# Default platform commission percent (as a fraction, e.g. 0.10 = 10%) used
+# when an owner/sport has no CommissionRate override — see
+# boxes/pricing.py::resolve_commission_rate(). Replaces what used to be a
+# hardcoded 0.1 literal in three separate files.
+DEFAULT_COMMISSION_RATE = float(env('DEFAULT_COMMISSION_RATE', '0.10'))
 
 # Dedicated logical DB for reservation hold/queue state (bookings/reservation.py) —
 # kept separate from the Django cache DB so cache eviction policy can never

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus } from 'lucide-react'
+import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus, Gift } from 'lucide-react'
 import { Line, Doughnut, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -21,10 +21,13 @@ import { Button, Card, Badge, Modal, Loader, StatTile, Input, Select, Pagination
 import { PeakHoursChart } from '../components/common/AdvancedCharts'
 import { useChartTheme } from '../utils/chartTheme'
 import { useDebounce } from '../hooks/useDebounce'
+import AdminRewardsTab from '../components/rewards/AdminRewardsTab'
+import AdminCommissionTab from '../components/commission/AdminCommissionTab'
 
 const USERS_PAGE_SIZE = 20
 const BOOKINGS_PAGE_SIZE = 20
 const REVIEWS_PAGE_SIZE = 20
+const PAYOUTS_PAGE_SIZE = 20
 
 ChartJS.register(
   CategoryScale,
@@ -52,6 +55,8 @@ const TABS = [
   { id: 'reviews', label: 'Reviews', icon: Star },
   { id: 'payouts', label: 'Payouts', icon: Wallet },
   { id: 'coupons', label: 'Coupons', icon: Ticket },
+  { id: 'rewards', label: 'Rewards', icon: Gift },
+  { id: 'commission', label: 'Commission', icon: DollarSign },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'reports', label: 'Reports', icon: FileText },
 ]
@@ -144,6 +149,19 @@ const AdminDashboard = () => {
   const [payoutAmount, setPayoutAmount] = useState('')
   const [payoutNote, setPayoutNote] = useState('')
   const [recordingPayout, setRecordingPayout] = useState(false)
+
+  // Payout schedules — one per owner, admin-configurable cadence for
+  // run_scheduled_payouts_task. Keyed by owner_id for O(1) lookup per row.
+  const [payoutSchedules, setPayoutSchedules] = useState({})
+  const [scheduleTarget, setScheduleTarget] = useState(null)
+  const [scheduleForm, setScheduleForm] = useState({ frequency: 'monthly', day_of_month: '1', day_of_week: '0' })
+  const [savingSchedule, setSavingSchedule] = useState(false)
+
+  // Payout history — every Payout row (manual + scheduled) across all
+  // owners, distinguished by a source badge.
+  const [payoutHistory, setPayoutHistory] = useState({ results: [], count: 0 })
+  const [payoutHistoryPage, setPayoutHistoryPage] = useState(1)
+  const [payoutHistoryLoading, setPayoutHistoryLoading] = useState(false)
 
   // Coupons tab: create/list/deactivate discount codes.
   const [coupons, setCoupons] = useState([])
@@ -265,9 +283,74 @@ const AdminDashboard = () => {
     }
   }, [])
 
+  const fetchPayoutSchedules = useCallback(async () => {
+    try {
+      const response = await api.get('/owner_dashboard/payout-schedules/')
+      const list = response.data.results || response.data
+      const byOwner = {}
+      list.forEach((s) => { byOwner[s.owner] = s })
+      setPayoutSchedules(byOwner)
+    } catch (err) {
+      console.error('Error fetching payout schedules:', err)
+    }
+  }, [])
+
+  const fetchPayoutHistory = useCallback(async () => {
+    setPayoutHistoryLoading(true)
+    try {
+      const params = new URLSearchParams({ page: payoutHistoryPage, page_size: PAYOUTS_PAGE_SIZE })
+      const response = await api.get(`/owner_dashboard/payouts/?${params.toString()}`)
+      setPayoutHistory({ results: response.data.results, count: response.data.count })
+    } catch (err) {
+      console.error('Error fetching payout history:', err)
+      toast.error('Failed to load payout history')
+    } finally {
+      setPayoutHistoryLoading(false)
+    }
+  }, [payoutHistoryPage])
+
   useEffect(() => {
-    if (activeTab === 'payouts') fetchPayoutsBalance()
-  }, [activeTab, fetchPayoutsBalance])
+    if (activeTab === 'payouts') {
+      fetchPayoutsBalance()
+      fetchPayoutSchedules()
+      fetchPayoutHistory()
+    }
+  }, [activeTab, fetchPayoutsBalance, fetchPayoutSchedules, fetchPayoutHistory])
+
+  const openScheduleModal = (owner) => {
+    const existing = payoutSchedules[owner.owner_id]
+    setScheduleForm(existing
+      ? { frequency: existing.frequency, day_of_month: String(existing.day_of_month || 1), day_of_week: String(existing.day_of_week || 0) }
+      : { frequency: 'monthly', day_of_month: '1', day_of_week: '0' })
+    setScheduleTarget(owner)
+  }
+
+  const handleSaveSchedule = async () => {
+    if (!scheduleTarget) return
+    setSavingSchedule(true)
+    try {
+      const existing = payoutSchedules[scheduleTarget.owner_id]
+      const payload = {
+        owner: scheduleTarget.owner_id,
+        frequency: scheduleForm.frequency,
+        day_of_month: scheduleForm.frequency === 'monthly' ? Number(scheduleForm.day_of_month) : null,
+        day_of_week: scheduleForm.frequency !== 'monthly' ? Number(scheduleForm.day_of_week) : null,
+        active: true,
+      }
+      if (existing) {
+        await api.patch(`/owner_dashboard/payout-schedules/${existing.id}/`, payload)
+      } else {
+        await api.post('/owner_dashboard/payout-schedules/', payload)
+      }
+      toast.success('Payout schedule saved')
+      setScheduleTarget(null)
+      fetchPayoutSchedules()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save payout schedule')
+    } finally {
+      setSavingSchedule(false)
+    }
+  }
 
   const openRecordPayoutModal = (owner) => {
     setPayoutTarget(owner)
@@ -1184,8 +1267,9 @@ const AdminDashboard = () => {
               <div>
                 <h3 className="text-2xl font-display font-semibold text-foreground">Owner payouts</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Net revenue (after the 10% platform commission) minus what&apos;s already been paid out.
+                  Net revenue (after each owner&apos;s resolved commission — see the Commission tab) minus what&apos;s already been paid out.
                   Recording a payout here is a manual ledger entry — settle the actual transfer outside the app first.
+                  Set a schedule to have this recorded automatically instead.
                 </p>
               </div>
 
@@ -1194,7 +1278,7 @@ const AdminDashboard = () => {
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
-                        {['Owner', 'Gross revenue', 'Commission', 'Net revenue', 'Paid out', 'Balance due', ''].map((h) => (
+                        {['Owner', 'Gross revenue', 'Commission', 'Net revenue', 'Paid out', 'Balance due', 'Schedule', ''].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -1202,11 +1286,11 @@ const AdminDashboard = () => {
                     <tbody className="divide-y divide-border">
                       {payoutsLoading ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-10 text-muted-foreground">Loading balances...</td>
+                          <td colSpan={8} className="text-center py-10 text-muted-foreground">Loading balances...</td>
                         </tr>
                       ) : payoutsBalance.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-10 text-muted-foreground">No owners yet</td>
+                          <td colSpan={8} className="text-center py-10 text-muted-foreground">No owners yet</td>
                         </tr>
                       ) : payoutsBalance.map((row) => (
                         <tr key={row.owner_id} className="hover:bg-elevated/60 transition-colors">
@@ -1227,9 +1311,17 @@ const AdminDashboard = () => {
                               ₹{row.balance_due.toLocaleString()}
                             </span>
                           </td>
-                          <td className="py-3 px-4">
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">
+                            {payoutSchedules[row.owner_id]
+                              ? payoutSchedules[row.owner_id].frequency.charAt(0).toUpperCase() + payoutSchedules[row.owner_id].frequency.slice(1)
+                              : 'Not set'}
+                          </td>
+                          <td className="py-3 px-4 flex gap-2">
                             <Button variant="outline" size="sm" onClick={() => openRecordPayoutModal(row)}>
                               Record payout
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => openScheduleModal(row)}>
+                              Schedule
                             </Button>
                           </td>
                         </tr>
@@ -1237,6 +1329,49 @@ const AdminDashboard = () => {
                     </tbody>
                   </table>
                 </div>
+              </Card>
+
+              <Card padding="none" className="overflow-hidden">
+                <div className="px-6 pt-5 pb-1">
+                  <h3 className="text-lg font-display font-semibold text-foreground">Payout history</h3>
+                  <p className="text-sm text-muted-foreground mt-1">Every payout across all owners — manual and automatic.</p>
+                </div>
+                <div className="overflow-x-auto mt-4">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated">
+                      <tr>
+                        {['Owner', 'Amount', 'Source', 'Note', 'Date'].map((h) => (
+                          <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {payoutHistoryLoading ? (
+                        <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">Loading history...</td></tr>
+                      ) : payoutHistory.results.length === 0 ? (
+                        <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td></tr>
+                      ) : payoutHistory.results.map((payout) => (
+                        <tr key={payout.id} className="hover:bg-elevated/60 transition-colors">
+                          <td className="py-3 px-4 text-foreground whitespace-nowrap">{payout.owner_email}</td>
+                          <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{payout.amount}</td>
+                          <td className="py-3 px-4">
+                            <Badge tone={payout.source === 'scheduled' ? 'secondary' : 'neutral'}>
+                              {payout.source === 'scheduled' ? 'Scheduled' : 'Manual'}
+                            </Badge>
+                          </td>
+                          <td className="py-3 px-4 text-muted-foreground">{payout.note || '—'}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{new Date(payout.created_at).toLocaleDateString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination
+                  page={payoutHistoryPage}
+                  pageSize={PAYOUTS_PAGE_SIZE}
+                  count={payoutHistory.count}
+                  onPageChange={setPayoutHistoryPage}
+                />
               </Card>
             </div>
           )}
@@ -1296,6 +1431,10 @@ const AdminDashboard = () => {
               </Card>
             </div>
           )}
+
+          {activeTab === 'rewards' && <AdminRewardsTab />}
+
+          {activeTab === 'commission' && <AdminCommissionTab />}
 
           {/* Analytics */}
           {activeTab === 'analytics' && (
@@ -1660,6 +1799,58 @@ const AdminDashboard = () => {
                 placeholder="e.g. Bank transfer, ref #12345"
               />
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Payout Schedule Modal */}
+      <Modal
+        isOpen={!!scheduleTarget}
+        onClose={() => setScheduleTarget(null)}
+        title="Payout schedule"
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setScheduleTarget(null)}>Cancel</Button>
+            <Button onClick={handleSaveSchedule} loading={savingSchedule}>Save schedule</Button>
+          </>
+        )}
+      >
+        {scheduleTarget && (
+          <div className="space-y-4">
+            <p className="text-muted-foreground text-sm">
+              Set how often <span className="font-medium text-foreground">{scheduleTarget.owner_name}</span> is
+              automatically paid out. This records a ledger entry each cycle — the actual transfer still happens outside the app.
+            </p>
+            <Select
+              label="Frequency"
+              value={scheduleForm.frequency}
+              onChange={(e) => setScheduleForm((f) => ({ ...f, frequency: e.target.value }))}
+            >
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Biweekly</option>
+              <option value="monthly">Monthly</option>
+            </Select>
+            {scheduleForm.frequency === 'monthly' ? (
+              <Input
+                label="Day of month"
+                type="number"
+                min="1"
+                max="28"
+                value={scheduleForm.day_of_month}
+                onChange={(e) => setScheduleForm((f) => ({ ...f, day_of_month: e.target.value }))}
+              />
+            ) : (
+              <Select
+                label="Day of week"
+                value={scheduleForm.day_of_week}
+                onChange={(e) => setScheduleForm((f) => ({ ...f, day_of_week: e.target.value }))}
+              >
+                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d, i) => (
+                  <option key={d} value={i}>{d}</option>
+                ))}
+              </Select>
+            )}
           </div>
         )}
       </Modal>

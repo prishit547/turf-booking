@@ -1,4 +1,7 @@
+from datetime import datetime, time
+
 from celery import shared_task
+from django.utils import timezone
 
 from . import broadcasting, reservation
 
@@ -39,3 +42,36 @@ def expire_hold_task(self, hold_token):
 def ping():
     """Trivial round-trip check for the Celery+Redis broker wiring (Phase 1)."""
     return 'pong'
+
+
+@shared_task
+def mark_completed_bookings_task():
+    """Periodic (hourly, see CELERY_BEAT_SCHEDULE) — nothing else in this
+    codebase ever transitions a Confirmed booking to Completed once its
+    slot has passed, so this is the one place that happens. Fires the
+    rewards completion hook (cashback/scratch-card/spin-wheel grants) for
+    each booking it flips, exactly once."""
+    from rewards.services import on_booking_completed
+    from .models import Booking
+
+    now = timezone.localtime()
+    today = now.date()
+    candidates = Booking.objects.filter(booking_status='Confirmed', date__lte=today)
+
+    completed_ids = []
+    for booking in candidates:
+        try:
+            end_h, end_m = map(int, booking.end_time.split(':'))
+        except (ValueError, AttributeError):
+            continue
+        end_dt = timezone.make_aware(datetime.combine(booking.date, time(hour=end_h, minute=end_m)))
+        if end_dt <= now:
+            completed_ids.append(booking.id)
+
+    if not completed_ids:
+        return 0
+
+    Booking.objects.filter(id__in=completed_ids).update(booking_status='Completed')
+    for booking in Booking.objects.filter(id__in=completed_ids).select_related('user', 'box'):
+        on_booking_completed(booking)
+    return len(completed_ids)

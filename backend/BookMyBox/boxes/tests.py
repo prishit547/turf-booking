@@ -1,6 +1,7 @@
 # boxes/tests.py
 
 from datetime import date, timedelta
+from decimal import Decimal
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
@@ -10,8 +11,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from PIL import Image
 
 from bookings.models import Booking
-from boxes.models import Box, PricingRule
-from boxes.pricing import resolve_box_price
+from boxes.models import Box, CommissionRate, PricingRule
+from boxes.pricing import resolve_box_price, resolve_commission_rate
 
 User = get_user_model()
 
@@ -208,6 +209,72 @@ class ResolveBoxPriceTests(APITestCase):
         # even though a booking there could run into the rule's window.
         PricingRule.objects.create(box=self.box, applies_to='all', start_time='18:00', end_time='22:00', price=900)
         self.assertEqual(resolve_box_price(self.box, date(2026, 8, 15), '17:00'), 500)
+
+
+class ResolveCommissionRateTests(APITestCase):
+    """Unit tests for boxes/pricing.py's resolve_commission_rate() —
+    replaces what used to be a hardcoded 0.1 literal in three places."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='owner2@example.com', username='owner2@example.com',
+            password='testpass123', role='owner',
+        )
+
+    def test_falls_back_to_platform_default_with_no_override(self):
+        from django.conf import settings
+        rate = resolve_commission_rate(self.owner, 'Cricket', date(2026, 8, 15))
+        self.assertEqual(rate, Decimal(str(settings.DEFAULT_COMMISSION_RATE)))
+
+    def test_owner_sport_override_takes_precedence(self):
+        CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('15.00'))
+        rate = resolve_commission_rate(self.owner, 'Cricket', date(2026, 8, 15))
+        self.assertEqual(rate, Decimal('0.15'))
+
+    def test_override_is_scoped_to_sport(self):
+        CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('15.00'))
+        from django.conf import settings
+        rate = resolve_commission_rate(self.owner, 'Football', date(2026, 8, 15))
+        self.assertEqual(rate, Decimal(str(settings.DEFAULT_COMMISSION_RATE)))
+
+    def test_effective_from_versioning_uses_latest_applicable_rate(self):
+        CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('10.00'), effective_from=date(2026, 1, 1))
+        CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('20.00'), effective_from=date(2026, 6, 1))
+        # Before the second rate kicks in, the first still applies.
+        self.assertEqual(resolve_commission_rate(self.owner, 'Cricket', date(2026, 3, 1)), Decimal('0.10'))
+        # After, the newer rate applies — past bookings' commission isn't rewritten.
+        self.assertEqual(resolve_commission_rate(self.owner, 'Cricket', date(2026, 7, 1)), Decimal('0.20'))
+
+
+class AdminCommissionRateAPITests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email='admin2@example.com', username='admin2@example.com', password='x', role='admin',
+        )
+        self.owner = User.objects.create_user(
+            email='owner4@example.com', username='owner4@example.com', password='x', role='owner',
+        )
+        refresh = RefreshToken.for_user(self.admin)
+        self.access_token = str(refresh.access_token)
+
+    def _auth(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+
+    def test_admin_can_create_commission_rate(self):
+        self._auth()
+        response = self.client.post('/api/boxes/admin/commission-rates/', {
+            'owner': self.owner.id, 'sport': 'Cricket', 'rate': 12.5,
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(CommissionRate.objects.filter(owner=self.owner, sport='Cricket', rate=Decimal('12.5')).exists())
+
+    def test_non_admin_cannot_create_commission_rate(self):
+        refresh = RefreshToken.for_user(self.owner)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        response = self.client.post('/api/boxes/admin/commission-rates/', {
+            'owner': self.owner.id, 'sport': 'Cricket', 'rate': 12.5,
+        }, format='json')
+        self.assertEqual(response.status_code, 403)
 
 
 class PricingRuleAPITests(APITestCase):

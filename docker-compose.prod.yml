@@ -88,6 +88,24 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  celery_beat:
+    # Scheduler for CELERY_BEAT_SCHEDULE (mark-completed-bookings, and later
+    # run-scheduled-payouts) — a separate single process from celery_worker
+    # above, which is what actually executes the tasks this enqueues.
+    build: ./backend/BookMyBox
+    command: ["beat"]
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   frontend:
     build:
       context: ./frontend

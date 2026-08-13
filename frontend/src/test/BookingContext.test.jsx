@@ -61,9 +61,19 @@ describe('BookingContext reservation actions', () => {
     api.post.mockResolvedValueOnce({ data: booking })
     const { result } = renderHook(() => useBooking(), { wrapper })
 
-    await result.current.confirmReservation('abc', 'SAVE10')
+    await result.current.confirmReservation('abc', { couponCode: 'SAVE10' })
 
     expect(api.post).toHaveBeenCalledWith('/bookings/confirm/abc/', { couponCode: 'SAVE10' })
+  })
+
+  it('confirmReservation sends useWallet when true', async () => {
+    const booking = { id: 44, box: { id: 1 }, date: '2030-01-15' }
+    api.post.mockResolvedValueOnce({ data: booking })
+    const { result } = renderHook(() => useBooking(), { wrapper })
+
+    await result.current.confirmReservation('abc', { useWallet: true })
+
+    expect(api.post).toHaveBeenCalledWith('/bookings/confirm/abc/', { useWallet: true })
   })
 
   it('confirmReservation surfaces a 409 error without throwing', async () => {

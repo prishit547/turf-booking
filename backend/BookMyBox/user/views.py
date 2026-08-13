@@ -17,6 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters
 
 from boxes.models import Box
+from boxes.pricing import resolve_commission_rate
 from bookings.models import Booking
 
 from .models import PasswordResetToken, User
@@ -686,7 +687,11 @@ def admin_dashboard_data(request):
                 'owner': b.box.owner.email if b.box and b.box.owner else None,
                 'date': b.date.isoformat() if b.date else None,
                 'amount': str(b.total_amount),
-                'commission': str(round(float(b.total_amount or 0) * 0.1, 2)),
+                'commission': str(round(
+                    float(b.total_amount or 0) * float(resolve_commission_rate(
+                        b.box.owner if b.box else None, b.box.sport if b.box else '', b.date,
+                    )), 2,
+                )),
                 'status': b.booking_status,
             }
             for b in Booking.objects.select_related('user', 'box', 'box__owner').order_by('-created_at')

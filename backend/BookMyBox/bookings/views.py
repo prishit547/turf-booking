@@ -63,6 +63,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         try:
             booking = services.create_booking_row(
                 request.user, **parsed, coupon_code=request.data.get('couponCode'),
+                use_wallet=bool(request.data.get('useWallet')),
             )
         except BookingWriteError as e:
             return Response({'detail': e.detail}, status=e.status_code)
@@ -413,6 +414,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                     slot['duration'],
                 ),
                 coupon_code=request.data.get('couponCode'),
+                use_wallet=bool(request.data.get('useWallet')),
             )
         except BookingWriteError as e:
             # Redis said we could confirm, but the DB's authoritative check

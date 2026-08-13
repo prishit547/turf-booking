@@ -124,6 +124,32 @@ class PricingRule(models.Model):
         return f"{self.box.name}: {self.get_applies_to_display()} {self.start_time}-{self.end_time} @ {self.price}"
 
 
+class CommissionRate(models.Model):
+    """Admin-set commission percentage the platform takes from a specific
+    owner's bookings for a specific sport, overriding the platform-wide
+    DEFAULT_COMMISSION_RATE (see boxes/pricing.py's resolve_commission_rate()).
+    `sport` is a free-text match against Box.sport — no separate Sport model
+    exists to FK to. A new rate is always a new row (never an edit-in-place),
+    versioned by `effective_from`, so a rate change never silently rewrites
+    the commission owed on bookings from before the change — same philosophy
+    as PricingRule above."""
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='commission_rates')
+    sport = models.CharField(max_length=100)
+    rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Percent, 0-100.")
+    effective_from = models.DateField(default=timezone.localdate)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='commission_rates_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-effective_from']
+
+    def __str__(self):
+        return f"{self.owner.email} / {self.sport}: {self.rate}% from {self.effective_from}"
+
+
 class UserFavoriteBox(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='favorite_boxes')
     box = models.ForeignKey(Box, on_delete=models.CASCADE)

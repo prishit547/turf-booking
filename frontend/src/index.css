@@ -238,3 +238,37 @@
   color: #F5F7F9;
 }
 
+/* Scratch card flip-reveal (Rewards tab) — a 3D flip rather than a literal
+   scratch-texture canvas, consistent with this app's transform/transition
+   based animation style everywhere else (hover-scale, slot-selected). */
+.scratch-card-flip {
+  perspective: 1000px;
+}
+
+.scratch-card-flip-inner {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
+}
+
+.scratch-card-flip.is-revealed .scratch-card-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.scratch-card-face {
+  backface-visibility: hidden;
+}
+
+.scratch-card-face-back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+}
+
+/* Spin wheel (Rewards tab) — the winning segment is decided server-side;
+   this class only supplies the easing curve, the actual rotation angle is
+   computed inline per spin so it lands exactly on the returned segment. */
+.spin-wheel-dial {
+  transition: transform 4s cubic-bezier(0.15, 0.85, 0.25, 1);
+}
+

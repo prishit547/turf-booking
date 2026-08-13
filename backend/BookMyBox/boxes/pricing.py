@@ -3,6 +3,7 @@
 actually costs for a given date/start_time, shared by
 bookings/services.py's create_booking_row() and apply_coupon() so a
 coupon's discount base and the actual charge can never disagree."""
+from decimal import Decimal
 
 
 def resolve_box_price(box, date, start_time_str):
@@ -19,3 +20,25 @@ def resolve_box_price(box, date, start_time_str):
         end_time__gt=start_time_str,
     ).first()
     return rule.price if rule else box.price
+
+
+def resolve_commission_rate(owner, sport, on_date=None):
+    """Returns the commission rate (as a 0-1 fraction, matching the old
+    hardcoded `0.1` literal this replaces) the platform takes from `owner`'s
+    bookings for `sport` on `on_date` — the latest CommissionRate row for
+    that (owner, sport) pair whose effective_from has passed, or
+    settings.DEFAULT_COMMISSION_RATE if no override exists."""
+    from django.conf import settings
+    from django.utils import timezone
+    from .models import CommissionRate
+
+    if owner is None:
+        return Decimal(str(settings.DEFAULT_COMMISSION_RATE))
+
+    on_date = on_date or timezone.now().date()
+    rate = CommissionRate.objects.filter(
+        owner=owner, sport=sport, effective_from__lte=on_date,
+    ).order_by('-effective_from').values_list('rate', flat=True).first()
+    if rate is not None:
+        return rate / Decimal('100')
+    return Decimal(str(settings.DEFAULT_COMMISSION_RATE))

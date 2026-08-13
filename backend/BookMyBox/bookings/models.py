@@ -83,6 +83,15 @@ class Booking(models.Model):
     coupon_code = models.CharField(max_length=30, blank=True, default='')
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
+    cashback_credited_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set once rewards.services.apply_cashback() has credited this booking — guards against double-crediting.",
+    )
+    wallet_amount_used = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Portion of total_amount paid via wallet balance at checkout. Does not reduce total_amount — owner revenue/commission is still computed off the full price.",
+    )
+
     class Meta:
         ordering = ['date', 'start_time']
         constraints = [

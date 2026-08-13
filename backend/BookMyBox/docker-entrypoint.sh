@@ -34,6 +34,12 @@ case "$1" in
     # throughput benefit (there was never CPU to run 8 of them on).
     exec celery -A BookMyBox worker -l info --concurrency="${CELERY_CONCURRENCY:-2}"
     ;;
+  beat)
+    # Runs CELERY_BEAT_SCHEDULE (BookMyBox/settings.py) — a single lightweight
+    # scheduler process, separate from the worker(s) that actually execute
+    # the tasks it enqueues.
+    exec celery -A BookMyBox beat -l info
+    ;;
   *)
     exec "$@"
     ;;

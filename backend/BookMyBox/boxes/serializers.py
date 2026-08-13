@@ -1,7 +1,7 @@
 # boxes/serializers.py
 
 from rest_framework import serializers
-from .models import Box, Review, BlockedDate, PricingRule
+from .models import Box, Review, BlockedDate, CommissionRate, PricingRule
 
 
 class BlockedDateSerializer(serializers.ModelSerializer):
@@ -40,6 +40,15 @@ class PricingRuleSerializer(serializers.ModelSerializer):
                     f"{rule.start_time}-{rule.end_time})."
                 )
         return attrs
+
+class CommissionRateSerializer(serializers.ModelSerializer):
+    owner_email = serializers.CharField(source='owner.email', read_only=True)
+
+    class Meta:
+        model = CommissionRate
+        fields = ['id', 'owner', 'owner_email', 'sport', 'rate', 'effective_from', 'created_at']
+        read_only_fields = ['created_at']
+
 
 class ReviewSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField(read_only=True)
@@ -141,12 +150,16 @@ class OwnerBoxSerializer(serializers.ModelSerializer):
     class Meta:
         model = Box
         fields = [
-            'id', 'name', 'sport', 'sports', 'location', 'price',
+            'id', 'owner', 'name', 'sport', 'sports', 'location', 'price',
             'capacity', 'opening_time', 'closing_time', 'image', 'images',
             'amenities', 'description', 'full_description', 'rules',
             'latitude', 'longitude', 'status', 'rejection_reason'
         ]
-        read_only_fields = ['status', 'rejection_reason']
+        # 'owner' is read-only here — perform_create() below always sets it
+        # from request.user; exposing it writable would let a PATCH reassign
+        # a box to a different owner. Read-only access is what the admin
+        # Commission tab needs (picking an owner's boxes to see their sports).
+        read_only_fields = ['owner', 'status', 'rejection_reason']
 
     def create(self, validated_data):
         # If 'sport' is missing, set it from the first item in 'sports' (for compatibility)

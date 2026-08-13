@@ -15,10 +15,10 @@ import math
 from django.shortcuts import get_object_or_404
 
 from bookings.models import Booking
-from .models import Box, Review, BlockedDate, PricingRule
+from .models import Box, Review, BlockedDate, CommissionRate, PricingRule
 from .serializers import (
     BoxSerializer, ReviewSerializer, ReviewOwnerResponseSerializer, OwnerBoxSerializer,
-    AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, PricingRuleSerializer,
+    AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, CommissionRateSerializer, PricingRuleSerializer,
 )
 from .filters import BoxFilter
 from user.notifications import notify
@@ -409,3 +409,21 @@ class PricingRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.
             if not box:
                 return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
             return super().create(request, *args, **kwargs)
+
+class AdminCommissionRateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """Admin-only commission-rate configuration. list/create only — a rate
+    change is always a new (owner, sport, effective_from) row, never an
+    edit-in-place, so commission on past bookings can never be silently
+    rewritten (see CommissionRate's docstring)."""
+    serializer_class = CommissionRateSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = CommissionRate.objects.select_related('owner').all()
+        owner_id = self.request.query_params.get('owner')
+        if owner_id:
+            queryset = queryset.filter(owner_id=owner_id)
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)

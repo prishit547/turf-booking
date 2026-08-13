@@ -227,7 +227,7 @@ def apply_coupon(box, duration_hours, code, booking_date, start_time_str, *, loc
 def create_booking_row(user, box_id, booking_date, start_time_str, duration_hours, end_time_str,
                         *, booking_source='online', created_by=None, customer_name='',
                         customer_phone='', payment_status='Not Required', recurring_group_id=None,
-                        coupon_code=None):
+                        coupon_code=None, use_wallet=False):
     """The transaction.atomic() + select_for_update() + overlaps() DB write —
     the authoritative safety net, reused as-is by create() (direct booking),
     confirm() (two-phase hold/queue booking), and the owner-manual booking
@@ -300,6 +300,25 @@ def create_booking_row(user, box_id, booking_date, start_time_str, duration_hour
         if applied_coupon:
             applied_coupon.used_count = F('used_count') + 1
             applied_coupon.save(update_fields=['used_count'])
+
+        # Wallet spend — applied after the coupon discount, against
+        # whatever's left of expected_total_amount. Deliberately does NOT
+        # change total_amount: the owner's revenue/commission are computed
+        # off the full price regardless of how the platform's own
+        # previously-issued wallet credit covered part of it (same
+        # reasoning as cashback being a platform cost, never passed on to
+        # the owner). If the wallet fully covers what's left, the booking
+        # is marked paid outright — no separate "mark paid at venue" step.
+        if use_wallet and expected_total_amount > 0:
+            from rewards.services import debit_wallet, get_or_create_wallet
+            wallet = get_or_create_wallet(user)
+            wallet_deduction = min(wallet.balance, expected_total_amount)
+            if wallet_deduction > 0:
+                debit_wallet(user, wallet_deduction, 'booking_payment', f"Booking #{booking.id}", booking=booking)
+                booking.wallet_amount_used = wallet_deduction
+                if wallet_deduction >= expected_total_amount:
+                    booking.payment_status = 'Completed'
+                booking.save(update_fields=['wallet_amount_used', 'payment_status'])
 
         logger.info(
             "Booking #%s created for user #%s (box=%s date=%s start_time=%s amount=%s)",

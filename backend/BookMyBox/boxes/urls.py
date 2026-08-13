@@ -2,7 +2,10 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter, SimpleRouter
-from .views import PublicBoxViewSet, OwnerBoxViewSet, AdminBoxViewSet, AdminReviewViewSet, BlockedDateViewSet, PricingRuleViewSet
+from .views import (
+    PublicBoxViewSet, OwnerBoxViewSet, AdminBoxViewSet, AdminCommissionRateViewSet,
+    AdminReviewViewSet, BlockedDateViewSet, PricingRuleViewSet,
+)
 
 # Router for the public-facing API (listing, searching boxes)
 public_router = DefaultRouter()
@@ -28,12 +31,18 @@ blocked_date_router.register(r'blocked-dates', BlockedDateViewSet, basename='blo
 pricing_rule_router = SimpleRouter()
 pricing_rule_router.register(r'pricing-rules', PricingRuleViewSet, basename='pricing-rule')
 
+# Same reasoning again for 'admin/commission-rates/' — its own explicit
+# prefix, included before the admin/<int:pk>/... paths below.
+admin_commission_rate_router = SimpleRouter()
+admin_commission_rate_router.register(r'admin/commission-rates', AdminCommissionRateViewSet, basename='admin-commission-rate')
+
 urlpatterns = [
     path('', include(public_router.urls)),
     path('', include(owner_router.urls)),
     path('', include(admin_review_router.urls)),
     path('', include(blocked_date_router.urls)),
     path('', include(pricing_rule_router.urls)),
+    path('', include(admin_commission_rate_router.urls)),
     path('admin/pending/', AdminBoxViewSet.as_view({'get': 'list_pending'}), name='admin-pending-boxes'),
     path('admin/<int:pk>/approve/', AdminBoxViewSet.as_view({'post': 'approve'}), name='admin-approve-box'),
     path('admin/<int:pk>/reject/', AdminBoxViewSet.as_view({'post': 'reject'}), name='admin-reject-box'),

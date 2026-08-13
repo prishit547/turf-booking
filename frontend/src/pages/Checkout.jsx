@@ -39,6 +39,8 @@ const Checkout = () => {
     const [applyingCoupon, setApplyingCoupon] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const [leaving, setLeaving] = useState(false);
+    const [walletBalance, setWalletBalance] = useState(0);
+    const [useWallet, setUseWallet] = useState(false);
     // Resolved via /bookings/price-preview/ — draft.pricePerHour is the
     // box's flat rate handed off from BoxDetails, but a PricingRule can
     // override it for this exact date/time (see boxes/pricing.py's
@@ -91,6 +93,14 @@ const Checkout = () => {
         return () => { cancelled = true; };
     }, [draft]);
 
+    useEffect(() => {
+        let cancelled = false;
+        api.get('/rewards/wallet/').then((response) => {
+            if (!cancelled) setWalletBalance(Number(response.data.balance) || 0);
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
+
     const wasQueuedRef = useRef(false);
     useEffect(() => {
         if (liveReservation.status === 'queued') {
@@ -115,6 +125,8 @@ const Checkout = () => {
 
     const grossTotal = resolvedRate ? Number(resolvedRate.total) : draft.pricePerHour * draft.duration;
     const total = appliedCoupon ? Number(appliedCoupon.final_amount) : grossTotal;
+    const walletDeduction = useWallet ? Math.min(walletBalance, total) : 0;
+    const amountDue = total - walletDeduction;
     const isQueued = liveReservation.status === 'queued';
 
     const handleApplyCoupon = async () => {
@@ -141,7 +153,7 @@ const Checkout = () => {
     const handleConfirm = async () => {
         setConfirming(true);
         try {
-            const result = await confirmReservation(draft.holdToken, appliedCoupon?.code);
+            const result = await confirmReservation(draft.holdToken, { couponCode: appliedCoupon?.code, useWallet });
             if (result.success) {
                 navigate(`/booking/${result.data.id}`, {
                     state: {
@@ -280,6 +292,22 @@ const Checkout = () => {
                                 </div>
                             )}
                         </Card>
+
+                        {walletBalance > 0 && (
+                            <Card>
+                                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                                    <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                        <Wallet size={18} className="text-primary" /> Use wallet balance (₹{walletBalance} available)
+                                    </span>
+                                    <input
+                                        type="checkbox"
+                                        checked={useWallet}
+                                        onChange={(e) => setUseWallet(e.target.checked)}
+                                        className="w-5 h-5 rounded accent-primary"
+                                    />
+                                </label>
+                            </Card>
+                        )}
                     </div>
 
                     <div>
@@ -297,9 +325,15 @@ const Checkout = () => {
                                         <span className="line-through">₹{grossTotal}</span>
                                     </div>
                                 )}
+                                {walletDeduction > 0 && (
+                                    <div className="flex justify-between text-sm text-muted-foreground mb-1.5">
+                                        <span>Wallet applied</span>
+                                        <span className="text-success">-₹{walletDeduction}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between items-center font-display font-bold text-lg text-foreground">
-                                    <span>Total</span>
-                                    <span className="text-primary">₹{total}</span>
+                                    <span>{walletDeduction > 0 ? 'Amount due' : 'Total'}</span>
+                                    <span className="text-primary">₹{amountDue}</span>
                                 </div>
                             </div>
 
@@ -315,7 +349,7 @@ const Checkout = () => {
                                             disabled={confirming}
                                             onClick={handleConfirm}
                                         >
-                                            {confirming ? 'Confirming…' : `Confirm booking · ₹${total}`}
+                                            {confirming ? 'Confirming…' : `Confirm booking · ₹${amountDue}`}
                                         </MagneticButton>
                                         <Button variant="outline" fullWidth onClick={handleLeave} loading={leaving} disabled={leaving}>
                                             Cancel

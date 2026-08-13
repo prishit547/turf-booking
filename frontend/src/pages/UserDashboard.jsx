@@ -21,6 +21,7 @@ import {
   BarChart3,
   Sparkles,
   UserPlus,
+  Gift,
 } from 'lucide-react';
 
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement } from 'chart.js';
@@ -33,6 +34,7 @@ import {
 import { Button, Card, Badge, Modal, Input, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
 import AchievementBadge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
+import UserRewardsTab from '../components/rewards/UserRewardsTab';
 
 
 // Register Chart.js components
@@ -54,6 +56,7 @@ ChartJS.register(
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'bookings', label: 'Bookings', icon: Calendar },
+  { id: 'rewards', label: 'Rewards', icon: Gift },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'achievements', label: 'Achievements', icon: Trophy },
   { id: 'favorites', label: 'Favorites', icon: Heart },
@@ -886,6 +889,8 @@ const UserDashboard = () => {
           )}
 
           {/* Favorites Tab */}
+          {activeTab === 'rewards' && <UserRewardsTab />}
+
           {activeTab === 'favorites' && (
             <div className="space-y-6">
               <h2 className="text-2xl font-display font-semibold text-foreground mb-4">Your Favorite Boxes</h2>

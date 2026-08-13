@@ -159,12 +159,16 @@ export const BookingProvider = ({ children }) => {
         }
     }, []);
 
-    // Second phase: finalize a held slot into a real booking. couponCode is
-    // optional — the backend re-validates it from scratch (never trusts a
-    // discount amount computed client-side).
-    const confirmReservation = useCallback(async (holdToken, couponCode) => {
+    // Second phase: finalize a held slot into a real booking. couponCode and
+    // useWallet are both optional — the backend re-validates/recomputes both
+    // from scratch (never trusts a discount or wallet deduction computed
+    // client-side).
+    const confirmReservation = useCallback(async (holdToken, { couponCode, useWallet } = {}) => {
         try {
-            const response = await api.post(`/bookings/confirm/${holdToken}/`, couponCode ? { couponCode } : {});
+            const response = await api.post(`/bookings/confirm/${holdToken}/`, {
+                ...(couponCode ? { couponCode } : {}),
+                ...(useWallet ? { useWallet: true } : {}),
+            });
             dispatch({ type: 'ADD_BOOKING', payload: response.data });
             return { success: true, data: response.data };
         } catch (error) {

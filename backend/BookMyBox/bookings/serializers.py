@@ -2,6 +2,7 @@
 
 from rest_framework import serializers
 from .models import Booking, BookingInvite, Coupon, WaitlistEntry
+from boxes.pricing import resolve_commission_rate
 from boxes.serializers import BoxSerializer
 
 class BookingInviteSerializer(serializers.ModelSerializer):
@@ -38,12 +39,12 @@ class BookingSerializer(serializers.ModelSerializer):
             'date', 'start_time', 'end_time', 'duration', 'total_amount',
             'payment_status', 'payment_id', 'booking_status', 'created_at',
             'cancellation_reason', 'cancelled_at', 'booking_source', 'customer_name', 'customer_phone',
-            'recurring_group_id', 'coupon_code', 'discount_amount', 'invites',
+            'recurring_group_id', 'coupon_code', 'discount_amount', 'wallet_amount_used', 'invites',
         ]
         read_only_fields = [
             'user', 'total_amount', 'payment_status', 'payment_id', 'booking_status', 'created_at',
             'cancellation_reason', 'cancelled_at', 'booking_source', 'customer_name', 'customer_phone',
-            'recurring_group_id', 'coupon_code', 'discount_amount', 'invites',
+            'recurring_group_id', 'coupon_code', 'discount_amount', 'wallet_amount_used', 'invites',
         ]
 
     def get_box_image(self, obj):
@@ -89,7 +90,10 @@ class AdminBookingSerializer(serializers.ModelSerializer):
         return obj.box.owner.email if obj.box and obj.box.owner else None
 
     def get_commission(self, obj):
-        return round(float(obj.total_amount or 0) * 0.1, 2)
+        if not obj.box:
+            return 0
+        rate = resolve_commission_rate(obj.box.owner, obj.box.sport, obj.date)
+        return round(float(obj.total_amount or 0) * float(rate), 2)
 
 
 class CouponSerializer(serializers.ModelSerializer):

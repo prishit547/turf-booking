@@ -118,6 +118,7 @@ const OwnerDashboard = () => {
   const [payoutsPage, setPayoutsPage] = useState(1);
   const [payoutsResult, setPayoutsResult] = useState({ results: [], count: 0 });
   const [payoutsLoading, setPayoutsLoading] = useState(false);
+  const [paySchedule, setPaySchedule] = useState(null);
 
   const { user } = useAuth();
   const { refreshAll, deleteBox } = useBox();
@@ -207,12 +208,23 @@ const OwnerDashboard = () => {
     }
   }, [payoutsPage]);
 
+  const fetchPaySchedule = useCallback(async () => {
+    try {
+      const response = await api.get('/owner_dashboard/payout-schedules/');
+      const list = response.data.results || response.data;
+      setPaySchedule(list[0] || null);
+    } catch {
+      setPaySchedule(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'payouts') {
       fetchPayoutBalance();
       fetchPayouts();
+      fetchPaySchedule();
     }
-  }, [activeTab, fetchPayoutBalance, fetchPayouts]);
+  }, [activeTab, fetchPayoutBalance, fetchPayouts, fetchPaySchedule]);
 
   const openCancelModal = (booking) => {
     setCancellingBooking(booking);
@@ -944,7 +956,15 @@ const OwnerDashboard = () => {
           {/* Payouts Tab */}
           {activeTab === 'payouts' && (
             <div className="space-y-6">
-              <h2 className="text-2xl font-display font-semibold text-foreground">Payouts</h2>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="text-2xl font-display font-semibold text-foreground">Payouts</h2>
+                {paySchedule && (
+                  <Badge tone="secondary">
+                    Next payout: {paySchedule.frequency.charAt(0).toUpperCase() + paySchedule.frequency.slice(1)}
+                    {payoutBalance?.balance_due > 0 ? ` · ~₹${payoutBalance.balance_due.toLocaleString()} accruing` : ''}
+                  </Badge>
+                )}
+              </div>
 
               {payoutBalanceLoading ? (
                 <div className="py-8 flex justify-center"><Loader text="Loading balance..." /></div>
@@ -953,12 +973,45 @@ const OwnerDashboard = () => {
                   <Placeholder text="Balance unavailable right now" icon={Wallet} />
                 </Card>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                  <StatTile tone="primary" icon={<DollarSign size={22} />} value={`₹${payoutBalance.gross_revenue.toLocaleString()}`} label="Gross revenue" />
-                  <StatTile tone="secondary" icon={<Activity size={22} />} value={`₹${payoutBalance.commission.toLocaleString()}`} label="Platform commission (10%)" />
-                  <StatTile tone="success" icon={<CheckCircle size={22} />} value={`₹${payoutBalance.total_paid.toLocaleString()}`} label="Already paid out" />
-                  <StatTile tone={payoutBalance.balance_due > 0 ? 'warning' : 'neutral'} icon={<Wallet size={22} />} value={`₹${payoutBalance.balance_due.toLocaleString()}`} label="Balance due to you" />
-                </div>
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                    <StatTile tone="primary" icon={<DollarSign size={22} />} value={`₹${payoutBalance.gross_revenue.toLocaleString()}`} label="Gross revenue" />
+                    <StatTile tone="secondary" icon={<Activity size={22} />} value={`₹${payoutBalance.commission.toLocaleString()}`} label="Platform commission" />
+                    <StatTile tone="success" icon={<CheckCircle size={22} />} value={`₹${payoutBalance.total_paid.toLocaleString()}`} label="Already paid out" />
+                    <StatTile tone={payoutBalance.balance_due > 0 ? 'warning' : 'neutral'} icon={<Wallet size={22} />} value={`₹${payoutBalance.balance_due.toLocaleString()}`} label="Balance due to you" />
+                  </div>
+
+                  {payoutBalance.by_sport?.length > 0 && (
+                    <Card padding="none" className="overflow-hidden">
+                      <div className="px-6 pt-5 pb-1">
+                        <h3 className="text-lg font-display font-semibold text-foreground">Earnings by sport</h3>
+                        <p className="text-sm text-muted-foreground mt-1">Exactly what you&apos;re being charged and why — commission can vary by sport.</p>
+                      </div>
+                      <div className="overflow-x-auto mt-4">
+                        <table className="w-full text-sm">
+                          <thead className="bg-elevated">
+                            <tr>
+                              {['Sport', 'Rate', 'Gross', 'Commission', 'Net'].map((h) => (
+                                <th key={h} className="text-left py-3 px-6 font-medium text-foreground whitespace-nowrap">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {payoutBalance.by_sport.map((row) => (
+                              <tr key={row.sport} className="hover:bg-elevated/60 transition-colors">
+                                <td className="py-3 px-6 text-foreground">{row.sport}</td>
+                                <td className="py-3 px-6 text-muted-foreground">{row.rate}%</td>
+                                <td className="py-3 px-6 text-muted-foreground tabular-nums">₹{row.gross}</td>
+                                <td className="py-3 px-6 text-muted-foreground tabular-nums">₹{row.commission}</td>
+                                <td className="py-3 px-6 text-foreground tabular-nums">₹{row.net}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
+                </>
               )}
 
               <Card padding="none" className="overflow-hidden">
@@ -969,7 +1022,7 @@ const OwnerDashboard = () => {
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
-                        {['Amount', 'Note', 'Date'].map((h) => (
+                        {['Amount', 'Source', 'Note', 'Date'].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -977,15 +1030,20 @@ const OwnerDashboard = () => {
                     <tbody className="divide-y divide-border">
                       {payoutsLoading ? (
                         <tr>
-                          <td colSpan={3} className="text-center py-10 text-muted-foreground">Loading history...</td>
+                          <td colSpan={4} className="text-center py-10 text-muted-foreground">Loading history...</td>
                         </tr>
                       ) : payoutsResult.results.length === 0 ? (
                         <tr>
-                          <td colSpan={3} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td>
+                          <td colSpan={4} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td>
                         </tr>
                       ) : payoutsResult.results.map((payout) => (
                         <tr key={payout.id} className="hover:bg-elevated/60 transition-colors">
                           <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{payout.amount}</td>
+                          <td className="py-3 px-4">
+                            <Badge tone={payout.source === 'scheduled' ? 'secondary' : 'neutral'}>
+                              {payout.source === 'scheduled' ? 'Scheduled' : 'Manual'}
+                            </Badge>
+                          </td>
                           <td className="py-3 px-4 text-muted-foreground">{payout.note || '—'}</td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{new Date(payout.created_at).toLocaleDateString()}</td>
                         </tr>
