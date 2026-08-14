@@ -268,9 +268,13 @@ REST_FRAMEWORK = {
 }
 
 # JWT Configuration
+# Long-lived by design: the frontend silently refreshes the access token on
+# any 401 (see api.jsx's response interceptor), and ROTATE_REFRESH_TOKENS
+# issues a fresh REFRESH_TOKEN_LIFETIME window on every refresh — so a user
+# who opens the app at least once every 90 days never has to log in again.
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=90),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,

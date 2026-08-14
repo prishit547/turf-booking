@@ -1,5 +1,7 @@
 # rewards/views.py
+from django.contrib.auth import get_user_model
 from django.db.models import Sum
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -8,14 +10,20 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from BookMyBox.pagination import StandardResultsPagination
-from user.permissions import IsAdminUser
-from .models import CashbackRule, RedeemCode, ScratchCard, ScratchCardConfig, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction
+from boxes.models import Box
+from user.permissions import IsAdminUser, IsOwnerUser
+from .models import (
+    CashbackRule, OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting,
+    ScratchCardConfig, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction,
+)
 from .serializers import (
     CashbackRuleSerializer, RedeemCodeSerializer, ScratchCardConfigSerializer,
     ScratchCardSerializer, SpinWheelSegmentSerializer, WalletTransactionSerializer,
 )
 from . import services
 from .services import get_or_create_wallet
+
+User = get_user_model()
 
 
 class WalletView(APIView):
@@ -164,6 +172,100 @@ class AdminRedeemCodeViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             return Response({'detail': 'A value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
         codes = [
             RedeemCode(value=value, batch_label=batch_label, expires_at=expires_at, created_by=request.user)
+            for _ in range(quantity)
+        ]
+        created = RedeemCode.objects.bulk_create(codes)
+        return Response(RedeemCodeSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
+
+
+class AdminScratchCardAutoGrantView(APIView):
+    """Platform-wide master switch — see ScratchCardAutoGrantSetting's
+    docstring. Off means no scratch cards are granted anywhere, regardless
+    of any individual owner's own setting."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response({'enabled': ScratchCardAutoGrantSetting.is_enabled()})
+
+    def patch(self, request):
+        setting, _ = ScratchCardAutoGrantSetting.objects.get_or_create(pk=1)
+        setting.enabled = bool(request.data.get('enabled', setting.enabled))
+        setting.updated_by = request.user
+        setting.save()
+        return Response({'enabled': setting.enabled})
+
+
+class OwnerScratchCardAutoGrantView(APIView):
+    """Per-owner opt-out — see OwnerScratchCardSetting's docstring."""
+    permission_classes = [IsOwnerUser]
+
+    def get(self, request):
+        return Response({'enabled': OwnerScratchCardSetting.is_enabled_for(request.user)})
+
+    def patch(self, request):
+        setting, _ = OwnerScratchCardSetting.objects.get_or_create(owner=request.user)
+        setting.enabled = bool(request.data.get('enabled', setting.enabled))
+        setting.save()
+        return Response({'enabled': setting.enabled})
+
+
+class AdminGrantScratchCardView(APIView):
+    """Manual "give this user a scratch card right now" — same random
+    prize-tier draw as the automatic grant on booking completion (see
+    services.grant_scratch_card), just triggered on demand."""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        user = get_object_or_404(User, pk=request.data.get('user_id'))
+        card = services.grant_scratch_card(user)
+        if card is None:
+            return Response({'detail': 'No active scratch card prize tiers configured.'}, status=400)
+        return Response(ScratchCardSerializer(card).data, status=201)
+
+
+class OwnerGrantScratchCardView(APIView):
+    """Owner-triggered equivalent of AdminGrantScratchCardView — any
+    facility owner can gift a scratch card to any user, not just their own
+    customers, same as the admin one."""
+    permission_classes = [IsOwnerUser]
+
+    def post(self, request):
+        user = get_object_or_404(User, pk=request.data.get('user_id'))
+        card = services.grant_scratch_card(user)
+        if card is None:
+            return Response({'detail': 'No active scratch card prize tiers configured.'}, status=400)
+        return Response(ScratchCardSerializer(card).data, status=201)
+
+
+class OwnerRedeemCodeViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """Owner-issued, box-scoped redeem codes — checkout-time discounts for
+    that specific box only, NOT general wallet cash (see RedeemCode.box's
+    docstring and bookings/services.py::apply_redeem_code)."""
+    serializer_class = RedeemCodeSerializer
+    permission_classes = [IsOwnerUser]
+    pagination_class = StandardResultsPagination
+
+    def get_queryset(self):
+        qs = RedeemCode.objects.filter(box__owner=self.request.user)
+        box_id = self.request.query_params.get('box_id')
+        if box_id:
+            qs = qs.filter(box_id=box_id)
+        return qs
+
+    @action(detail=False, methods=['post'])
+    def generate(self, request):
+        box_id = request.data.get('box')
+        value = request.data.get('value')
+        quantity = int(request.data.get('quantity', 1))
+        batch_label = request.data.get('batch_label', '')
+        expires_at = request.data.get('expires_at')
+        box = Box.objects.filter(pk=box_id, owner=request.user).first()
+        if not box:
+            return Response({'detail': 'That box is not yours.'}, status=status.HTTP_403_FORBIDDEN)
+        if not value or quantity < 1 or quantity > 1000:
+            return Response({'detail': 'A value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        codes = [
+            RedeemCode(box=box, value=value, batch_label=batch_label, expires_at=expires_at, created_by=request.user)
             for _ in range(quantity)
         ]
         created = RedeemCode.objects.bulk_create(codes)

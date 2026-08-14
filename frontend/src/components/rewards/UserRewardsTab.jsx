@@ -3,6 +3,7 @@ import { toast } from 'react-toastify';
 import { Wallet, Gift, Sparkles, Ticket, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { api } from '../../api.jsx';
 import { Button, Card, Badge, Input, Loader, StatTile } from '../ui';
+import RewardWinModal from './RewardWinModal';
 
 const TXN_TONE = {
   cashback: 'success',
@@ -11,6 +12,7 @@ const TXN_TONE = {
   redeem_code: 'success',
   booking_payment: 'danger',
   admin_adjustment: 'neutral',
+  refund: 'success',
 };
 
 const TXN_LABEL = {
@@ -20,18 +22,25 @@ const TXN_LABEL = {
   redeem_code: 'Redeemed code',
   booking_payment: 'Spent on booking',
   admin_adjustment: 'Adjustment',
+  refund: 'Booking refund',
 };
 
 function ScratchCardTile({ card, onReveal, revealing }) {
   const isRevealed = card.is_scratched;
   return (
-    <div className="scratch-card-flip w-full aspect-[3/2]" onClick={() => !isRevealed && !revealing && onReveal(card)}>
+    <div
+      className={`scratch-card-flip w-full aspect-[3/2] ${isRevealed ? 'opacity-60' : ''}`}
+      onClick={() => !isRevealed && !revealing && onReveal(card)}
+    >
       <div className={`scratch-card-flip-inner w-full h-full ${isRevealed ? 'is-revealed' : ''}`}>
         <div className="scratch-card-face w-full h-full absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/25 to-elevated border border-border flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-primary/50 transition-colors">
           <Gift size={28} className="text-primary" />
           <span className="text-sm font-medium text-foreground">{revealing === card.id ? 'Revealing…' : 'Tap to scratch'}</span>
         </div>
-        <div className="scratch-card-face scratch-card-face-back w-full h-full rounded-2xl bg-elevated border border-primary/40 flex flex-col items-center justify-center gap-1">
+        <div className="scratch-card-face scratch-card-face-back w-full h-full rounded-2xl bg-elevated border border-primary/40 flex flex-col items-center justify-center gap-1 relative">
+          {isRevealed && (
+            <Badge tone="neutral" className="absolute top-2 right-2">Scratched</Badge>
+          )}
           <span className="text-2xl font-display text-primary tabular-nums">₹{card.prize_amount}</span>
           <span className="text-xs text-muted-foreground">Added to your wallet</span>
         </div>
@@ -52,6 +61,7 @@ export default function UserRewardsTab() {
   const [spinResult, setSpinResult] = useState(null);
   const [redeemInput, setRedeemInput] = useState('');
   const [redeeming, setRedeeming] = useState(false);
+  const [winModal, setWinModal] = useState({ isOpen: false, amount: null, title: 'You won!' });
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -81,6 +91,7 @@ export default function UserRewardsTab() {
       const res = await api.post(`/rewards/scratch-cards/${card.id}/scratch/`);
       setScratchCards((prev) => prev.map((c) => (c.id === card.id ? res.data : c)));
       toast.success(`You won ₹${res.data.prize_amount}!`);
+      setWinModal({ isOpen: true, amount: res.data.prize_amount, title: 'You won!' });
       const walletRes = await api.get('/rewards/wallet/');
       setWallet(walletRes.data);
       const txnRes = await api.get('/rewards/wallet/transactions/');
@@ -108,6 +119,7 @@ export default function UserRewardsTab() {
       setTimeout(() => {
         setSpinResult(res.data);
         toast.success(`You won ₹${res.data.prize_amount} on the spin wheel!`);
+        setWinModal({ isOpen: true, amount: res.data.prize_amount, title: 'You won!' });
         loadAll();
         setSpinning(false);
       }, 4100);
@@ -154,9 +166,12 @@ export default function UserRewardsTab() {
           <Card padding="md"><p className="text-sm text-muted-foreground">Complete a booking to earn a scratch card.</p></Card>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {scratchCards.slice(0, 8).map((card) => (
-              <ScratchCardTile key={card.id} card={card} onReveal={handleScratch} revealing={revealingId} />
-            ))}
+            {[...scratchCards]
+              .sort((a, b) => Number(a.is_scratched) - Number(b.is_scratched))
+              .slice(0, 8)
+              .map((card) => (
+                <ScratchCardTile key={card.id} card={card} onReveal={handleScratch} revealing={revealingId} />
+              ))}
           </div>
         )}
       </div>
@@ -171,9 +186,9 @@ export default function UserRewardsTab() {
             <p className="text-sm text-muted-foreground">The spin wheel isn&apos;t set up yet — check back soon.</p>
           ) : (
             <>
-              <div className="relative w-48 h-48">
+              <div className={`relative w-48 h-48 rounded-full ${!spinning ? 'wheel-glow-idle' : ''}`}>
                 <div
-                  className="spin-wheel-dial w-48 h-48 rounded-full border-4 border-elevated overflow-hidden"
+                  className="spin-wheel-dial relative w-48 h-48 rounded-full border-4 border-elevated overflow-hidden"
                   style={{
                     transform: `rotate(${spinRotation}deg)`,
                     background: `conic-gradient(${spinInfo.segments.map((s, i) => {
@@ -182,7 +197,29 @@ export default function UserRewardsTab() {
                       return `${s.color} ${a1}deg ${a2}deg`;
                     }).join(', ')})`,
                   }}
-                />
+                >
+                  {spinInfo.segments.map((s, i) => {
+                    const segmentAngle = 360 / spinInfo.segments.length;
+                    const midAngle = segmentAngle * i + segmentAngle / 2;
+                    return (
+                      <span
+                        key={s.id}
+                        className="absolute top-1/2 left-1/2 text-[10px] font-semibold whitespace-nowrap"
+                        style={{
+                          color: '#0E1103',
+                          transform: `translate(-50%, -50%) rotate(${midAngle}deg) translateY(-68px) rotate(${-midAngle}deg)`,
+                        }}
+                      >
+                        {s.label || `₹${s.prize_amount ?? ''}`}
+                      </span>
+                    );
+                  })}
+                </div>
+                {/* Decorative center hub — sits above the rotating dial layer
+                    but is not itself rotated. */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-card border-2 border-primary flex items-center justify-center shadow-lift">
+                  <Sparkles size={16} className="text-primary" />
+                </div>
                 <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-8 border-r-8 border-t-[14px] border-l-transparent border-r-transparent border-t-foreground" />
               </div>
               <Badge tone="secondary">{spinInfo.available} spin{spinInfo.available === 1 ? '' : 's'} available</Badge>
@@ -202,16 +239,24 @@ export default function UserRewardsTab() {
         <h3 className="font-display font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
           <Ticket size={18} className="text-primary" /> Redeem a Code
         </h3>
-        <Card padding="md">
-          <form onSubmit={handleRedeem} className="flex flex-col sm:flex-row gap-3">
-            <Input
-              placeholder="Enter voucher code"
-              value={redeemInput}
-              onChange={(e) => setRedeemInput(e.target.value.toUpperCase())}
-              className="flex-1"
-            />
-            <Button type="submit" loading={redeeming} disabled={redeeming || !redeemInput.trim()}>Redeem</Button>
-          </form>
+        <Card padding="lg">
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <div className="flex flex-col items-center gap-2 sm:w-40 shrink-0 text-center">
+              <div className="w-16 h-16 rounded-full bg-primary/15 border border-primary/40 flex items-center justify-center">
+                <Ticket size={26} className="text-primary" />
+              </div>
+              <p className="text-xs text-muted-foreground">Have a voucher? Redeem it for instant wallet credit.</p>
+            </div>
+            <form onSubmit={handleRedeem} className="flex-1 w-full flex flex-col sm:flex-row gap-3">
+              <Input
+                placeholder="Enter voucher code"
+                value={redeemInput}
+                onChange={(e) => setRedeemInput(e.target.value.toUpperCase())}
+                className="flex-1"
+              />
+              <Button type="submit" loading={redeeming} disabled={redeeming || !redeemInput.trim()}>Redeem</Button>
+            </form>
+          </div>
         </Card>
       </div>
 
@@ -245,6 +290,13 @@ export default function UserRewardsTab() {
           </Card>
         )}
       </div>
+
+      <RewardWinModal
+        isOpen={winModal.isOpen}
+        onClose={() => setWinModal((prev) => ({ ...prev, isOpen: false }))}
+        amount={winModal.amount}
+        title={winModal.title}
+      />
     </div>
   );
 }

@@ -159,14 +159,18 @@ export const BookingProvider = ({ children }) => {
         }
     }, []);
 
-    // Second phase: finalize a held slot into a real booking. couponCode and
-    // useWallet are both optional — the backend re-validates/recomputes both
-    // from scratch (never trusts a discount or wallet deduction computed
-    // client-side).
-    const confirmReservation = useCallback(async (holdToken, { couponCode, useWallet } = {}) => {
+    // Second phase: finalize a held slot into a real booking. couponCode,
+    // redeemCode, and useWallet are all optional — the backend
+    // re-validates/recomputes all of them from scratch (never trusts a
+    // discount or wallet deduction computed client-side). couponCode and
+    // redeemCode are mutually exclusive (see BookingWriteError in
+    // bookings/services.py::create_booking_row) — the caller picks one
+    // based on `kind` from the /bookings/coupons/validate/ response.
+    const confirmReservation = useCallback(async (holdToken, { couponCode, redeemCode, useWallet } = {}) => {
         try {
             const response = await api.post(`/bookings/confirm/${holdToken}/`, {
                 ...(couponCode ? { couponCode } : {}),
+                ...(redeemCode ? { redeemCode } : {}),
                 ...(useWallet ? { useWallet: true } : {}),
             });
             dispatch({ type: 'ADD_BOOKING', payload: response.data });
@@ -279,6 +283,21 @@ export const BookingProvider = ({ children }) => {
         }
     }, []);
 
+    // Fetches a single booking by id — used for direct/refreshed visits to
+    // /booking/:id (BookingConfirmation.jsx) that don't have router state
+    // from the checkout flow. BookingViewSet.retrieve() already scopes to
+    // the caller's own bookings or accepted-invite participation (404s
+    // otherwise, no data leak).
+    const fetchBookingById = useCallback(async (id) => {
+        try {
+            const response = await api.get(`/bookings/${id}/`);
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Booking not found.';
+            return { success: false, error: errorMessage };
+        }
+    }, []);
+
     const searchUsers = useCallback(async (query) => {
         try {
             const response = await api.get('/user/search/', { params: { q: query } });
@@ -305,6 +324,7 @@ export const BookingProvider = ({ children }) => {
         inviteToBooking,
         respondToInvite,
         getInviteDetail,
+        fetchBookingById,
         searchUsers,
     };
 

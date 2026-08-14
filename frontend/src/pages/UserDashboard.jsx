@@ -31,10 +31,11 @@ import {
   PeakHoursChart,
   MonthlySpendingChart,
 } from '../components/common/AdvancedCharts';
-import { Button, Card, Badge, Modal, Input, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
+import { Button, Card, Badge, Modal, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
 import AchievementBadge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
 import UserRewardsTab from '../components/rewards/UserRewardsTab';
+import InviteBookingModal from '../components/bookings/InviteBookingModal';
 
 
 // Register Chart.js components
@@ -70,7 +71,7 @@ const BOOKING_STATUS_TONE = {
 
 const UserDashboard = () => {
   const { user, logout } = useAuth();
-  const { bookings, loading, error, fetchBookings, cancelBooking, inviteToBooking, searchUsers } = useBooking();
+  const { bookings, loading, error, fetchBookings, cancelBooking } = useBooking();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('overview');
@@ -89,9 +90,6 @@ const UserDashboard = () => {
   // upcoming booking card (not shown to invited participants — see
   // isOwnBooking below).
   const [inviteModalBooking, setInviteModalBooking] = useState(null);
-  const [inviteQuery, setInviteQuery] = useState('');
-  const [inviteResults, setInviteResults] = useState([]);
-  const [invitingId, setInvitingId] = useState(null);
 
   // Fetch Analytics Data (memoized)
   const fetchAnalytics = useCallback(async () => {
@@ -214,41 +212,8 @@ const UserDashboard = () => {
     setSelectedBookingToCancel(null);
   };
 
-  const openInviteModal = (booking) => {
-    setInviteModalBooking(booking);
-    setInviteQuery('');
-    setInviteResults([]);
-  };
-
-  const closeInviteModal = () => {
-    setInviteModalBooking(null);
-    setInviteQuery('');
-    setInviteResults([]);
-  };
-
-  const handleInviteSearchChange = async (e) => {
-    const query = e.target.value;
-    setInviteQuery(query);
-    if (query.trim().length < 2) {
-      setInviteResults([]);
-      return;
-    }
-    setInviteResults(await searchUsers(query.trim()));
-  };
-
-  const handleSendInvite = async ({ invitedUserId, invitedEmail }) => {
-    const id = invitedUserId || invitedEmail;
-    setInvitingId(id);
-    const result = await inviteToBooking(inviteModalBooking.id, { invitedUserId, invitedEmail });
-    setInvitingId(null);
-    if (result.success) {
-      toast.success('Invite sent!');
-      closeInviteModal();
-      if (user?.id) fetchBookings(user.id);
-    } else {
-      toast.error(result.error || 'Failed to send invite.');
-    }
-  };
+  const openInviteModal = (booking) => setInviteModalBooking(booking);
+  const closeInviteModal = () => setInviteModalBooking(null);
 
   // Confirm Cancellation
   const confirmCancelBooking = async () => {
@@ -498,7 +463,11 @@ const UserDashboard = () => {
                           const acceptedInvites = (booking.invites || []).filter((i) => i.status === 'accepted');
                           const participantCount = 1 + acceptedInvites.length;
                           return (
-                            <article key={booking.id} className="rounded-2xl border border-border bg-card p-5">
+                            <article
+                              key={booking.id}
+                              onClick={() => navigate(`/booking/${booking.id}`)}
+                              className="rounded-2xl border border-border bg-card p-5 cursor-pointer transition-colors hover:border-primary/40"
+                            >
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                   <div className="flex items-center gap-2">
@@ -529,7 +498,7 @@ const UserDashboard = () => {
                               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                                 <span className="font-display text-xl tabular-nums">₹{booking.total_amount}</span>
                                 {booking.booking_status === 'Confirmed' && isOwnBooking && (
-                                  <div className="flex gap-2">
+                                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                                     <Button variant="outline" size="sm" icon={<UserPlus size={16} />} onClick={() => openInviteModal(booking)}>
                                       Invite
                                     </Button>
@@ -565,19 +534,23 @@ const UserDashboard = () => {
                         {pastBookings.map((booking) => {
                           const boxId = booking.box?.id || booking.box_id
                           return (
-                            <article key={booking.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5">
+                            <article
+                              key={booking.id}
+                              onClick={() => navigate(`/booking/${booking.id}`)}
+                              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5 cursor-pointer transition-colors hover:border-primary/40"
+                            >
                               <div>
                                 <h2 className="font-display text-base uppercase">{booking.box?.name || booking.box_name || 'Unknown Box'}</h2>
                                 <p className="text-sm text-muted-foreground">{new Date(booking.date).toLocaleDateString()}</p>
                               </div>
                               <div className="flex items-center gap-3">
                                 <span className="text-sm tabular-nums">₹{booking.total_amount}</span>
-                                <StatusPill status={booking.booking_status === 'Confirmed' ? 'Completed' : booking.booking_status} />
+                                <StatusPill status={booking.booking_status} />
                                 {boxId && (
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => navigate(`/boxes/${boxId}`, { state: { prefillDuration: booking.duration } })}
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/boxes/${boxId}`, { state: { prefillDuration: booking.duration } }); }}
                                   >
                                     Book again
                                   </Button>
@@ -962,60 +935,12 @@ const UserDashboard = () => {
         </p>
       </Modal>
 
-      {/* Invite Modal — group/split bookings. Search finds existing
-          accounts; typing a full email that doesn't match anyone still
-          sends an invite (claimed once they sign up), same backend action
-          either way (bookings/views.py's `invite`). */}
-      <Modal
+      <InviteBookingModal
+        booking={inviteModalBooking}
         isOpen={!!inviteModalBooking}
         onClose={closeInviteModal}
-        title="Invite someone to this booking"
-        size="sm"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            They&rsquo;ll be able to see this booking&rsquo;s details once they accept.
-          </p>
-          <Input
-            label="Search by name or email"
-            placeholder="Type at least 2 characters..."
-            value={inviteQuery}
-            onChange={handleInviteSearchChange}
-          />
-
-          {inviteResults.length > 0 && (
-            <ul className="space-y-1.5 max-h-48 overflow-y-auto">
-              {inviteResults.map((result) => (
-                <li key={result.id}>
-                  <button
-                    type="button"
-                    onClick={() => handleSendInvite({ invitedUserId: result.id })}
-                    disabled={invitingId === result.id}
-                    className="w-full flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left hover:border-primary/50 disabled:opacity-50"
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{result.name || result.email}</p>
-                      <p className="text-xs text-muted-foreground">{result.email}</p>
-                    </div>
-                    <UserPlus size={16} className="text-primary shrink-0" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {inviteQuery.includes('@') && inviteResults.length === 0 && (
-            <Button
-              fullWidth
-              icon={<UserPlus size={16} />}
-              loading={invitingId === inviteQuery.trim()}
-              onClick={() => handleSendInvite({ invitedEmail: inviteQuery.trim() })}
-            >
-              Invite {inviteQuery.trim()}
-            </Button>
-          )}
-        </div>
-      </Modal>
+        onInvited={() => { if (user?.id) fetchBookings(user.id); }}
+      />
     </div>
   );
 };

@@ -153,7 +153,13 @@ const Checkout = () => {
     const handleConfirm = async () => {
         setConfirming(true);
         try {
-            const result = await confirmReservation(draft.holdToken, { couponCode: appliedCoupon?.code, useWallet });
+            // appliedCoupon.kind tells us which model the code belongs to
+            // (see bookings/views.py::validate_coupon) — coupon and
+            // redeem-code are mutually exclusive at confirm time.
+            const codeParams = appliedCoupon?.kind === 'redeem_code'
+                ? { redeemCode: appliedCoupon.code }
+                : appliedCoupon?.code ? { couponCode: appliedCoupon.code } : {};
+            const result = await confirmReservation(draft.holdToken, { ...codeParams, useWallet });
             if (result.success) {
                 navigate(`/booking/${result.data.id}`, {
                     state: {
@@ -263,7 +269,7 @@ const Checkout = () => {
 
                         <Card>
                             <h3 className="font-display font-semibold text-foreground mb-4 flex items-center gap-2">
-                                <Ticket size={18} className="text-primary" /> Offer code
+                                <Ticket size={18} className="text-primary" /> Coupon / promo code
                             </h3>
                             {appliedCoupon ? (
                                 <div className="flex items-center justify-between rounded-lg border border-success/30 bg-success/10 px-4 py-2.5">
@@ -283,7 +289,7 @@ const Checkout = () => {
                                     <input
                                         value={couponCode}
                                         onChange={(e) => setCouponCode(e.target.value)}
-                                        placeholder="Enter code"
+                                        placeholder="Enter coupon or promo code"
                                         className="flex-1 px-4 py-2.5 rounded-lg bg-elevated border border-input text-foreground outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary placeholder-muted-foreground"
                                     />
                                     <Button variant="outline" onClick={handleApplyCoupon} loading={applyingCoupon} disabled={applyingCoupon}>

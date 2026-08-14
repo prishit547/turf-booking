@@ -18,15 +18,22 @@ from .serializers import (
 )
 from .gamification import trigger_gamification_check
 
+# Completed is a distinct terminal status from Confirmed (see
+# bookings/tasks.py::mark_completed_bookings_task) — booking history that's
+# aged into Completed must still count everywhere "active bookings" are
+# meant, or stats/charts here (and gamification, see gamification.py) go
+# empty/zero as soon as Celery Beat processes real past bookings.
+ACTIVE_STATUSES = ['Confirmed', 'Completed']
+
 class DashboardAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         user = request.user
-        
+
         # Base querysets for the user's bookings
         all_bookings = Booking.objects.filter(user=user)
-        confirmed_bookings = all_bookings.filter(booking_status='Confirmed')
+        confirmed_bookings = all_bookings.filter(booking_status__in=ACTIVE_STATUSES)
 
         # --- Calculate Stats ---
         total_spent = confirmed_bookings.aggregate(total=Sum('total_amount'))['total'] or 0

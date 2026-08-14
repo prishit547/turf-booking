@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { toast } from 'react-toastify';
 import { User, Mail, Phone, MapPin, Calendar, Camera, Edit2, Save, X, Info, Dumbbell } from 'lucide-react';
-import { useAuth } from '../api.jsx' // Correct path to your api.jsx
+import { useAuth, MEDIA_BASE_URL } from '../api.jsx' // Correct path to your api.jsx
 import { formatLocalDate } from '../utils/date'
 import { Button, Card, Badge, Input, Loader } from '../components/ui';
 
@@ -58,6 +59,8 @@ const Profile = () => {
   const [formErrors, setFormErrors] = useState({});
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef(null);
 
   const sports = ['Cricket', 'Football', 'Tennis', 'Badminton', 'Basketball', 'Pickleball', 'Volleyball', 'Table Tennis'];
 
@@ -124,6 +127,26 @@ const Profile = () => {
     setSaveSuccess(false);
     if (formErrors.preferredSports) {
       setFormErrors(prev => ({ ...prev, preferredSports: undefined }));
+    }
+  };
+
+  // Uploaded independently of the rest of the form (its own multipart
+  // request) so picking a photo doesn't require also being mid-edit-and-save
+  // on every other field — updateProfile() already accepts a FormData body
+  // as-is, axios sets the multipart Content-Type automatically.
+  const handleAvatarChange = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAvatarUploading(true);
+    const body = new FormData();
+    body.append('avatar', file);
+    const result = await updateProfile(body);
+    setAvatarUploading(false);
+    if (result.success) {
+      toast.success('Profile photo updated!');
+    } else {
+      toast.error(result.error || 'Failed to update your photo.');
     }
   };
 
@@ -270,18 +293,35 @@ const Profile = () => {
             <Card padding="lg">
               <div className="flex flex-col items-center text-center gap-4 mb-6">
                 <div className="relative">
-                  <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-2xl sm:text-3xl font-display">
-                    {avatarLetter}
-                  </div>
+                  {user?.avatar ? (
+                    <img
+                      src={`${MEDIA_BASE_URL}${user.avatar}`}
+                      alt=""
+                      className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-2xl sm:text-3xl font-display">
+                      {avatarLetter}
+                    </div>
+                  )}
                   {isEditing && (
                     <button
                       type="button"
                       aria-label="Change profile photo"
-                      className="absolute -bottom-1 -right-1 p-2 rounded-full bg-elevated border-2 border-background shadow-md text-muted-foreground hover:text-primary transition-colors"
+                      disabled={avatarUploading}
+                      onClick={() => avatarInputRef.current?.click()}
+                      className="absolute -bottom-1 -right-1 p-2 rounded-full bg-elevated border-2 border-background shadow-md text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
                     >
                       <Camera size={14} />
                     </button>
                   )}
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleAvatarChange}
+                  />
                 </div>
 
                 <div>

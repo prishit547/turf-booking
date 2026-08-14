@@ -482,6 +482,15 @@ def admin_dashboard_data(request):
         total=Sum('total_amount', default=0.0, output_field=DecimalField())
     )['total']
 
+    # Real per-booking resolved commission (owner+sport can override the
+    # platform default — see boxes/pricing.py::resolve_commission_rate),
+    # not a flat guess — this is what the Overview tab's revenue summary
+    # displays instead of a hardcoded percentage.
+    total_commission = sum(
+        (b.total_amount or 0) * resolve_commission_rate(b.box.owner if b.box else None, b.box.sport if b.box else '', b.date)
+        for b in Booking.objects.filter(booking_status__in=ACTIVE_STATUSES).select_related('box', 'box__owner')
+    )
+
     total_bookings_all = Booking.objects.count()
     cancelled_bookings = Booking.objects.filter(booking_status='Cancelled').count()
     cancellation_rate_pct = round((cancelled_bookings / total_bookings_all) * 100, 1) if total_bookings_all else 0.0
@@ -645,6 +654,7 @@ def admin_dashboard_data(request):
             'total_owners': total_owners,
             'total_bookings': total_bookings,
             'platform_revenue': platform_revenue,
+            'total_commission': round(float(total_commission), 2),
             'pending_boxes_count': pending_boxes_count,
             'approved_boxes_count': approved_boxes_count,
             'rejected_boxes_count': rejected_boxes_count,

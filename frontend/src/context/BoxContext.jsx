@@ -16,7 +16,7 @@ export const useBox = () => {
 // Fetches that each get their own independent loading/error slot, so one
 // fetch finishing doesn't clobber another's in-flight state (e.g. Home page
 // firing fetchFeaturedBoxes + fetchPopularBoxes at the same time).
-const FETCH_KEYS = ['boxes', 'featured', 'popular', 'nearby', 'owner', 'pending'];
+const FETCH_KEYS = ['boxes', 'featured', 'popular', 'nearby', 'owner', 'pending', 'locations'];
 const EMPTY_STATE_MAP = Object.fromEntries(FETCH_KEYS.map(k => [k, false]));
 const EMPTY_ERROR_MAP = Object.fromEntries(FETCH_KEYS.map(k => [k, null]));
 
@@ -27,6 +27,7 @@ export const BoxProvider = ({ children }) => {
     const [nearbyBoxes, setNearbyBoxes] = useState([]);
     const [ownerBoxes, setOwnerBoxes] = useState([]);
     const [pendingBoxes, setPendingBoxes] = useState([]);
+    const [locations, setLocations] = useState([]);
     const [loadingMap, setLoadingMap] = useState(EMPTY_STATE_MAP);
     const [errorMap, setErrorMap] = useState(EMPTY_ERROR_MAP);
     const [filters, setFilters] = useState({});
@@ -343,6 +344,20 @@ export const BoxProvider = ({ children }) => {
         }
     }, [processBoxData, setLoadingFor, setErrorFor]);
 
+    const fetchBoxLocations = useCallback(async () => {
+        setLoadingFor('locations', true);
+        setErrorFor('locations', null);
+        try {
+            const response = await api.get('/boxes/public/locations/');
+            setLocations(response.data.results || response.data);
+        } catch (err) {
+            console.error('Error fetching box locations:', err);
+            setErrorFor('locations', 'Could not load locations.');
+        } finally {
+            setLoadingFor('locations', false);
+        }
+    }, [setLoadingFor, setErrorFor]);
+
     // Fetch boxes when filters change
     useEffect(() => {
         fetchBoxes();
@@ -355,6 +370,7 @@ export const BoxProvider = ({ children }) => {
         nearbyBoxes,
         ownerBoxes,
         pendingBoxes,
+        locations,
         loading,
         error,
         fetchBoxes,
@@ -363,6 +379,7 @@ export const BoxProvider = ({ children }) => {
         fetchNearbyBoxes,
         fetchOwnerBoxes,
         fetchPendingBoxes,
+        fetchBoxLocations,
         addBox,
         updateBox,
         deleteBox,
@@ -384,7 +401,7 @@ export const BoxProvider = ({ children }) => {
             fetchPopularBoxes();
             fetchOwnerBoxes();
         }
-    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, addBox, updateBox, deleteBox, approveBox, rejectBox, requestBoxChanges, filters]);
+    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, locations, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, fetchBoxLocations, addBox, updateBox, deleteBox, approveBox, rejectBox, requestBoxChanges, filters]);
 
     return (
         <BoxContext.Provider value={contextValue}>

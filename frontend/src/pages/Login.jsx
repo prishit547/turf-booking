@@ -12,6 +12,7 @@ import { MagneticButton } from '../components/motion/MagneticButton';
 const Login = () => {
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const { login, logout, generalError: authContextGeneralError } = useAuth();
@@ -44,7 +45,7 @@ const Login = () => {
     logout();
 
     try {
-      const result = await login({ email: formData.email, password: formData.password });
+      const result = await login({ email: formData.email, password: formData.password }, rememberMe);
 
       if (result.success) {
         // A pending booking invite (see InviteClaim.jsx) takes priority
@@ -126,6 +127,8 @@ const Login = () => {
               id="remember-me"
               name="remember-me"
               type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
               className="h-4 w-4 rounded border-input bg-elevated text-primary focus:ring-primary/40"
               disabled={loading}
             />

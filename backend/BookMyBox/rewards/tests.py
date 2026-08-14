@@ -5,16 +5,19 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
+from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from boxes.models import Box
 from bookings.models import Booking
 from bookings.tasks import mark_completed_bookings_task
+from . import services
 from .models import CashbackRule, ScratchCardConfig, SpinWheelSegment, Wallet
 from .services import (
     apply_cashback, credit_wallet, debit_wallet, get_or_create_wallet,
     grant_scratch_card, grant_spin_entitlement, redeem_code, scratch_card, spin_wheel,
 )
-from .models import RedeemCode
+from .models import OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting
 
 User = get_user_model()
 
@@ -166,6 +169,28 @@ class RedeemCodeServiceTests(TestCase):
         with self.assertRaises(ValidationError):
             redeem_code(self.user, 'DOESNOTEXIST')
 
+    def test_redeem_code_rejects_box_scoped_code_with_specific_message(self):
+        owner = User.objects.create_user(
+            email='boxowner@example.com', username='boxowner@example.com', password='x', role='owner',
+        )
+        box = Box.objects.create(
+            owner=owner, name='Scoped Box', sport='Football', price=Decimal('500.00'),
+            status='approved', location='Mumbai',
+        )
+        code = RedeemCode.objects.create(value=Decimal('25.00'), box=box)
+        with self.assertRaises(ValidationError) as ctx:
+            redeem_code(self.user, code.code)
+        self.assertIn('Scoped Box', str(ctx.exception))
+        code.refresh_from_db()
+        self.assertFalse(code.is_used)
+
+    def test_redeem_code_unaffected_for_admin_issued_code(self):
+        # box=None (admin-issued) codes must still redeem into the wallet fine.
+        code = RedeemCode.objects.create(value=Decimal('25.00'))
+        redeem_code(self.user, code.code)
+        code.refresh_from_db()
+        self.assertTrue(code.is_used)
+
 
 class WalletSpendAtCheckoutTests(TestCase):
     """Booking creation with use_wallet=True — see
@@ -222,3 +247,151 @@ class WalletSpendAtCheckoutTests(TestCase):
         self.assertEqual(booking.wallet_amount_used, Decimal('0.00'))
         wallet = get_or_create_wallet(self.player)
         self.assertEqual(wallet.balance, Decimal('100.00'))
+
+
+class ScratchCardAutoGrantSettingTests(TestCase):
+    def test_is_enabled_defaults_true_with_no_row(self):
+        self.assertTrue(ScratchCardAutoGrantSetting.is_enabled())
+
+    def test_is_enabled_respects_explicit_false_row(self):
+        ScratchCardAutoGrantSetting.objects.create(enabled=False)
+        self.assertFalse(ScratchCardAutoGrantSetting.is_enabled())
+
+    def test_is_enabled_respects_explicit_true_row(self):
+        ScratchCardAutoGrantSetting.objects.create(enabled=True)
+        self.assertTrue(ScratchCardAutoGrantSetting.is_enabled())
+
+
+class OwnerScratchCardSettingTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='ownersetting@example.com', username='ownersetting@example.com', password='x', role='owner',
+        )
+
+    def test_is_enabled_for_defaults_true_with_no_row(self):
+        self.assertTrue(OwnerScratchCardSetting.is_enabled_for(self.owner))
+
+    def test_is_enabled_for_respects_explicit_false_row(self):
+        OwnerScratchCardSetting.objects.create(owner=self.owner, enabled=False)
+        self.assertFalse(OwnerScratchCardSetting.is_enabled_for(self.owner))
+
+
+class OnBookingCompletedScratchCardGatingTests(TestCase):
+    """on_booking_completed() must respect both the platform-wide and the
+    per-owner scratch-card auto-grant switches (spin entitlements and
+    cashback are unaffected by either switch)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='gateowner@example.com', username='gateowner@example.com', password='x', role='owner',
+        )
+        self.player = User.objects.create_user(
+            email='gateplayer@example.com', username='gateplayer@example.com', password='x', role='user',
+        )
+        self.box = Box.objects.create(
+            owner=self.owner, name='Gate Box', sport='Football', price=Decimal('500.00'),
+            status='approved', location='Mumbai',
+        )
+        self.booking = Booking.objects.create(
+            user=self.player, box=self.box, date=timezone.now().date(), start_time='10:00', end_time='11:00',
+            duration=1, total_amount=Decimal('500.00'), booking_status='Completed',
+        )
+        ScratchCardConfig.objects.create(label='Tier', prize_amount=Decimal('10.00'), weight=1, active=True)
+
+    def test_no_scratch_card_when_platform_switch_off(self):
+        ScratchCardAutoGrantSetting.objects.create(enabled=False)
+        services.on_booking_completed(self.booking)
+        self.assertFalse(ScratchCard.objects.filter(user=self.player).exists())
+
+    def test_no_scratch_card_when_owner_switch_off(self):
+        OwnerScratchCardSetting.objects.create(owner=self.owner, enabled=False)
+        services.on_booking_completed(self.booking)
+        self.assertFalse(ScratchCard.objects.filter(user=self.player).exists())
+
+    def test_scratch_card_granted_when_both_switches_on(self):
+        services.on_booking_completed(self.booking)
+        self.assertTrue(ScratchCard.objects.filter(user=self.player).exists())
+
+
+class ScratchCardGrantEndpointTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email='admin@example.com', username='admin@example.com', password='x', role='admin',
+        )
+        self.owner = User.objects.create_user(
+            email='grantowner@example.com', username='grantowner@example.com', password='x', role='owner',
+        )
+        self.player = User.objects.create_user(
+            email='grantplayer@example.com', username='grantplayer@example.com', password='x', role='user',
+        )
+
+    def _auth(self, user):
+        token = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_admin_grant_creates_card_with_active_config(self):
+        ScratchCardConfig.objects.create(label='Tier', prize_amount=Decimal('10.00'), weight=1, active=True)
+        self._auth(self.admin)
+        response = self.client.post('/api/rewards/admin/scratch-cards/grant/', {'user_id': self.player.id}, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ScratchCard.objects.filter(user=self.player).exists())
+
+    def test_admin_grant_returns_400_with_no_active_config(self):
+        self._auth(self.admin)
+        response = self.client.post('/api/rewards/admin/scratch-cards/grant/', {'user_id': self.player.id}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_owner_grant_creates_card_with_active_config(self):
+        ScratchCardConfig.objects.create(label='Tier', prize_amount=Decimal('10.00'), weight=1, active=True)
+        self._auth(self.owner)
+        response = self.client.post('/api/rewards/owner/scratch-cards/grant/', {'user_id': self.player.id}, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ScratchCard.objects.filter(user=self.player).exists())
+
+    def test_wrong_role_forbidden(self):
+        ScratchCardConfig.objects.create(label='Tier', prize_amount=Decimal('10.00'), weight=1, active=True)
+        self._auth(self.player)
+        admin_response = self.client.post('/api/rewards/admin/scratch-cards/grant/', {'user_id': self.player.id}, format='json')
+        self.assertEqual(admin_response.status_code, 403)
+        owner_response = self.client.post('/api/rewards/owner/scratch-cards/grant/', {'user_id': self.player.id}, format='json')
+        self.assertEqual(owner_response.status_code, 403)
+
+
+class OwnerRedeemCodeGenerateEndpointTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='codeowner@example.com', username='codeowner@example.com', password='x', role='owner',
+        )
+        self.other_owner = User.objects.create_user(
+            email='otherowner@example.com', username='otherowner@example.com', password='x', role='owner',
+        )
+        self.box = Box.objects.create(
+            owner=self.owner, name='Code Box', sport='Football', price=Decimal('500.00'),
+            status='approved', location='Mumbai',
+        )
+
+    def _auth(self, user):
+        token = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_generate_forbidden_for_box_caller_does_not_own(self):
+        self._auth(self.other_owner)
+        response = self.client.post(
+            '/api/rewards/owner/redeem-codes/generate/',
+            {'box': self.box.id, 'value': '20', 'quantity': 3}, format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(RedeemCode.objects.filter(box=self.box).count(), 0)
+
+    def test_generate_creates_codes_scoped_to_own_box(self):
+        self._auth(self.owner)
+        response = self.client.post(
+            '/api/rewards/owner/redeem-codes/generate/',
+            {'box': self.box.id, 'value': '20', 'quantity': 3}, format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(response.data), 3)
+        codes = RedeemCode.objects.filter(box=self.box)
+        self.assertEqual(codes.count(), 3)
+        for code in codes:
+            self.assertEqual(code.box_id, self.box.id)

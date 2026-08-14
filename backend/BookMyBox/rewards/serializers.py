@@ -48,7 +48,7 @@ class RedeemCodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = RedeemCode
         fields = [
-            'id', 'code', 'value', 'batch_label', 'is_used', 'used_by',
+            'id', 'code', 'value', 'batch_label', 'box', 'is_used', 'used_by',
             'used_at', 'expires_at', 'created_at',
         ]
         read_only_fields = ['code', 'is_used', 'used_by', 'used_at', 'created_at']

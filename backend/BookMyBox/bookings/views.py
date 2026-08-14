@@ -63,6 +63,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         try:
             booking = services.create_booking_row(
                 request.user, **parsed, coupon_code=request.data.get('couponCode'),
+                redeem_code=request.data.get('redeemCode'),
                 use_wallet=bool(request.data.get('useWallet')),
             )
         except BookingWriteError as e:
@@ -130,11 +131,15 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='coupons/validate', permission_classes=[IsAuthenticated])
     def validate_coupon(self, request):
-        """Dry-run coupon check for Checkout's "Apply" button — calls the
-        same services.apply_coupon() used for real at confirm-time, but
-        never increments used_count (see that function's docstring). The
-        real, authoritative application happens again inside
-        create_booking_row()'s locked transaction; this is purely a preview."""
+        """Dry-run code check for Checkout's "Apply" button — tries
+        services.apply_coupon() first (admin Coupon codes), and if that
+        fails, falls back to services.apply_redeem_code() (owner-issued,
+        box-scoped RedeemCode codes) before giving up. Neither call
+        consumes the code (see each function's docstring) — the real,
+        authoritative application happens again inside
+        create_booking_row()'s locked transaction; this is purely a preview.
+        `kind` tells the frontend which field to forward at confirm time
+        (couponCode vs redeemCode)."""
         box = Box.objects.filter(pk=request.data.get('boxId')).first()
         if not box:
             return Response({'valid': False, 'detail': 'Box not found.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -147,19 +152,28 @@ class BookingViewSet(viewsets.ModelViewSet):
         except ValueError:
             return Response({'valid': False, 'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
         start_time_str = request.data.get('startTime', '')
+        code = request.data.get('code')
 
+        kind = 'coupon'
         try:
-            coupon, discount_amount = services.apply_coupon(
-                box, duration_hours, request.data.get('code'), booking_date, start_time_str,
+            applied, discount_amount = services.apply_coupon(
+                box, duration_hours, code, booking_date, start_time_str,
             )
-        except ValidationError as e:
-            reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
-            return Response({'valid': False, 'detail': str(reason)}, status=status.HTTP_400_BAD_REQUEST)
+        except ValidationError:
+            kind = 'redeem_code'
+            try:
+                applied, discount_amount = services.apply_redeem_code(
+                    box, duration_hours, code, booking_date, start_time_str,
+                )
+            except ValidationError as e:
+                reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+                return Response({'valid': False, 'detail': str(reason)}, status=status.HTTP_400_BAD_REQUEST)
 
         gross = resolve_box_price(box, booking_date, start_time_str) * duration_hours
         return Response({
             'valid': True,
-            'code': coupon.code,
+            'kind': kind,
+            'code': applied.code,
             'discount_amount': str(discount_amount),
             'final_amount': str(gross - discount_amount),
         })
@@ -414,6 +428,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                     slot['duration'],
                 ),
                 coupon_code=request.data.get('couponCode'),
+                redeem_code=request.data.get('redeemCode'),
                 use_wallet=bool(request.data.get('useWallet')),
             )
         except BookingWriteError as e:

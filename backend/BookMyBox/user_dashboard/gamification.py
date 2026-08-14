@@ -12,19 +12,25 @@ from boxes.models import Box
 
 logger = logging.getLogger(__name__)
 
+# Same Confirmed-vs-Completed distinction as user_dashboard/views.py's
+# ACTIVE_STATUSES — a booking that's aged into Completed must still count
+# toward points/badges, or stats permanently reset to zero once Beat
+# processes it.
+ACTIVE_STATUSES = ['Confirmed', 'Completed']
+
 
 class GamificationService:
-    
+
     @staticmethod
     def check_and_award_user_badges(user):
         """Check and award badges for user activities"""
         awarded_badges = []
-        
+
         # Get or create user game stats
         user_stats, created = UserGameStats.objects.get_or_create(user=user)
-        
+
         # Get user's bookings
-        user_bookings = Booking.objects.filter(user=user, booking_status='Confirmed')
+        user_bookings = Booking.objects.filter(user=user, booking_status__in=ACTIVE_STATUSES)
         total_bookings = user_bookings.count()
         
         # Update basic stats
@@ -85,7 +91,7 @@ class GamificationService:
         total_boxes = owner_boxes.count()
         
         # Get all bookings for owner's boxes
-        box_bookings = Booking.objects.filter(box__in=owner_boxes, booking_status='Confirmed')
+        box_bookings = Booking.objects.filter(box__in=owner_boxes, booking_status__in=ACTIVE_STATUSES)
         total_bookings_received = box_bookings.count()
         total_revenue = box_bookings.aggregate(total=Sum('total_amount'))['total'] or 0
         

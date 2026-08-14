@@ -33,6 +33,7 @@ class WalletTransaction(models.Model):
         ('redeem_code', 'Redeemed code'),
         ('booking_payment', 'Applied to booking'),
         ('admin_adjustment', 'Admin adjustment'),
+        ('refund', 'Booking cancellation refund'),
     ]
     wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='transactions')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -156,6 +157,36 @@ class SpinAttempt(models.Model):
         return f"SpinAttempt({self.user.email}, won {self.prize_amount})"
 
 
+class ScratchCardAutoGrantSetting(models.Model):
+    """Singleton platform-wide master switch for whether completing a
+    booking auto-grants a scratch card at all (see services.py::
+    on_booking_completed). If this is off, no scratch cards are granted
+    regardless of any individual owner's own setting below."""
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    @classmethod
+    def is_enabled(cls):
+        row = cls.objects.first()
+        return row.enabled if row else True
+
+
+class OwnerScratchCardSetting(models.Model):
+    """Per-owner override: lets an individual box owner opt their own
+    boxes' completed bookings out of auto-granting scratch cards, even
+    while the platform-wide switch above stays on. Missing row = opted in
+    (default True)."""
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='scratch_card_setting')
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def is_enabled_for(cls, owner):
+        row = cls.objects.filter(owner=owner).first()
+        return row.enabled if row else True
+
+
 def _generate_redeem_code():
     # Uppercase, human-typeable, base32-ish alphabet without ambiguous chars.
     alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -167,10 +198,21 @@ class RedeemCode(models.Model):
     distributed offline (print, promo, etc.) and redeemed once by whoever
     types it in — see services.py::redeem_code(). Structurally mirrors
     bookings/models.py::Coupon's admin-config shape, but single-use and
-    randomly generated rather than admin-typed."""
+    randomly generated rather than admin-typed.
+
+    Owner-issued codes set `box`, scoping them to checkout-time discounts
+    for that specific facility only (see bookings/services.py::
+    apply_redeem_code) rather than general wallet cash — services.py::
+    redeem_code() explicitly refuses to redeem a box-scoped code into the
+    wallet."""
     code = models.CharField(max_length=20, unique=True, default=_generate_redeem_code)
     value = models.DecimalField(max_digits=10, decimal_places=2)
     batch_label = models.CharField(max_length=100, blank=True, default='')
+    box = models.ForeignKey(
+        'boxes.Box', on_delete=models.CASCADE, null=True, blank=True, related_name='redeem_codes',
+        help_text="Null = admin-issued, platform-wide wallet credit. Set = owner-issued, "
+                  "redeemable only at checkout for this specific box.",
+    )
     is_used = models.BooleanField(default=False)
     used_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='redeemed_codes',

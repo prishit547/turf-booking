@@ -115,6 +115,25 @@ class GamificationServiceTests(APITestCase):
         stats = UserGameStats.objects.get(user=self.user)
         self.assertEqual(stats.total_spent, 1000)
 
+    def test_completed_booking_still_counts_toward_points_and_badges(self):
+        # Regression: check_and_award_user_badges used to filter
+        # booking_status='Confirmed' only, so points/badges reset to zero
+        # as soon as a booking aged into 'Completed'.
+        box = Box.objects.create(
+            name='Elite Cricket Box', sport='Cricket', sports=['Cricket'], location='Mumbai',
+            price=500, capacity=20, owner=self.owner, status='approved',
+        )
+        Booking.objects.create(
+            user=self.user, box=box, date='2026-08-01', start_time='10:00', end_time='12:00',
+            duration=2, total_amount=1000, booking_status='Completed',
+        )
+        GamificationService.check_and_award_user_badges(self.user)
+
+        stats = UserGameStats.objects.get(user=self.user)
+        self.assertEqual(stats.total_bookings, 1)
+        self.assertGreater(stats.total_points, 0)
+        self.assertTrue(UserBadge.objects.filter(user=self.user, achievement__name='First Timer').exists())
+
 
 class DashboardAnalyticsTests(APITestCase):
     def setUp(self):
@@ -154,6 +173,26 @@ class DashboardAnalyticsTests(APITestCase):
         self.assertEqual(float(response.data['total_spent']), 1000.0)
         self.assertEqual(response.data['total_hours_played'], 2)
         self.assertEqual(response.data['cancellation_rate'], 50.0)  # 1 of 2 total bookings cancelled
+
+    def test_totals_also_include_completed_bookings(self):
+        # Regression: booking_status transitions to 'Completed' (see
+        # bookings/tasks.py::mark_completed_bookings_task) once a slot's
+        # date/time passes — analytics must not go back to zero just
+        # because history aged out of 'Confirmed'.
+        box = Box.objects.create(
+            name='Elite Cricket Box', sport='Cricket', sports=['Cricket'], location='Mumbai',
+            price=500, capacity=20, owner=self.owner, status='approved',
+        )
+        Booking.objects.create(
+            user=self.user, box=box, date='2026-08-01', start_time='10:00', end_time='12:00',
+            duration=2, total_amount=1000, booking_status='Completed',
+        )
+
+        response = self.client.get('/api/dashboard/analytics/')
+
+        self.assertEqual(float(response.data['total_spent']), 1000.0)
+        self.assertEqual(response.data['total_hours_played'], 2)
+        self.assertNotEqual(response.data['sport_distribution'], [])
 
 
 class DashboardFavoritesTests(APITestCase):

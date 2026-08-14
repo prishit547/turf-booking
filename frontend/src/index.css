@@ -251,7 +251,7 @@
   transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
 }
 
-.scratch-card-flip.is-revealed .scratch-card-flip-inner {
+.scratch-card-flip-inner.is-revealed {
   transform: rotateY(180deg);
 }
 
@@ -270,5 +270,41 @@
    computed inline per spin so it lands exactly on the returned segment. */
 .spin-wheel-dial {
   transition: transform 4s cubic-bezier(0.15, 0.85, 0.25, 1);
+}
+
+/* Idle glow/pulse around the spin wheel dial — only active while the wheel
+   is not mid-spin, so it never visually fights the 4s rotation transition. */
+@keyframes wheel-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(209, 251, 0, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 24px 6px rgba(209, 251, 0, 0.25);
+  }
+}
+
+.wheel-glow-idle {
+  animation: wheel-glow 2.4s ease-in-out infinite;
+}
+
+/* Confetti burst (Rewards tab) — hand-rolled particle fall/fade/rotate,
+   fired on scratch/spin wins. See ConfettiBurst.jsx. */
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) translateX(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(120px) translateX(var(--confetti-drift, 0px)) rotate(540deg);
+    opacity: 0;
+  }
+}
+
+.confetti-particle {
+  position: absolute;
+  width: 6px;
+  height: 10px;
+  border-radius: 1px;
+  animation: confetti-fall 1.2s ease-in forwards;
 }
 

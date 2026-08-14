@@ -69,6 +69,8 @@ def cancel_booking(booking, *, cancelled_by, reason=None):
     booking.cancelled_at = timezone.now()
     booking.save()
 
+    _refund_booking(booking)
+
     # Notify whichever party didn't do the cancelling — the customer if the
     # owner/admin cancelled on them, or the box owner if the customer cancelled.
     customer_cancelled_own_booking = cancelled_by is not None and cancelled_by.id == booking.user_id
@@ -93,6 +95,25 @@ def cancel_booking(booking, *, cancelled_by, reason=None):
         booking.id, cancelled_by.id if cancelled_by else None, booking.box_id, booking.date, booking.start_time,
     )
     return booking
+
+
+def _refund_booking(booking):
+    """Reverses whatever the platform can actually reverse for a
+    just-cancelled booking. There's no real payment gateway anywhere in this
+    app (see rewards/services.py credit_wallet callers) — the wallet is the
+    only real money the platform ever collected, so any amount paid from it
+    (Booking.wallet_amount_used) is credited straight back. payment_status
+    moves to 'Refunded' whenever the booking had actually been marked paid,
+    so the booking's own record reflects that nothing is owed either way."""
+    if booking.wallet_amount_used and booking.wallet_amount_used > 0:
+        from rewards.services import credit_wallet
+        credit_wallet(
+            booking.user, booking.wallet_amount_used, 'refund',
+            f"Refund for cancelled booking #{booking.id}", booking=booking,
+        )
+    if booking.payment_status in ('Completed', 'Pending'):
+        booking.payment_status = 'Refunded'
+        booking.save(update_fields=['payment_status'])
 
 
 def _notify_and_clear_waitlist(booking):
@@ -224,10 +245,32 @@ def apply_coupon(box, duration_hours, code, booking_date, start_time_str, *, loc
     return coupon, discount_amount
 
 
+def apply_redeem_code(box, duration_hours, code, booking_date, start_time_str, *, lock=False):
+    """Box-scoped counterpart to apply_coupon() — validates an owner-issued
+    RedeemCode (rewards.models.RedeemCode with box set) against `box`, same
+    signature/return shape as apply_coupon so create_booking_row can treat
+    them identically. Admin-issued (box=None) RedeemCodes are NOT valid
+    here — those are wallet-only, see rewards/services.py::redeem_code()."""
+    from rewards.models import RedeemCode
+
+    queryset = RedeemCode.objects.select_for_update() if lock else RedeemCode.objects
+    try:
+        redeem = queryset.get(code=(code or '').strip().upper(), box=box)
+    except RedeemCode.DoesNotExist:
+        raise ValidationError("Redeem code not found for this facility.")
+
+    if not redeem.is_claimable():
+        raise ValidationError("This code has already been used or has expired.")
+
+    gross = resolve_box_price(box, booking_date, start_time_str) * duration_hours
+    discount_amount = min(redeem.value, gross)
+    return redeem, discount_amount
+
+
 def create_booking_row(user, box_id, booking_date, start_time_str, duration_hours, end_time_str,
                         *, booking_source='online', created_by=None, customer_name='',
                         customer_phone='', payment_status='Not Required', recurring_group_id=None,
-                        coupon_code=None, use_wallet=False):
+                        coupon_code=None, redeem_code=None, use_wallet=False):
     """The transaction.atomic() + select_for_update() + overlaps() DB write —
     the authoritative safety net, reused as-is by create() (direct booking),
     confirm() (two-phase hold/queue booking), and the owner-manual booking
@@ -248,19 +291,35 @@ def create_booking_row(user, box_id, booking_date, start_time_str, duration_hour
         if box.blocked_dates.filter(date=booking_date).exists():
             raise BookingWriteError(f"This facility is closed on {booking_date}.", status.HTTP_400_BAD_REQUEST)
 
+        if coupon_code and redeem_code:
+            raise BookingWriteError("Only one code can be applied per booking.", status.HTTP_400_BAD_REQUEST)
+
         expected_total_amount = resolve_box_price(box, booking_date, start_time_str) * duration_hours
 
-        # Coupon is re-validated here (not trusted from an earlier preview
-        # call) and locked for the duration of this transaction, same
-        # reasoning as re-checking box.status above — the row lock makes
-        # the used_count increment below race-safe against a concurrent
-        # booking applying the same coupon at the same moment.
+        # Coupon/redeem-code is re-validated here (not trusted from an
+        # earlier preview call) and locked for the duration of this
+        # transaction, same reasoning as re-checking box.status above — the
+        # row lock makes the used_count/is_used update below race-safe
+        # against a concurrent booking applying the same code at the same
+        # moment. Coupon and RedeemCode are deliberately separate branches
+        # (not merged) since they're different models with different
+        # consumption side-effects.
         applied_coupon = None
+        applied_redeem = None
         discount_amount = 0
         if coupon_code:
             try:
                 applied_coupon, discount_amount = apply_coupon(
                     box, duration_hours, coupon_code, booking_date, start_time_str, lock=True,
+                )
+            except ValidationError as e:
+                reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+                raise BookingWriteError(str(reason), status.HTTP_400_BAD_REQUEST)
+            expected_total_amount = expected_total_amount - discount_amount
+        elif redeem_code:
+            try:
+                applied_redeem, discount_amount = apply_redeem_code(
+                    box, duration_hours, redeem_code, booking_date, start_time_str, lock=True,
                 )
             except ValidationError as e:
                 reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
@@ -293,9 +352,15 @@ def create_booking_row(user, box_id, booking_date, start_time_str, duration_hour
             customer_name=customer_name,
             customer_phone=customer_phone,
             recurring_group_id=recurring_group_id,
-            coupon_code=applied_coupon.code if applied_coupon else '',
+            coupon_code=(applied_coupon.code if applied_coupon else (applied_redeem.code if applied_redeem else '')),
             discount_amount=discount_amount,
         )
+
+        if applied_redeem:
+            applied_redeem.is_used = True
+            applied_redeem.used_by = user
+            applied_redeem.used_at = timezone.now()
+            applied_redeem.save(update_fields=['is_used', 'used_by', 'used_at'])
 
         if applied_coupon:
             applied_coupon.used_count = F('used_count') + 1

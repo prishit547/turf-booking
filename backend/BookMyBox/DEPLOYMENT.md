@@ -81,8 +81,7 @@ alongside Django, not just one WSGI process:
    reference server — at the cost of that concurrency ceiling.
 3. **A Celery worker** — schedules and fires the one-shot hold-expiry checks
    that make the wait-queue cascade (a hold expires -> the next queued user
-   is promoted -> their own expiry gets scheduled -> ...). No Celery Beat/
-   periodic schedule is needed, just a running worker:
+   is promoted -> their own expiry gets scheduled -> ...):
    ```bash
    celery -A BookMyBox worker -l info --concurrency=2
    ```
@@ -93,9 +92,34 @@ alongside Django, not just one WSGI process:
    fraction of one core, each a full Django process, sitting at the memory
    limit for no throughput benefit. Set it to roughly the CPU actually
    allocated to the container.
+4. **A Celery Beat process** — separate from the worker above, this is what
+   actually ticks `CELERY_BEAT_SCHEDULE` (`BookMyBox/settings.py`):
+   `mark_completed_bookings_task` (hourly — the only code path that ever
+   transitions a `Booking` from `Confirmed` to `Completed`, which is also
+   what triggers cashback/scratch-card/spin-wheel grants — see
+   `rewards/services.py::on_booking_completed`) and
+   `run_scheduled_payouts_task` (daily). **A running worker alone is not
+   enough** — without Beat also running, nothing ever enqueues these two
+   tasks, so bookings stay `Confirmed` forever and rewards never fire, even
+   though the worker process is up and idle:
+   ```bash
+   celery -A BookMyBox beat -l info
+   ```
+   In Docker, this is the `celery_beat` service in `docker-compose.prod.yml`
+   (`docker-entrypoint.sh beat` case) — a separate container from
+   `celery_worker`, since Beat is a single scheduler process that must never
+   run more than once, unlike the worker which can scale horizontally.
+
+   **Local-dev-only gotcha**: the commands above assume a working directory
+   where `DATABASE_URL`'s relative `sqlite:///db.sqlite3` resolves to the
+   same file the Django dev server reads (repo root — see the root
+   [`README.md`](../../README.md#1-start-the-backend) for the exact
+   commands and why plain `cd backend/BookMyBox && celery -A BookMyBox ...`
+   silently points at a second, stale, untracked database instead). This
+   doesn't apply in Docker, where `DATABASE_URL` is an absolute Postgres URL.
 
 This is a real operational complexity increase over the previous
-single-process WSGI setup — three processes instead of one, plus a Redis
+single-process WSGI setup — four processes instead of one, plus a Redis
 dependency. It's the cost of the reservation feature actually working
 correctly under contention; there isn't a way to get the hold/queue/
 cascade behavior without some out-of-request-cycle scheduling mechanism.

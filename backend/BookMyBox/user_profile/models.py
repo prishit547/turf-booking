@@ -11,6 +11,7 @@ class UserProfile(models.Model):
     )
     
     # Additional profile fields not in User model
+    avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
     date_of_birth = models.DateField(blank=True, null=True)
     bio = models.TextField(blank=True, null=True)
     preferred_sports = models.JSONField(default=list, blank=True)

@@ -14,8 +14,8 @@ from rest_framework.exceptions import ValidationError
 
 from user.notifications import notify
 from .models import (
-    CashbackRule, RedeemCode, ScratchCard, ScratchCardConfig,
-    SpinAttempt, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction,
+    CashbackRule, OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting,
+    ScratchCardConfig, SpinAttempt, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction,
 )
 
 
@@ -140,6 +140,11 @@ def redeem_code(user, code):
             redeem = RedeemCode.objects.select_for_update().get(code=code)
         except RedeemCode.DoesNotExist:
             raise ValidationError("Invalid redeem code.")
+        if redeem.box_id is not None:
+            raise ValidationError(
+                f"This code is only valid at checkout for {redeem.box.name} — "
+                f"apply it on that box's booking page, not here."
+            )
         if not redeem.is_claimable():
             raise ValidationError("This code has already been used or has expired.")
         redeem.is_used = True
@@ -156,5 +161,6 @@ def on_booking_completed(booking):
     One call site instead of three separate periodic tasks re-querying
     the same completed-bookings set."""
     apply_cashback(booking)
-    grant_scratch_card(booking.user, booking=booking)
+    if ScratchCardAutoGrantSetting.is_enabled() and OwnerScratchCardSetting.is_enabled_for(booking.box.owner):
+        grant_scratch_card(booking.user, booking=booking)
     grant_spin_entitlement(booking.user, booking=booking)

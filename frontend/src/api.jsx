@@ -15,6 +15,41 @@ export const api = axios.create({
   },
 });
 
+// "Remember me" (Login.jsx) backs onto which Storage tokens live in, not a
+// decorative checkbox: checked (the default, matching prior behavior)
+// keeps using localStorage, which is what the 90-day refresh-token sliding
+// session relies on to survive browser restarts; unchecked switches to
+// sessionStorage, which the browser clears when the tab/window closes, so
+// an unattended shared/public computer doesn't stay logged in indefinitely.
+// The flag itself is a tiny always-localStorage marker so the module-level
+// request interceptor below (no React state available at this scope) can
+// synchronously resolve the right backing store on every single request.
+const REMEMBER_FLAG_KEY = 'bmb_remember';
+
+function authStore() {
+  return localStorage.getItem(REMEMBER_FLAG_KEY) === '0' ? sessionStorage : localStorage;
+}
+
+function getAuthItem(key) {
+  return authStore().getItem(key);
+}
+
+function setAuthItem(key, value) {
+  authStore().setItem(key, value);
+}
+
+function clearAuthItems() {
+  // Clear both stores unconditionally — a stale token can only be left
+  // behind in the store the current flag *doesn't* point at if we only
+  // clear the resolved one.
+  for (const store of [localStorage, sessionStorage]) {
+    store.removeItem('accessToken');
+    store.removeItem('refreshToken');
+    store.removeItem('user');
+  }
+  localStorage.removeItem(REMEMBER_FLAG_KEY);
+}
+
 // Registered once at module load (not inside a component effect) so it's
 // guaranteed to be attached before any request ever goes out — a component
 // that fires an authenticated call on mount (e.g. NotificationProvider)
@@ -24,7 +59,7 @@ export const api = axios.create({
 // no Authorization header.
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('accessToken');
+    const token = getAuthItem('accessToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -41,14 +76,14 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
     try {
-      const storedUser = localStorage.getItem('user');
+      const storedUser = getAuthItem('user');
       return storedUser ? JSON.parse(storedUser) : null;
     } catch (error) {
-      console.error("Failed to parse user from localStorage:", error);
+      console.error("Failed to parse user from storage:", error);
       return null;
     }
   });
-  const [accessToken, setAccessToken] = useState(localStorage.getItem('accessToken'));
+  const [accessToken, setAccessToken] = useState(getAuthItem('accessToken'));
   const [loading, setLoading] = useState(true);
   const [generalError, setGeneralError] = useState(null);
 
@@ -56,9 +91,7 @@ export const AuthProvider = ({ children }) => {
   const clearAuth = useCallback(() => {
     setUser(null);
     setAccessToken(null);
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('user');
+    clearAuthItems();
     setGeneralError(null);
   }, []);
 
@@ -72,21 +105,21 @@ export const AuthProvider = ({ children }) => {
   // state stays in sync with localStorage without requiring a page reload.
   const hydrateAuth = useCallback((tokens, userData) => {
     if (tokens?.access) {
-      localStorage.setItem('accessToken', tokens.access);
+      setAuthItem('accessToken', tokens.access);
       setAccessToken(tokens.access);
     }
     if (tokens?.refresh) {
-      localStorage.setItem('refreshToken', tokens.refresh);
+      setAuthItem('refreshToken', tokens.refresh);
     }
     if (userData) {
-      localStorage.setItem('user', JSON.stringify(userData));
+      setAuthItem('user', JSON.stringify(userData));
       setUser(userData);
     }
   }, []);
 
   // Function to refresh token
   const refreshAuthToken = useCallback(async () => {
-    const currentRefreshToken = localStorage.getItem('refreshToken');
+    const currentRefreshToken = getAuthItem('refreshToken');
     if (!currentRefreshToken) {
       console.warn("No refresh token available. Cannot refresh.");
       logout();
@@ -95,7 +128,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await axios.post(`${API_BASE_URL}/user/token/refresh/`, { refresh: currentRefreshToken });
       const newAccessToken = response.data.access;
-      localStorage.setItem('accessToken', newAccessToken);
+      setAuthItem('accessToken', newAccessToken);
       setAccessToken(newAccessToken);
       return true;
     } catch (error) {
@@ -113,7 +146,7 @@ export const AuthProvider = ({ children }) => {
   // --- FIX 1: MODIFIED fetchUser TO RETURN DATA ---
   // This function now returns the fetched user data, making it more versatile.
   const fetchUser = useCallback(async () => {
-    const token = localStorage.getItem('accessToken');
+    const token = getAuthItem('accessToken');
     if (!token) {
       setUser(null);
       return null; // <-- RETURN NULL on failure
@@ -123,7 +156,7 @@ export const AuthProvider = ({ children }) => {
       const fetchedUserData = response.data;  // FIXED: No need for .user since CompleteProfileSerializer returns data directly
 
       setUser(fetchedUserData);
-      localStorage.setItem('user', JSON.stringify(fetchedUserData));
+      setAuthItem('user', JSON.stringify(fetchedUserData));
       
       return fetchedUserData; // <-- RETURN THE NEW USER DATA
 
@@ -138,7 +171,7 @@ export const AuthProvider = ({ children }) => {
             const retriedUserData = retryResponse.data;  // FIXED: No need for .user
 
             setUser(retriedUserData);
-            localStorage.setItem('user', JSON.stringify(retriedUserData));
+            setAuthItem('user', JSON.stringify(retriedUserData));
 
             return retriedUserData; // <-- RETURN THE NEW USER DATA ON RETRY
           } catch (retryError) {
@@ -182,16 +215,20 @@ export const AuthProvider = ({ children }) => {
     };
   }, [refreshAuthToken, logout]);
 
-  // Login Function
-  const login = async (credentials) => {
+  // Login Function. `remember` (Login.jsx's checkbox, default true so every
+  // other caller — e.g. InviteClaim's post-login resume — keeps today's
+  // always-persistent behavior) picks which Storage the tokens land in;
+  // must be set before the writes below so authStore() resolves correctly.
+  const login = async (credentials, remember = true) => {
     setGeneralError(null);
+    localStorage.setItem(REMEMBER_FLAG_KEY, remember ? '1' : '0');
     try {
       const response = await axios.post(`${API_BASE_URL}/user/login/`, credentials);
       const { access, refresh, user: userData } = response.data;
 
-      localStorage.setItem('accessToken', access);
-      localStorage.setItem('refreshToken', refresh);
-      localStorage.setItem('user', JSON.stringify(userData));
+      setAuthItem('accessToken', access);
+      setAuthItem('refreshToken', refresh);
+      setAuthItem('user', JSON.stringify(userData));
 
       setAccessToken(access);
       setUser(userData);
@@ -219,9 +256,10 @@ export const AuthProvider = ({ children }) => {
       const { user: registeredUser, tokens } = response.data;
       const { access, refresh } = tokens;
 
-      localStorage.setItem('accessToken', access);
-      localStorage.setItem('refreshToken', refresh);
-      localStorage.setItem('user', JSON.stringify(registeredUser));
+      localStorage.setItem(REMEMBER_FLAG_KEY, '1');
+      setAuthItem('accessToken', access);
+      setAuthItem('refreshToken', refresh);
+      setAuthItem('user', JSON.stringify(registeredUser));
 
       setAccessToken(access);
       setUser(registeredUser);
@@ -257,19 +295,29 @@ export const AuthProvider = ({ children }) => {
     }
   }, [fetchUser, generalError]); // <-- REMOVED 'user' dependency
 
-  // Update Profile Function
+  // Update Profile Function. `profileData` is normally a plain object (JSON
+  // field edits), but the avatar upload (Profile.jsx) passes a FormData
+  // instead — the `api` instance hardcodes a default JSON Content-Type
+  // header, which (unlike axios's own FormData auto-detection) is NOT
+  // overridden automatically, so a multipart upload through it would
+  // silently go out as "application/json" with no boundary and 400 on the
+  // backend ("submitted data was not a file"). Clearing the header for
+  // this one request lets the browser set the correct multipart boundary.
   const updateProfile = async (profileData) => {
     setGeneralError(null);
     try {
-      const response = await api.patch('/user_profile/my-profile/update/', profileData);  // FIXED: Changed to correct endpoint
+      const isFormData = profileData instanceof FormData;
+      const response = await api.patch('/user_profile/my-profile/update/', profileData, isFormData ? {
+        headers: { 'Content-Type': undefined },
+      } : undefined);
       const updatedPartialUserData = response.data;  // FIXED: CompleteProfileSerializer returns data directly
 
       // Merge with existing user data to prevent data loss on partial updates
-      const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+      const currentUser = JSON.parse(getAuthItem('user')) || {};
       const mergedUser = { ...currentUser, ...updatedPartialUserData };
 
       setUser(mergedUser);
-      localStorage.setItem('user', JSON.stringify(mergedUser));
+      setAuthItem('user', JSON.stringify(mergedUser));
 
       return { success: true, data: mergedUser };
     } catch (err) {

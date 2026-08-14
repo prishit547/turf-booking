@@ -4,15 +4,13 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import { ArrowRight, CalendarDays, MapPin, Search, Sparkles, Ticket, Zap } from 'lucide-react'
 import { useBox } from '../context/BoxContext'
-import { Loader } from '../components/ui'
+import { Loader, Select } from '../components/ui'
 import Chatbot from '../components/common/Chatbot'
 import { Reveal, WordReveal } from '../components/motion/Reveal'
 import { MagneticButton } from '../components/motion/MagneticButton'
 import { BoxCard } from '../components/boxes/BoxCard'
 import { CricketIcon, FootballIcon, TennisIcon, BadmintonIcon, BasketballIcon, PickleballIcon } from '../components/icons/SportIcons'
 import heroBanner from '../assets/hero_banner.jpg'
-
-const CITIES = ['Mumbai', 'Bengaluru', 'Pune', 'Delhi', 'Ahmedabad', 'Hyderabad']
 
 const SPORTS = [
   { id: 'Cricket', name: 'Cricket', Icon: CricketIcon, tagline: 'Box cricket, practice nets' },
@@ -38,19 +36,20 @@ const TESTIMONIALS = [
 
 const Home = () => {
   const navigate = useNavigate()
-  const { boxes, popularBoxes, fetchPopularBoxes } = useBox()
+  const { boxes, popularBoxes, locations, fetchPopularBoxes, fetchBoxLocations } = useBox()
   const heroRef = useRef(null)
   const { scrollYProgress } = useScroll({ target: heroRef, offset: ['start start', 'end start'] })
   const bgY = useTransform(scrollYProgress, [0, 1], ['0%', '18%'])
   const bgScale = useTransform(scrollYProgress, [0, 1], [1.05, 1.18])
 
   const [sport, setSport] = useState('')
-  const [city, setCity] = useState(CITIES[0])
+  const [city, setCity] = useState('')
   const [date, setDate] = useState('')
 
   useEffect(() => {
     fetchPopularBoxes()
-  }, [fetchPopularBoxes])
+    fetchBoxLocations()
+  }, [fetchPopularBoxes, fetchBoxLocations])
 
   const heroImageFor = (sportId) => boxes.find((b) => b.sport === sportId)?.image || heroBanner
 
@@ -117,33 +116,34 @@ const Home = () => {
             className="mt-9 rounded-2xl border border-border bg-card/85 p-3 backdrop-blur sm:max-w-3xl"
           >
             <div className="grid gap-2 sm:grid-cols-[1.1fr_1fr_1fr_auto]">
-              <label className="flex items-center gap-2 rounded-xl bg-elevated px-3 py-2.5">
-                <Sparkles className="h-4 w-4 text-primary" />
-                <select
+              <div className="relative flex items-center">
+                <Sparkles className="pointer-events-none absolute left-3 z-10 h-4 w-4 text-primary" />
+                <Select
                   value={sport}
                   onChange={(e) => setSport(e.target.value)}
                   aria-label="Sport"
-                  className="w-full bg-transparent text-sm outline-none"
+                  className="pl-9 bg-elevated border-transparent text-sm"
                 >
                   <option value="">Any sport</option>
                   {SPORTS.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-2 rounded-xl bg-elevated px-3 py-2.5">
-                <MapPin className="h-4 w-4 text-primary" />
-                <select
+                </Select>
+              </div>
+              <div className="relative flex items-center">
+                <MapPin className="pointer-events-none absolute left-3 z-10 h-4 w-4 text-primary" />
+                <Select
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                   aria-label="City"
-                  className="w-full bg-transparent text-sm outline-none"
+                  className="pl-9 bg-elevated border-transparent text-sm"
                 >
-                  {CITIES.map((c) => (
+                  <option value="">Any location</option>
+                  {locations.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
-                </select>
-              </label>
+                </Select>
+              </div>
               <label className="flex items-center gap-2 rounded-xl bg-elevated px-3 py-2.5">
                 <CalendarDays className="h-4 w-4 text-primary" />
                 <input

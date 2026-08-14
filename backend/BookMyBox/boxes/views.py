@@ -13,6 +13,7 @@ from django.views.decorators.cache import cache_page
 import math
 
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
 
 from bookings.models import Booking
 from .models import Box, Review, BlockedDate, CommissionRate, PricingRule
@@ -127,8 +128,36 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         popular_boxes = self.get_queryset().order_by('-rating')[:10] # Gets top 10 by rating
         
         serializer = self.get_serializer(popular_boxes, many=True)
-        
+
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL))
+    def locations(self, request):
+        """Distinct city/location strings across approved boxes, for the
+        Home hero search's city dropdown."""
+        locations = (
+            Box.objects.filter(status='approved')
+            .exclude(location='')
+            .order_by('location')
+            .values_list('location', flat=True)
+            .distinct()
+        )
+        return Response(list(locations))
+
+    @action(detail=False, methods=['get'])
+    @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL))
+    def stats(self, request):
+        """Real platform-wide counts for marketing pages (About.jsx) —
+        replaces hardcoded "500+ facilities" style copy that never moved."""
+        User = get_user_model()
+        return Response({
+            'facilities': Box.objects.filter(status='approved').count(),
+            'cities': Box.objects.filter(status='approved').exclude(location='')
+                .values('location').distinct().count(),
+            'users': User.objects.filter(role='user').count(),
+            'bookings_completed': Booking.objects.filter(booking_status='Completed').count(),
+        })
 
     # --- YOUR EXISTING ACTIONS ARE UNCHANGED ---
 

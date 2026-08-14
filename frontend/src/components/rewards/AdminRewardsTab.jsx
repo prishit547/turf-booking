@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
-import { Plus, Wallet, Gift, Sparkles, Ticket, Download } from 'lucide-react';
+import { Plus, Wallet, Gift, Sparkles, Ticket, Download, UserPlus } from 'lucide-react';
 import { api } from '../../api.jsx';
 import { Button, Card, Badge, Input, Modal, Loader, StatTile } from '../ui';
+import { useDebounce } from '../../hooks/useDebounce';
 
 const SUB_TABS = [
   { id: 'overview', label: 'Overview', icon: Wallet },
@@ -173,12 +174,146 @@ function CashbackSection() {
   );
 }
 
+/**
+ * Master on/off switch for auto-granting a scratch card whenever a booking
+ * completes — reused by both the admin (platform-wide) and owner
+ * (per-owner opt-out) rewards tabs against different endpoints. Exported
+ * so OwnerRewardsTab.jsx can reuse it verbatim instead of duplicating.
+ */
+export function AutoGrantToggle({ endpoint, title, description }) {
+  const [enabled, setEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get(endpoint).then((res) => setEnabled(!!res.data.enabled)).finally(() => setLoading(false));
+  }, [endpoint]);
+
+  const handleToggle = async () => {
+    setSaving(true);
+    try {
+      const res = await api.patch(endpoint, { enabled: !enabled });
+      setEnabled(!!res.data.enabled);
+      toast.success(res.data.enabled ? 'Auto-grant turned on' : 'Auto-grant turned off');
+    } catch {
+      toast.error('Failed to update setting');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card padding="md">
+      <label className="flex items-center justify-between gap-3 cursor-pointer">
+        <span>
+          <span className="block text-sm font-medium text-foreground">{title}</span>
+          {description && <span className="block text-xs text-muted-foreground mt-0.5">{description}</span>}
+        </span>
+        {loading ? (
+          <span className="text-xs text-muted-foreground">Loading...</span>
+        ) : (
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={saving}
+            onChange={handleToggle}
+            className="w-5 h-5 rounded accent-primary disabled:opacity-50"
+            aria-label={title}
+          />
+        )}
+      </label>
+    </Card>
+  );
+}
+
+/**
+ * "Grant a scratch card to a specific user" — search-as-you-type over
+ * GET /user/search/ (same lightweight endpoint the booking-invite flow
+ * uses), then POST {user_id} to `endpoint`. Exported so OwnerRewardsTab.jsx
+ * can reuse it verbatim instead of duplicating.
+ */
+export function GrantScratchCardModal({ isOpen, onClose, endpoint }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [grantingId, setGrantingId] = useState(null);
+  const debouncedQuery = useDebounce(query, 300);
+
+  useEffect(() => {
+    if (debouncedQuery.trim().length < 2) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    api.get('/user/search/', { params: { q: debouncedQuery.trim() } })
+      .then((res) => setResults(res.data))
+      .finally(() => setSearching(false));
+  }, [debouncedQuery]);
+
+  const handleClose = () => {
+    setQuery('');
+    setResults([]);
+    onClose();
+  };
+
+  const handleGrant = async (user) => {
+    setGrantingId(user.id);
+    try {
+      await api.post(endpoint, { user_id: user.id });
+      toast.success(`Scratch card granted to ${user.name || user.email}`);
+      handleClose();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to grant scratch card');
+    } finally {
+      setGrantingId(null);
+    }
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={handleClose} title="Grant a scratch card" size="sm">
+      <div className="space-y-4">
+        <Input
+          label="Search by name or email"
+          placeholder="Type at least 2 characters..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {searching && <p className="text-sm text-muted-foreground">Searching...</p>}
+        {results.length > 0 && (
+          <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+            {results.map((result) => (
+              <li key={result.id}>
+                <button
+                  type="button"
+                  onClick={() => handleGrant(result)}
+                  disabled={grantingId === result.id}
+                  className="w-full flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left hover:border-primary/50 disabled:opacity-50"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{result.name || result.email}</p>
+                    <p className="text-xs text-muted-foreground">{result.email}</p>
+                  </div>
+                  <UserPlus size={16} className="text-primary shrink-0" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {debouncedQuery.trim().length >= 2 && !searching && results.length === 0 && (
+          <p className="text-sm text-muted-foreground">No matching users.</p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function ScratchCardsSection() {
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ label: '', prize_amount: '', weight: '1', active: true });
   const [saving, setSaving] = useState(false);
+  const [showGrantModal, setShowGrantModal] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -208,10 +343,20 @@ function ScratchCardsSection() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <h3 className="text-xl font-display font-semibold text-foreground">Scratch card prize tiers</h3>
-        <Button onClick={() => setShowModal(true)} icon={<Plus size={16} />}>New tier</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowGrantModal(true)} icon={<UserPlus size={16} />}>Grant to user</Button>
+          <Button onClick={() => setShowModal(true)} icon={<Plus size={16} />}>New tier</Button>
+        </div>
       </div>
+
+      <AutoGrantToggle
+        endpoint="/rewards/admin/scratch-cards/auto-grant/"
+        title="Auto-grant scratch cards platform-wide"
+        description="Master switch — off means no scratch cards are granted for any completed booking, regardless of any owner's own setting."
+      />
+
       <Card padding="none" className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -236,6 +381,12 @@ function ScratchCardsSection() {
           </table>
         </div>
       </Card>
+
+      <GrantScratchCardModal
+        isOpen={showGrantModal}
+        onClose={() => setShowGrantModal(false)}
+        endpoint="/rewards/admin/scratch-cards/grant/"
+      />
 
       <Modal
         isOpen={showModal}

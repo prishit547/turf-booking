@@ -1,9 +1,11 @@
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { Target, Users, Award, Zap, Heart, Shield, ArrowRight, Star } from 'lucide-react'
 import { animations, useScrollAnimation } from '../utils/animations'
 import { Button, Card, Badge } from '../components/ui'
 import useCountAnimation from '../hooks/useCountAnimation'
+import { api } from '../api.jsx'
 
 import teamRochan from '../assets/team_rochan.jpg'
 import teamKhush from '../assets/team_khush.jpg'
@@ -71,13 +73,6 @@ const team = [
   }
 ]
 
-const stats = [
-  { number: '500+', label: 'Sports Facilities' },
-  { number: '50+', label: 'Cities' },
-  { number: '10K+', label: 'Happy Users' },
-  { number: '1M+', label: 'Bookings Completed' }
-]
-
 function AnimatedStatCard({ stat, index }) {
   const count = useCountAnimation(stat.number, 2000, true)
 
@@ -94,6 +89,22 @@ function AnimatedStatCard({ stat, index }) {
 }
 
 const About = () => {
+  // Real platform counts, not the hardcoded "500+"-style copy this section
+  // used to ship with — starts at 0 so the count-up animation always has
+  // somewhere to animate from while the real numbers load.
+  const [platformStats, setPlatformStats] = useState({ facilities: 0, cities: 0, users: 0, bookings_completed: 0 })
+
+  useEffect(() => {
+    api.get('/boxes/public/stats/').then((res) => setPlatformStats(res.data)).catch(() => {})
+  }, [])
+
+  const stats = [
+    { number: `${platformStats.facilities}+`, label: 'Sports Facilities' },
+    { number: `${platformStats.cities}+`, label: 'Cities' },
+    { number: `${platformStats.users}+`, label: 'Happy Users' },
+    { number: `${platformStats.bookings_completed}+`, label: 'Bookings Completed' },
+  ]
+
   return (
     <div className="min-h-screen">
       {/* Hero */}

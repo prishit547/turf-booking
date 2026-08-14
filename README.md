@@ -49,13 +49,40 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-In a new terminal window, activate the virtual environment and start the Celery worker (required for wait-queue and slot reservation holds):
+In a new terminal window, start the Celery worker (required for wait-queue
+and slot reservation holds) — **from the repo root**, not from
+`backend/BookMyBox`:
 
 ```bash
-cd backend/BookMyBox
-source venv/bin/activate
-celery -A BookMyBox worker -l info --concurrency=2
+cd backend/BookMyBox && source venv/bin/activate && cd ../..
+PYTHONPATH=backend/BookMyBox celery -A BookMyBox worker -l info --concurrency=2
 ```
+
+In a third terminal window, start Celery Beat the same way — this is what
+actually ticks `CELERY_BEAT_SCHEDULE` (`BookMyBox/settings.py`): hourly
+booking-completion (`mark_completed_bookings_task`, which is also what
+triggers cashback/scratch-card/spin-wheel grants) and the daily
+scheduled-payout run. Without this process running, past bookings never
+transition out of `Confirmed` locally, even though the worker above is up:
+
+```bash
+cd backend/BookMyBox && source venv/bin/activate && cd ../..
+PYTHONPATH=backend/BookMyBox celery -A BookMyBox beat -l info
+```
+
+**Why the repo root, not `backend/BookMyBox`, and why `PYTHONPATH` instead
+of just `cd`:** `backend/BookMyBox/.env` sets `DATABASE_URL=sqlite:///db.sqlite3`
+— a relative path resolved against the process's *working directory at
+connection time*, not against the settings file's location. The Django dev
+server above always runs with cwd = repo root, so it reads the real,
+git-tracked `db.sqlite3` there. `cd`ing into `backend/BookMyBox` first (as
+you'd naturally do to make plain `celery -A BookMyBox ...` resolve the
+`BookMyBox` package) makes Celery instead read-and-write a second,
+untracked `backend/BookMyBox/db.sqlite3` — a completely different,
+stale database. Everything still starts up looking fine, so this fails
+silently: bookings never complete, the worker looks idle, and nothing errors.
+Setting `PYTHONPATH` lets `-A BookMyBox` resolve without `cd`ing there,
+so both processes stay pointed at the same `db.sqlite3` the API server uses.
 
 ### 2. Start the Frontend
 

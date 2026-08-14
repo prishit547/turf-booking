@@ -51,6 +51,7 @@ class CompleteProfileSerializer(serializers.Serializer):
             "business_name": user.business_name or "",
             "is_verified": user.is_verified,
             # profile fields
+            "avatar": profile.avatar.url if profile.avatar else None,
             "date_of_birth": profile.date_of_birth,
             "bio": profile.bio or "",
             "preferred_sports": profile.preferred_sports or [],
@@ -72,6 +73,7 @@ class ProfileUpdateSerializer(serializers.Serializer):
     location = serializers.CharField(required=False, allow_blank=True, max_length=255)
 
     # ---------- UserProfile fields ----------
+    avatar = serializers.ImageField(required=False, allow_null=True)
     date_of_birth = serializers.DateField(required=False, allow_null=True)
     bio = serializers.CharField(required=False, allow_blank=True)
     preferred_sports = serializers.ListField(
@@ -93,6 +95,7 @@ class ProfileUpdateSerializer(serializers.Serializer):
         # update or create profile
         profile, _ = UserProfile.objects.get_or_create(user=user)
         for field in (
+            "avatar",
             "date_of_birth",
             "bio",
             "preferred_sports",

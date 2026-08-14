@@ -8,12 +8,13 @@ import {
 } from 'chart.js';
 import {
   Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3,
-  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap,
+  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 import AddBoxForm from '../components/boxes/AddBoxForm';
 import ViewBoxModal from '../components/boxes/ViewBoxModal';
+import OwnerRewardsTab from '../components/rewards/OwnerRewardsTab';
 import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
 import { Button, Card, Badge, Loader, StatTile, Input, Select, Modal, Pagination } from '../components/ui';
@@ -37,6 +38,7 @@ const TABS = [
   { id: 'bookings', label: 'Bookings', icon: Calendar },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'payouts', label: 'Payouts', icon: Wallet },
+  { id: 'rewards', label: 'Rewards', icon: Gift },
 ];
 
 const BOX_STATUS_TONE = {
@@ -1060,6 +1062,9 @@ const OwnerDashboard = () => {
               </Card>
             </div>
           )}
+
+          {/* Rewards Tab */}
+          {activeTab === 'rewards' && <OwnerRewardsTab ownerBoxes={all_owner_boxes} />}
         </div>
       </div>
 

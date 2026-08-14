@@ -856,8 +856,8 @@ const AdminDashboard = () => {
                       <dd className="font-medium text-foreground tabular-nums">₹{parseFloat(totalPlatformRevenue).toLocaleString()}</dd>
                     </div>
                     <div className="flex justify-between items-center">
-                      <dt className="text-muted-foreground">Commission (10%)</dt>
-                      <dd className="font-medium text-foreground tabular-nums">₹{Math.round(parseFloat(totalPlatformRevenue) * 0.1).toLocaleString()}</dd>
+                      <dt className="text-muted-foreground">Commission</dt>
+                      <dd className="font-medium text-foreground tabular-nums">₹{Math.round(adminData?.stats?.total_commission || 0).toLocaleString()}</dd>
                     </div>
                     <div className="flex justify-between items-center">
                       <dt className="text-muted-foreground">Confirmed bookings</dt>
