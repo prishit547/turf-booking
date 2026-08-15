@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, ArrowLeft, Heart, Check, Map as MapIcon, X } from 'lucide-react';
+import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, ArrowLeft, Heart, Check, Map as MapIcon, X, ShieldAlert, LayoutDashboard } from 'lucide-react';
 import { useBooking } from '../context/BookingContext';
 import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown } from '../components/ui';
 import Chatbot from '../components/common/Chatbot';
@@ -57,6 +57,17 @@ const BoxDetails = () => {
     const [priceEstimate, setPriceEstimate] = useState(null);
     const { reserveSlot, createRecurringBooking, fetchMyWaitlist, joinWaitlist, leaveWaitlist } = useBooking();
     const { isAuthenticated, user } = useAuth();
+
+    // Slot booking is a player-only action (see bookings/permissions.py's
+    // IsCustomerUser, enforced server-side on the create/reserve/confirm
+    // endpoints) — admin and facility-owner accounts can browse this page
+    // freely, but the interactive slot picker is replaced with an
+    // explanation instead. An owner viewing their *own* box gets pointed
+    // at the dashboard's walk-in "Add Booking" flow instead, which is the
+    // actual way they're meant to put a slot on the books for a walk-in
+    // customer.
+    const isStaffAccount = user?.role === 'admin' || user?.role === 'owner';
+    const isOwnBox = user?.role === 'owner' && box?.owner_id != null && String(box.owner_id) === String(user.id);
 
     useEffect(() => {
         const checkFavorite = async () => {
@@ -298,6 +309,10 @@ const BoxDetails = () => {
             toast.info('Please login to book a box');
             return;
         }
+        if (isStaffAccount) {
+            toast.error('Admin and facility-owner accounts can\'t book slots as a customer.');
+            return;
+        }
         if (!selectedTimeSlot) {
             toast.info('Please select a time slot');
             return;
@@ -351,6 +366,10 @@ const BoxDetails = () => {
     const handleRecurringBook = async () => {
         if (!isAuthenticated) {
             toast.info('Please login to book a box');
+            return;
+        }
+        if (isStaffAccount) {
+            toast.error('Admin and facility-owner accounts can\'t book slots as a customer.');
             return;
         }
         if (!selectedTimeSlot) {
@@ -408,13 +427,32 @@ const BoxDetails = () => {
     }
 
     const images = box.images?.length ? box.images : [box.image];
-    const metaDescription = (box.description || `Book ${box.name} in ${box.location} by the hour on BookMyBox.`).slice(0, 160);
+    const metaDescription = (box.description || `Book ${box.name} in ${box.location} by the hour on BoxNplay.`).slice(0, 160);
     const pageUrl = `${window.location.origin}/boxes/${box.id}`;
+    const structuredData = {
+        '@context': 'https://schema.org',
+        '@type': 'SportsActivityLocation',
+        name: box.name,
+        description: metaDescription,
+        url: pageUrl,
+        address: box.location,
+        ...(images[0] ? { image: images[0] } : {}),
+        ...(box.rating ? {
+            aggregateRating: {
+                '@type': 'AggregateRating',
+                ratingValue: box.rating,
+                reviewCount: box.reviews?.length || 0,
+            },
+        } : {}),
+        ...(box.price ? {
+            priceRange: `₹${box.price}/hr`,
+        } : {}),
+    };
 
     return (
         <div className="min-h-screen pb-28">
             <Helmet>
-                <title>{box.name} - {box.location} | BookMyBox</title>
+                <title>{box.name} - {box.location} | BoxNplay</title>
                 <meta name="description" content={metaDescription} />
                 <link rel="canonical" href={pageUrl} />
                 <meta property="og:title" content={`${box.name} - ${box.location}`} />
@@ -422,6 +460,10 @@ const BoxDetails = () => {
                 <meta property="og:url" content={pageUrl} />
                 {images[0] && <meta property="og:image" content={images[0]} />}
                 <meta property="og:type" content="business.business" />
+                <meta name="twitter:card" content="summary_large_image" />
+                <meta name="twitter:title" content={`${box.name} - ${box.location}`} />
+                <meta name="twitter:description" content={metaDescription} />
+                <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
             </Helmet>
             <div className="mx-auto max-w-6xl px-4 py-6">
                 <Link to="/boxes" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
@@ -481,63 +523,93 @@ const BoxDetails = () => {
                 <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_320px]">
                     <section id="slot-picker" className="min-w-0">
                         <h2 className="font-display text-2xl uppercase">Pick your slot</h2>
-                        <div className="mt-4">
-                            <DateStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} />
-                        </div>
 
-                        {isDateBlocked && (
-                            <p className="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm text-warning">
-                                This facility is closed on this date.
-                            </p>
-                        )}
-
-                        <div className="mt-4 flex flex-wrap items-end gap-4">
-                            <div className="max-w-[12rem]">
-                                <Select label="Duration (hours)" value={duration} onChange={(e) => setDuration(parseInt(e.target.value))}>
-                                    {[1, 2, 3, 4, 5, 6].map((hour) => (
-                                        <option key={hour} value={hour}>{hour} hour{hour > 1 ? 's' : ''}</option>
-                                    ))}
-                                </Select>
-                            </div>
-
-                            <label className="flex items-center gap-2 pb-2.5 text-sm text-foreground">
-                                <input
-                                    type="checkbox"
-                                    checked={repeatWeekly}
-                                    onChange={(e) => setRepeatWeekly(e.target.checked)}
-                                    className="h-4 w-4 rounded border-input accent-primary"
-                                />
-                                Repeat this booking weekly
-                            </label>
-
-                            {repeatWeekly && (
-                                <div className="max-w-[10rem]">
-                                    <Select label="For how many weeks" value={repeatWeeks} onChange={(e) => setRepeatWeeks(parseInt(e.target.value))}>
-                                        {[2, 4, 8, 12].map((w) => (
-                                            <option key={w} value={w}>{w} weeks</option>
-                                        ))}
-                                    </Select>
+                        {isStaffAccount ? (
+                            <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-5">
+                                <div className="flex items-start gap-3">
+                                    <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
+                                    <div className="space-y-2">
+                                        <p className="text-sm font-medium text-foreground">
+                                            {isOwnBox
+                                                ? "You own this facility, so slot booking isn't available here."
+                                                : user?.role === 'admin'
+                                                    ? "Admin accounts can't book slots as a customer."
+                                                    : "Facility-owner accounts can't book slots as a customer."}
+                                        </p>
+                                        <p className="text-sm text-muted-foreground">
+                                            {isOwnBox
+                                                ? "Use “Add walk-in booking” from your owner dashboard to reserve a slot for a walk-in player, without payment."
+                                                : "Slot booking is reserved for customer accounts. Admins and facility owners manage bookings and slot availability instead."}
+                                        </p>
+                                        {isOwnBox && (
+                                            <Button as={Link} to="/owner-dashboard" size="sm" variant="outline" icon={<LayoutDashboard size={16} />}>
+                                                Go to owner dashboard
+                                            </Button>
+                                        )}
+                                    </div>
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="mt-4">
+                                    <DateStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+                                </div>
 
-                        <div className="mt-5">
-                            <SlotGrid
-                                timeSlots={timeSlots}
-                                selectedTimeSlot={selectedTimeSlot}
-                                onSelect={setSelectedTimeSlot}
-                                isTimeSlotBooked={isTimeSlotBooked}
-                                isTimeSlotAvailable={isTimeSlotAvailable}
-                                loading={slotsLoading}
-                                duration={duration}
-                                waitlistedSlots={waitlistedSlots}
-                                onToggleWaitlist={isAuthenticated ? handleToggleWaitlist : undefined}
-                                waitlistPending={waitlistPending}
-                            />
-                        </div>
-                        <div className="mt-4">
-                            <SlotLegend />
-                        </div>
+                                {isDateBlocked && (
+                                    <p className="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm text-warning">
+                                        This facility is closed on this date.
+                                    </p>
+                                )}
+
+                                <div className="mt-4 flex flex-wrap items-end gap-4">
+                                    <div className="max-w-[12rem]">
+                                        <Select label="Duration (hours)" value={duration} onChange={(e) => setDuration(parseInt(e.target.value))}>
+                                            {[1, 2, 3, 4, 5, 6].map((hour) => (
+                                                <option key={hour} value={hour}>{hour} hour{hour > 1 ? 's' : ''}</option>
+                                            ))}
+                                        </Select>
+                                    </div>
+
+                                    <label className="flex items-center gap-2 pb-2.5 text-sm text-foreground">
+                                        <input
+                                            type="checkbox"
+                                            checked={repeatWeekly}
+                                            onChange={(e) => setRepeatWeekly(e.target.checked)}
+                                            className="h-4 w-4 rounded border-input accent-primary"
+                                        />
+                                        Repeat this booking weekly
+                                    </label>
+
+                                    {repeatWeekly && (
+                                        <div className="max-w-[10rem]">
+                                            <Select label="For how many weeks" value={repeatWeeks} onChange={(e) => setRepeatWeeks(parseInt(e.target.value))}>
+                                                {[2, 4, 8, 12].map((w) => (
+                                                    <option key={w} value={w}>{w} weeks</option>
+                                                ))}
+                                            </Select>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-5">
+                                    <SlotGrid
+                                        timeSlots={timeSlots}
+                                        selectedTimeSlot={selectedTimeSlot}
+                                        onSelect={setSelectedTimeSlot}
+                                        isTimeSlotBooked={isTimeSlotBooked}
+                                        isTimeSlotAvailable={isTimeSlotAvailable}
+                                        loading={slotsLoading}
+                                        duration={duration}
+                                        waitlistedSlots={waitlistedSlots}
+                                        onToggleWaitlist={isAuthenticated ? handleToggleWaitlist : undefined}
+                                        waitlistPending={waitlistPending}
+                                    />
+                                </div>
+                                <div className="mt-4">
+                                    <SlotLegend />
+                                </div>
+                            </>
+                        )}
 
                         <h2 className="mt-12 font-display text-2xl uppercase">Reviews</h2>
                         {box.reviews?.length > 0 && (
@@ -644,7 +716,7 @@ const BoxDetails = () => {
             </div>
 
             <BookingSummaryBar
-                visible={Boolean(selectedTimeSlot)}
+                visible={Boolean(selectedTimeSlot) && !isStaffAccount}
                 boxName={box.name}
                 date={selectedDate.toLocaleDateString()}
                 timeSlot={selectedTimeSlot}

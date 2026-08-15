@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'react-toastify';
@@ -298,6 +299,10 @@ const Profile = () => {
 
   return (
     <div className="min-h-screen bg-background py-8">
+      <Helmet>
+        <title>My Profile | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header panel */}
         <motion.div

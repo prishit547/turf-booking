@@ -1,4 +1,4 @@
-# BookMyBox
+# BoxNplay
 
 A turf/sports-box booking platform: browse facilities, book a slot, and —
 for contended slots — get a short-lived reservation hold with a live

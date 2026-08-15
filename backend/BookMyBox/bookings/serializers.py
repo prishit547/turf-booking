@@ -7,14 +7,30 @@ from boxes.serializers import BoxSerializer
 
 class BookingInviteSerializer(serializers.ModelSerializer):
     invited_by_name = serializers.SerializerMethodField()
+    # The invited person's display name once they're a resolved account
+    # (either invited by search, or a raw-email invite that matched/later
+    # claimed an existing account) — null while still just a raw email with
+    # no account, in which case the frontend's "who's coming" list falls
+    # back to invited_email. Without this, the only invited_user info
+    # exposed was the bare id, forcing the frontend to show emails even for
+    # people with real accounts/display names.
+    invited_user_name = serializers.SerializerMethodField()
 
     class Meta:
         model = BookingInvite
-        fields = ['id', 'booking', 'invited_by_name', 'invited_user', 'invited_email', 'status', 'created_at', 'responded_at']
+        fields = [
+            'id', 'booking', 'invited_by_name', 'invited_user', 'invited_user_name',
+            'invited_email', 'status', 'created_at', 'responded_at',
+        ]
         read_only_fields = fields
 
     def get_invited_by_name(self, obj):
         return obj.invited_by.full_name or obj.invited_by.email
+
+    def get_invited_user_name(self, obj):
+        if obj.invited_user:
+            return obj.invited_user.full_name or obj.invited_user.email
+        return None
 
 
 class BookingSerializer(serializers.ModelSerializer):

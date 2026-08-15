@@ -1,889 +1,343 @@
-# 🔒 ATOMICITY IN BOOKMYBOX BOOKING SYSTEM
+# Booking Concurrency in BoxNplay
+
+## Status
+
+This document was rewritten from scratch to describe the **current**
+concurrency model. The previous version described a DB-level
+`unique_together = ('box', 'date', 'start_time')` constraint as the primary
+defense against double-booking. That constraint no longer exists in that
+form and was never, on its own, the real story — the current system is a
+**Redis-backed hold/wait-queue engine** (`backend/BookMyBox/bookings/reservation.py`)
+that gives contended slots a live UX (a short-lived hold with a countdown,
+or a FIFO queue position), backed by a DB-level safety net that remains
+authoritative for correctness.
+
+Read this together with `backend/BookMyBox/bookings/reservation.py` (the
+canonical source — it's short, heavily commented, and the actual ground
+truth) and `backend/BookMyBox/DEPLOYMENT.md`'s "Process model" section
+(what has to be running for this to work).
+
+---
 
 ## Table of Contents
+
 1. [Overview](#overview)
-2. [Database Level Atomicity](#database-level-atomicity)
-3. [Database Constraint Atomicity](#database-constraint-atomicity)
-4. [Application Level Atomicity](#application-level-atomicity)
-5. [Race Condition Handling](#race-condition-handling)
-6. [Frontend Atomicity Considerations](#frontend-atomicity-considerations)
-7. [Multi-Level Atomicity Protection](#multi-level-atomicity-protection)
-8. [Conflict Resolution Examples](#conflict-resolution-examples)
-9. [Key Benefits](#key-benefits)
-10. [Production Considerations](#production-considerations)
+2. [What a "slot" means here](#what-a-slot-means-here)
+3. [Layer 1: The Redis hold/queue engine](#layer-1-the-redis-holdqueue-engine)
+4. [Layer 2: The database safety net](#layer-2-the-database-safety-net)
+5. [The full lifecycle, end to end](#the-full-lifecycle-end-to-end)
+6. [WebSocket delivery](#websocket-delivery)
+7. [Owner preemption (walk-in bookings)](#owner-preemption-walk-in-bookings)
+8. [Paths that skip the Redis layer entirely](#paths-that-skip-the-redis-layer-entirely)
+9. [Known scope limitation](#known-scope-limitation)
+10. [Failure modes and what happens](#failure-modes-and-what-happens)
+11. [Where to look in the code](#where-to-look-in-the-code)
 
 ---
 
 ## Overview
 
-**Atomicity** is crucial for preventing booking conflicts and data corruption in the BookMyBox system. Our implementation ensures that booking operations are **all-or-nothing**, preventing scenarios where:
-- Two users book the same time slot
-- Partial booking data is saved
-- Database inconsistencies occur
-- Race conditions corrupt data
+Two independent users trying to book the same slot at the same time need
+two different things:
+
+1. **A good experience** — instead of both submitting and one getting a
+   confusing error, the first gets a short-lived hold with a visible
+   countdown to complete checkout; the second sees "someone's booking
+   this — you're #1 in line" and is promoted automatically if the first
+   person doesn't finish.
+2. **A correctness guarantee** — no matter what races happen at the
+   network/Redis layer, the database must never end up with two active
+   bookings for the same box/date/time.
+
+BoxNplay's design (deliberately, per the module docstring in
+`reservation.py`) splits these into two layers that don't try to be the
+same mechanism:
+
+- **Redis** (`bookings/reservation.py`) is a fast, ephemeral, UX-facing
+  hold/queue engine. It is never the final word on whether a `Booking` row
+  gets written.
+- **PostgreSQL/SQLite**, via `transaction.atomic()` + `select_for_update()`
+  + an interval-overlap check + a conditional unique constraint, is the
+  authoritative safety net. Even if the Redis layer were disabled or
+  buggy, the database still cannot end up with two conflicting bookings.
 
 ---
 
-## Database Level Atomicity
+## What a "slot" means here
 
-### Django Database Transactions
-
-**File:** `backend/BookMyBox/bookings/views.py`
-
-```python
-from django.db import transaction
-
-class BookingViewSet(viewsets.ModelViewSet):
-    def create(self, request, *args, **kwargs):
-        # ... validation code ...
-        
-        # 🔒 ATOMIC TRANSACTION BLOCK
-        with transaction.atomic():
-            booking = Booking.objects.create(
-                user=request.user,
-                box=box,
-                date=date_str,
-                start_time=start_time_str,
-                end_time=end_time_str,
-                duration=duration_hours,
-                total_amount=expected_total_amount,
-                payment_status='Pending',
-                booking_status='Confirmed'
-            )
-            
-            # If ANY operation inside this block fails,
-            # the ENTIRE transaction is rolled back
-            
-        return Response(BookingSerializer(booking).data, status=201)
-```
-
-### What `transaction.atomic()` Guarantees:
-
-1. **All-or-Nothing**: Either ALL database operations succeed, or ALL are rolled back
-2. **Isolation**: Other requests can't see partial changes during transaction
-3. **Consistency**: Database constraints are enforced atomically
-4. **Rollback on Exception**: Any error automatically undoes all changes
-
-### Transaction Lifecycle:
+A **slot signature** is the exact tuple a user requested:
 
 ```
-🔄 TRANSACTION FLOW:
-
-1. BEGIN TRANSACTION
-   ├── Start atomic block
-   ├── Acquire necessary locks
-   └── Create savepoint
-
-2. EXECUTE OPERATIONS
-   ├── INSERT booking record
-   ├── Validate constraints
-   └── Check foreign keys
-
-3. COMMIT OR ROLLBACK
-   ├── Success: COMMIT (make changes permanent)
-   └── Error: ROLLBACK (undo all changes)
-
-4. RELEASE LOCKS
-   └── Allow other transactions to proceed
+box_id | date | start_time | duration
 ```
+
+(`bookings/reservation.py::slot_signature()`). This is deliberately
+narrower than "does this interval overlap any other booking on this box" —
+it's "does this *exact* box+date+start_time+duration request collide with
+another identical request." Two requests for the same box/date/start_time
+but *different* durations (a 1-hour @ 09:00 vs. a 2-hour @ 09:00) get
+**independent** Redis holds and queues; see [Known scope
+limitation](#known-scope-limitation) for why that's an accepted trade-off,
+not an oversight.
 
 ---
 
-## Database Constraint Atomicity
+## Layer 1: The Redis hold/queue engine
 
-### Unique Constraint Prevention
+All state lives in Redis, in a logical database reserved just for this
+purpose (`REDIS_RESERVATION_URL`, default `{REDIS_URL}/3` — see
+`BookMyBox/settings.py`), isolated from the Django cache, the Channels
+channel layer, and the Celery broker, which each get their own logical DB.
+No view, consumer, or Celery task talks to `redis-py` directly outside of
+`reservation.py` — it's the sole owner of this state and never leaks a raw
+Redis reply across its public functions (everything returns small
+dataclasses: `ReserveResult`, `ConfirmResult`, `ReleaseResult`,
+`HoldStatus`, `PreemptResult`).
 
-**File:** `backend/BookMyBox/bookings/models.py`
+Three Redis keys exist per slot signature:
 
-```python
-class Booking(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    box = models.ForeignKey('boxes.Box', on_delete=models.CASCADE)
-    date = models.DateField()
-    start_time = models.CharField(max_length=5)  # e.g., "09:00"
-    end_time = models.CharField(max_length=5)    # e.g., "10:00"
-    duration = models.IntegerField()
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_status = models.CharField(max_length=50, default='Pending')
-    booking_status = models.CharField(max_length=50, default='Confirmed')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+- `hold:{sig}` — a `SET ... EX <ttl>` string, value `"{user_id}:{hold_token}"`.
+  Its existence *is* the hold; its TTL is what makes an abandoned hold
+  self-expire.
+- `queue:{sig}` — a Redis list of `"{user_id}|{hold_token}"` entries, FIFO
+  (`RPUSH` to join, `LPOP` to promote).
+- `holdmeta:{hold_token}` — a hash (`{sig, user_id}`) that lets any later
+  call (confirm, release, status check) reverse-look-up which slot a given
+  `hold_token` belongs to, without the caller needing to pass the full
+  signature around. TTL'd generously (24h) purely as a GC safety net.
 
-    class Meta:
-        # 🔒 DATABASE-LEVEL ATOMICITY CONSTRAINT
-        unique_together = ('box', 'date', 'start_time')
-        ordering = ['date', 'start_time']
-```
+Every state transition is a **single Lua script**, run atomically via
+`EVAL`/`register_script`. Plain `WATCH`/`MULTI` is awkward for "read,
+branch, then act differently depending on what you read" logic — Lua
+scripting is Redis's standard answer for that shape of problem, and it
+means there's no window between "check who holds this" and "act on it"
+where another request could interleave.
 
-### How Unique Constraint Prevents Double Booking:
+The four scripts, and the public function that wraps each:
 
-```sql
--- Generated SQL constraint
-ALTER TABLE bookings_booking 
-ADD CONSTRAINT unique_box_date_start_time 
-UNIQUE (box_id, date, start_time);
-```
+| Script | Public function | What it does |
+|---|---|---|
+| `_TRY_ACQUIRE_OR_ENQUEUE` | `reserve_slot()` | If nobody holds the slot, grant the hold. If the caller already holds it (idempotent retry), hand back their existing token. If someone else holds it, either return their existing queue position (idempotent retry) or append them to the queue. |
+| `_CONFIRM_AND_RELEASE` | `confirm_reservation()` | Verify the caller is really the current holder, then atomically delete the hold, delete the queue (the slot is being permanently taken, not freed), and return everyone who was queued so they can be told the slot is gone. |
+| `_EXPIRE_OR_RELEASE_AND_PROMOTE` | `release_hold()` / `expire_hold()` (same function, two names) | Verify the expected holder (or no-op if the hold is already gone — makes duplicate/stale calls safe), delete the hold, pop the next queued user if any, and grant them a fresh hold with a fresh TTL. This is what makes the queue cascade. |
+| `_PREEMPT` | `preempt_slot()` | Unconditionally clear both the hold and the *entire* queue at once (no expected-holder check) — used only by the owner walk-in booking path, see below. |
 
-### Concurrent Request Example:
-
-```
-📊 SIMULTANEOUS BOOKING SCENARIO:
-
-Timeline:
-T1: User A submits booking for Box 1, 2024-08-19, 09:00
-T2: User B submits booking for Box 1, 2024-08-19, 09:00 (SAME SLOT!)
-
-Database Processing:
-1. User A's request starts transaction
-2. User B's request starts transaction (parallel)
-3. User A's CREATE operation reaches database first
-4. User B's CREATE operation reaches database second
-5. Database checks unique_together constraint
-6. User B's operation FAILS with IntegrityError
-7. User A's transaction COMMITS
-8. User B's transaction ROLLS BACK
-
-Result:
-✅ User A: Booking created successfully
-❌ User B: Gets "This time slot is already booked" error
-🔒 Database: Maintains consistent state
-```
+`reserve_slot()` is idempotent by design: a double-click or a client
+retry-after-timeout mints a fresh `hold_token` client-side (it has no way
+to know a token from a request whose response it never saw), but the Lua
+script recognizes the same `user_id` already holding or already queued and
+hands back the *original* token rather than creating a duplicate queue
+entry behind the user's own existing one. Callers must always trust the
+token the script returns, not the one they proposed.
 
 ---
 
-## Application Level Atomicity
+## Layer 2: The database safety net
 
-### Pre-validation Check
+The Redis layer above is deliberately never trusted as the final word.
+Every path that actually writes a `Booking` row —
+`bookings/services.py::create_booking_row()`, called from the `confirm`
+endpoint, the direct-create endpoint, the recurring-booking endpoint, and
+the owner walk-in endpoint alike — goes through the same guarded write:
 
-**File:** `backend/BookMyBox/bookings/views.py`
+1. `transaction.atomic()` wraps the whole check-then-write.
+2. `select_for_update()` locks the relevant box row for the duration of
+   the check, so two concurrent writers targeting the same box serialize
+   against each other instead of racing.
+3. An interval-overlap check (`Booking.overlaps()`) rejects the write if
+   it would conflict with any other `Confirmed`/`Completed` booking on
+   that box/date — this is a real overlap check (start/end interval
+   math), not just an exact-start-time match.
+4. A DB-level `UniqueConstraint` on `Booking` — `fields=['box', 'date',
+   'start_time']`, `condition=Q(booking_status__in=['Confirmed',
+   'Completed'])` — is the final, unconditional backstop. It's
+   conditional (scoped to active statuses only) specifically so a
+   cancelled or no-show booking never blocks a new booking from reusing
+   that same slot.
 
-```python
-def create(self, request, *args, **kwargs):
-    # Extract and validate input data
-    box_id = request.data.get('boxId')
-    date_str = request.data.get('date')
-    start_time_str = request.data.get('startTime')
-    duration_hours = request.data.get('duration')
-    
-    # Validate required fields
-    if not all([box_id, date_str, start_time_str, duration_hours]):
-        raise ValidationError("Missing required booking details")
-    
-    # Validate duration range
-    try:
-        duration_hours = int(duration_hours)
-        if not (1 <= duration_hours <= 6):
-            raise ValidationError("Duration must be between 1 and 6 hours.")
-    except (ValueError, TypeError):
-        raise ValidationError("Invalid duration format.")
-    
-    # Get and validate box
-    try:
-        box = get_object_or_404(Box, pk=box_id)
-    except Exception:
-        raise ValidationError("Box not found.")
-    
-    # Calculate end time and validate bounds
-    try:
-        start_hour = int(start_time_str.split(':')[0])
-        start_minute = int(start_time_str.split(':')[1])
-        
-        start_datetime = datetime.combine(
-            datetime.strptime(date_str, '%Y-%m-%d').date(), 
-            time(start_hour, start_minute)
-        )
-        
-        end_datetime = start_datetime + timedelta(hours=duration_hours)
-        
-        if end_datetime.hour > 23 or (end_datetime.hour == 23 and end_datetime.minute > 0):
-            raise ValidationError("Booking cannot extend past 23:00.")
-        
-        end_time_str = end_datetime.strftime("%H:%M")
-    except (ValueError, IndexError):
-        raise ValidationError("Invalid start time or date format.")
-    
-    # 🔒 PRE-CHECK FOR CONFLICTS (Optimization)
-    if Booking.objects.filter(
-        box=box, 
-        date=date_str, 
-        start_time=start_time_str, 
-        booking_status='Confirmed'
-    ).exists():
-        raise ValidationError("This time slot is already booked for this box.")
-    
-    # Calculate total amount server-side for security
-    expected_total_amount = box.price * duration_hours
-    
-    # 🔒 ATOMIC TRANSACTION BLOCK
-    with transaction.atomic():
-        # CRITICAL SECTION: Atomicity is essential here
-        # Between pre-check and create, another booking could happen
-        # unique_together constraint is the final safety net
-        booking = Booking.objects.create(
-            user=request.user,
-            box=box,
-            date=date_str,
-            start_time=start_time_str,
-            end_time=end_time_str,
-            duration=duration_hours,
-            total_amount=expected_total_amount,
-            payment_status='Pending',
-            booking_status='Confirmed'
-        )
-        
-        # If unique_together constraint fails:
-        # - IntegrityError is raised
-        # - Transaction automatically rolls back
-        # - No partial data is saved
-        # - Database remains consistent
-        
-    # Return success response (only if atomic block succeeded)
-    serializer = self.get_serializer(booking)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
-```
+Because this layer is authoritative and self-contained, it protects the
+system even against paths that bypass Redis entirely (recurring bookings,
+owner walk-in bookings — see below) and even in the hypothetical case of a
+Redis outage mid-reservation.
 
 ---
 
-## Race Condition Handling
+## The full lifecycle, end to end
 
-### Complete Atomic Flow Analysis
+**Happy path — a single contended slot, two users:**
 
-```python
-def create(self, request, *args, **kwargs):
-    """
-    Complete atomic booking creation with race condition protection
-    """
-    
-    # PHASE 1: INPUT VALIDATION (Outside Transaction - Fast Fail)
-    # ============================================================
-    # No database locks acquired yet - lightweight validation
-    box_id = request.data.get('boxId')
-    date_str = request.data.get('date')
-    start_time_str = request.data.get('startTime')
-    duration_hours = request.data.get('duration')
-    
-    if not all([box_id, date_str, start_time_str, duration_hours]):
-        raise ValidationError("Missing required booking details")
-    
-    # PHASE 2: OBJECT RETRIEVAL (Outside Transaction - Read Operations)
-    # =================================================================
-    # Read operations don't need atomicity protection
-    box = get_object_or_404(Box, pk=box_id)
-    
-    # PHASE 3: BUSINESS LOGIC VALIDATION (Outside Transaction)
-    # ========================================================
-    # Calculate end time, validate time bounds, etc.
-    # These are pure computational operations
-    
-    # PHASE 4: AVAILABILITY PRE-CHECK (Outside Transaction - Optimization)
-    # ====================================================================
-    # This is an optimization to fail fast for obvious conflicts
-    # NOTE: This check is NOT atomic - conflicts can still occur
-    if Booking.objects.filter(
-        box=box, 
-        date=date_str, 
-        start_time=start_time_str, 
-        booking_status='Confirmed'
-    ).exists():
-        raise ValidationError("Time slot already booked")
-    
-    # PHASE 5: CRITICAL SECTION (Inside Transaction - ATOMIC)
-    # =======================================================
-    with transaction.atomic():
-        # 🔒 CRITICAL: Between pre-check and this create operation,
-        # another request could have created a conflicting booking
-        # The unique_together constraint is our final safety net
-        
-        try:
-            booking = Booking.objects.create(
-                user=request.user,
-                box=box,
-                date=date_str,
-                start_time=start_time_str,
-                end_time=end_time_str,
-                duration=duration_hours,
-                total_amount=expected_total_amount,
-                payment_status='Pending',
-                booking_status='Confirmed'
-            )
-        except IntegrityError as e:
-            # unique_together constraint violation
-            if 'unique constraint' in str(e).lower():
-                raise ValidationError("This time slot was just booked by another user")
-            else:
-                raise ValidationError("Database constraint violation")
-    
-    # PHASE 6: SUCCESS RESPONSE (After Successful Commit)
-    # ===================================================
-    return Response(BookingSerializer(booking).data, status=201)
-```
+1. User A calls `POST /api/bookings/reserve/`. `reserve_slot()` finds no
+   existing hold, grants one (`hold:sig` set with a TTL from
+   `RESERVATION_HOLD_TTL_SECONDS`, default 300s), and the view schedules a
+   Celery task (`expire_hold_task`) via `apply_async(eta=<hold's expiry>)`
+   — a one-shot, not a recurring beat job.
+2. User B calls `reserve/` for the identical signature a moment later.
+   `reserve_slot()` sees A's hold, appends B to `queue:sig`, and returns
+   `{status: 'queued', position: 1}`.
+3. Both users' frontends open a WebSocket to the slot's group (see below)
+   and get live pushes from here on, in addition to whatever the initial
+   HTTP response said.
+4. **If A confirms in time:** `POST /api/bookings/confirm/{hold_token}/`
+   calls `confirm_reservation()` (verifies A really holds it, clears hold
+   + queue), then `create_booking_row()` writes the real `Booking` row
+   inside the DB safety net described above. The view broadcasts
+   `slot_booked` to the group and B is told the slot is gone (not
+   promoted — it's permanently taken).
+5. **If A does nothing and the hold expires:** the scheduled
+   `expire_hold_task` fires, calls `release_hold()`/`expire_hold()`,
+   which deletes A's hold and promotes B (`LPOP` from the queue, grants B
+   a fresh hold + TTL). The task then reschedules *its own* expiry check
+   for B's new deadline — this self-rescheduling is what makes the
+   cascade continue automatically through however many queued users there
+   are, with no periodic polling involved.
+6. **If A explicitly gives up** (`POST /api/bookings/release_hold/{hold_token}/`),
+   the same promote-the-next-user logic runs immediately rather than
+   waiting for the TTL.
 
-### Race Condition Timeline
-
-```
-⏰ DETAILED RACE CONDITION EXAMPLE:
-
-Time: 10:30:00.000 - User A clicks "Book Now" (Box 1, 9:00-10:00)
-Time: 10:30:00.050 - User B clicks "Book Now" (Box 1, 9:00-10:00) ⚠️ SAME SLOT
-
-Backend Processing Timeline:
-10:30:00.100 - User A request reaches Django server
-10:30:00.120 - User B request reaches Django server
-10:30:00.150 - User A starts input validation
-10:30:00.170 - User B starts input validation
-10:30:00.200 - User A validation complete ✅
-10:30:00.220 - User B validation complete ✅
-10:30:00.250 - User A performs availability pre-check
-10:30:00.270 - User B performs availability pre-check
-10:30:00.300 - User A pre-check: slot appears FREE ✅
-10:30:00.320 - User B pre-check: slot appears FREE ✅ (RACE!)
-10:30:00.350 - User A enters transaction.atomic()
-10:30:00.370 - User B enters transaction.atomic()
-10:30:00.400 - User A's CREATE statement hits database
-10:30:00.420 - User B's CREATE statement hits database
-10:30:00.450 - Database processes User A first (timing/locking)
-10:30:00.480 - User A's record successfully inserted
-10:30:00.500 - Database processes User B second
-10:30:00.520 - unique_together constraint violation detected ⚠️
-10:30:00.550 - User B gets IntegrityError
-10:30:00.580 - User A transaction COMMITS ✅
-10:30:00.600 - User B transaction ROLLS BACK ❌
-
-Final State:
-✅ User A: Booking created successfully
-❌ User B: "This time slot was just booked by another user"
-🔒 Database: Consistent state maintained
-📊 Conflict Resolution: Automatic and atomic
-```
+**If the DB write in step 4 is ever rejected** (the interval-overlap check
+or the unique constraint catches something Redis's exact-signature model
+couldn't see — see [Known scope limitation](#known-scope-limitation)), the
+view releases A's hold and promotes the next queued user, exactly as if A
+had abandoned it — the customer sees a clear "someone else's booking beat
+you to it" rather than a silent failure.
 
 ---
 
-## Frontend Atomicity Considerations
+## WebSocket delivery
 
-### Optimistic Locking Pattern
+Route: `ws/bookings/slot/<box_id>/<date>/<start_time>/<duration>/`
+(`bookings/routing.py` → `consumers.SlotStatusConsumer`). One Channels
+group per exact slot signature — everyone holding or queued for that
+specific slot joins the same group.
 
-**File:** `frontend/src/pages/BoxDetails.jsx`
+**Auth**: browsers can't set an `Authorization` header on a WebSocket
+handshake, so `bookings/ws_auth.py::JWTAuthMiddleware` reads
+`?token=<access_token>` off the query string and validates it via
+`rest_framework_simplejwt`'s `AccessToken`, setting `scope['user']`
+accordingly. An unauthenticated connection is closed with code `4001`.
 
-```jsx
-const confirmBooking = async () => {
-    // INPUT VALIDATION
-    if (!isAuthenticated) {
-        alert('Please login to book a box');
-        return;
-    }
+**On connect**, the consumer immediately sends a resync message so a page
+refresh mid-hold/mid-queue shows correct state right away instead of a
+stale "idle": `{'type': 'idle'}`, `{'type': 'held', 'expires_at': ...}`, or
+`{'type': 'queued', 'position': ...}`, computed by re-deriving from the
+Redis hold/queue keys, never from cached state.
 
-    if (!selectedTimeSlot) {
-        alert('Please select a time slot');
-        return;
-    }
+**Server → client push types**, all originating from `bookings/broadcasting.py`
+helpers called from `tasks.py`, `views.py`, and `owner_dashboard/views.py`:
 
-    // AVAILABILITY CHECK
-    if (!isTimeSlotAvailable(selectedTimeSlot)) {
-        alert('Selected time slot is not available. Please choose a different time.');
-        return;
-    }
+- `promoted` — the next queued user was granted the hold (from an expiry
+  or explicit release). Includes `new_holder_user_id`/`expires_at` so a
+  client can tell "it's my turn now" from "someone ahead of me left, I
+  just moved up in the queue."
+- `slot_released` — the queue fully drained; nobody left to promote.
+- `slot_booked` — someone confirmed the slot into a real `Booking`.
+  Includes `booked_by_user_id` so the confirming client's own socket can
+  distinguish "I did this" from "I lost."
+- `owner_reserved` — the box owner preempted the slot via a walk-in
+  booking (see next section).
 
-    // CALCULATE END TIME
-    const startTimeParts = selectedTimeSlot.split(':');
-    const startHour = parseInt(startTimeParts[0]);
-    const startMinute = parseInt(startTimeParts[1]);
-    const endHour = (startHour + duration) % 24;
-    const endMinute = startMinute;
-    const endTime = `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
-
-    // PREPARE BOOKING PAYLOAD
-    const bookingPayload = {
-        user: user.id,
-        boxId: box.id,
-        date: selectedDate.toISOString().split('T')[0], // YYYY-MM-DD
-        startTime: selectedTimeSlot,
-        end_time: endTime,
-        duration: duration,
-        totalAmount: parseFloat((box.price * duration).toFixed(2)),
-        paymentStatus: 'Not Required',
-        bookingStatus: 'Confirmed',
-    };
-
-    // 🔒 ATOMIC UI STATE MANAGEMENT
-    setBookingLoading(true);           // Disable UI
-    setShowBookingModal(false);        // Close modal immediately
-
-    try {
-        // 🔒 SINGLE ATOMIC API CALL
-        const result = await createBooking(bookingPayload);
-
-        if (result.success) {
-            // ✅ SUCCESS PATH: Update UI state atomically
-            alert('Booking confirmed successfully! 🎉');
-            
-            // Reset form state
-            setSelectedTimeSlot('');
-            setDuration(1);
-            setSelectedDate(new Date());
-            
-            // 🔄 REFRESH DATA TO REFLECT NEW STATE
-            const dateString = selectedDate.toISOString().split('T')[0];
-            try {
-                const response = await api.get(
-                    `/bookings/booked_slots/?box_id=${box.id}&date=${dateString}`
-                );
-                setBookedSlots(response.data.booked_slots || []);
-            } catch (error) {
-                console.error('Error refreshing booked slots:', error);
-                // Non-critical error - booking succeeded
-            }
-        } else {
-            // ❌ FAILURE PATH: Show error, maintain original state
-            console.error('Backend booking creation failed:', result.error);
-            alert(`Booking failed: ${result.error || 'Please try again.'} 🙁`);
-        }
-    } catch (error) {
-        // ❌ NETWORK/UNEXPECTED ERROR: Show error, maintain original state
-        console.error('Booking confirmation error:', error);
-        alert('Booking failed due to an unexpected error. Please contact support. 😟');
-    } finally {
-        // 🔒 ALWAYS RE-ENABLE UI
-        setBookingLoading(false);
-    }
-};
-```
-
-### Frontend State Atomicity
-
-```jsx
-// BOOKING CONTEXT ATOMIC OPERATIONS
-const createBooking = useCallback(async (bookingData) => {
-    // 🔒 ATOMIC STATE UPDATE
-    dispatch({ type: 'SET_LOADING', payload: true });
-    dispatch({ type: 'SET_ERROR', payload: null });
-    
-    try {
-        // SINGLE HTTP REQUEST (ATOMIC AT NETWORK LEVEL)
-        const response = await api.post('/bookings/', bookingData);
-        
-        // ✅ SUCCESS: ATOMIC STATE UPDATE
-        dispatch({ type: 'ADD_BOOKING', payload: response.data });
-        return { success: true, data: response.data };
-        
-    } catch (error) {
-        // ❌ ERROR: ATOMIC ERROR STATE UPDATE
-        console.error('Error creating booking:', error.response?.data || error.message);
-        const errorMessage = error.response?.data?.detail || 
-                            error.response?.data?.message || 
-                            error.message || 
-                            'Failed to create booking.';
-        dispatch({ type: 'SET_ERROR', payload: errorMessage });
-        return { success: false, error: errorMessage };
-        
-    } finally {
-        // 🔒 ALWAYS RESET LOADING STATE
-        dispatch({ type: 'SET_LOADING', payload: false });
-    }
-}, []);
-```
+There is no client → server message protocol beyond the initial handshake
+— every state change is driven by REST calls (`reserve`/`confirm`/
+`release_hold`/the owner's `book`), and the socket is a pure server-push
+read channel.
 
 ---
 
-## Multi-Level Atomicity Protection
+## Owner preemption (walk-in bookings)
 
-```
-🛡️ COMPREHENSIVE ATOMICITY LAYERS:
+`owner_dashboard/views.py::OwnerBookingViewSet.book()` lets a box owner
+claim a slot on their own box directly — e.g. a walk-in customer paying
+cash at the venue. This is the one place `preempt_slot()` is used instead
+of `release_hold()`/`expire_hold()`: preemption clears the hold **and the
+entire queue** unconditionally, because the slot isn't being freed for the
+next person in line — it's being taken away from everyone at once by the
+venue itself.
 
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 1: Frontend UI State Atomicity                       │
-├─────────────────────────────────────────────────────────────┤
-│ ✓ Disable buttons during submission                        │
-│ ✓ Prevent double-clicks with loading states               │
-│ ✓ Atomic form state updates                               │
-│ ✓ Consistent error handling                               │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 2: HTTP Request Atomicity                           │
-├─────────────────────────────────────────────────────────────┤
-│ ✓ Single HTTP request per booking operation               │
-│ ✓ Idempotent API design                                   │
-│ ✓ Proper timeout handling                                 │
-│ ✓ Network error recovery                                  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 3: Django Application Atomicity                     │
-├─────────────────────────────────────────────────────────────┤
-│ ✓ Input validation before transaction                     │
-│ ✓ Business logic validation                               │
-│ ✓ Pre-existence conflict checks                           │
-│ ✓ Structured error responses                              │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 4: Database Transaction Atomicity                   │
-├─────────────────────────────────────────────────────────────┤
-│ ✓ transaction.atomic() wrapper                            │
-│ ✓ All-or-nothing database operations                      │
-│ ✓ Automatic rollback on exceptions                        │
-│ ✓ Isolation from concurrent transactions                  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 5: Database Constraint Atomicity                    │
-├─────────────────────────────────────────────────────────────┤
-│ ✓ unique_together constraints                              │
-│ ✓ Foreign key integrity enforcement                       │
-│ ✓ Data type validation                                     │
-│ ✓ Check constraints (if applicable)                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Atomicity Flow Diagram
-
-```
-🔄 COMPLETE ATOMIC BOOKING FLOW:
-
-Frontend                    Backend                     Database
-────────                    ───────                     ────────
-
-[User Clicks Book] ──────▶ [Receive Request]
-        │                          │
-[Disable UI] ◀────────────────────┘
-        │                   
-[Show Loading] ──────────▶ [Validate Input]
-        │                          │
-        │                   [Pre-check Conflicts] ──▶ [Query Existing]
-        │                          │                         │
-        │                   [Begin Transaction] ◀────────────┘
-        │                          │
-        │                   [Create Booking] ──────▶ [Check Constraints]
-        │                          │                         │
-        │                          │               [Constraint OK] ──▶ [Insert Record]
-        │                          │                         │
-        │                   [Commit Transaction] ◀───────────┘
-        │                          │
-[Show Success] ◀──────────[Return Success]
-        │
-[Reset Form] 
-        │
-[Re-enable UI]
-
-                    Alternative Flow (Conflict):
-                            │
-                    [Create Booking] ──────▶ [Check Constraints]
-                            │                         │
-                            │               [Constraint Violation] ──▶ [Raise Error]
-                            │                         │
-                    [Rollback Transaction] ◀──────────┘
-                            │
-[Show Error] ◀──────[Return Error]
-        │
-[Maintain State]
-        │
-[Re-enable UI]
-```
+Every displaced user (the current holder, plus everyone who was queued)
+gets both a live `owner_reserved` WebSocket push and a persisted in-app
+notification (belt-and-suspenders in case their socket isn't connected at
+that moment), then the owner's booking is written via the same
+`create_booking_row()` DB safety net as any other booking, with
+`booking_source='owner_manual'`. If the slot already has a real
+`Confirmed`/`Completed` booking, the owner is rejected (409) — this path
+never overrides a paying customer's already-confirmed booking, only holds
+and queue positions.
 
 ---
 
-## Conflict Resolution Examples
+## Paths that skip the Redis layer entirely
 
-### Example 1: Successful Concurrent Handling
+Not every booking goes through `reserve`/`confirm`. Two paths write
+directly via `create_booking_row()`:
 
-```python
-# SCENARIO: Two users try to book different time slots simultaneously
-# RESULT: Both succeed (no conflict)
+- **Recurring bookings** (`POST /api/bookings/recurring/`) — a customer
+  booking the same slot weekly for 2–12 future occurrences. These are
+  proactive future bookings, not hot-contested "everyone's fighting over
+  this slot right now" scenarios, so there's no UX value in a hold/queue
+  — each week is validated and written independently, and partial success
+  (some weeks succeed, some don't) is the expected, normal outcome.
+- **Owner walk-in bookings** — described above; these bypass `reserve` by
+  design (that's the point of preemption) but still call `preempt_slot()`
+  first to clear out any live Redis state before writing.
 
-User A Request:
-{
-  "boxId": 1,
-  "date": "2024-08-19", 
-  "startTime": "09:00",
-  "duration": 1
-}
-
-User B Request:
-{
-  "boxId": 1,
-  "date": "2024-08-19",
-  "startTime": "10:00",  # Different time slot
-  "duration": 1
-}
-
-Database State After Both Requests:
-bookings_booking:
-+----+--------+------+------------+------------+----------+
-| id | box_id | date | start_time | end_time   | duration |
-+----+--------+------+------------+------------+----------+
-| 1  | 1      | 2024-08-19 | 09:00 | 10:00 | 1        |
-| 2  | 1      | 2024-08-19 | 10:00 | 11:00 | 1        |
-+----+--------+------+------------+------------+----------+
-
-Result: ✅ Both bookings successful
-```
-
-### Example 2: Conflict Detection and Resolution
-
-```python
-# SCENARIO: Two users try to book the same time slot
-# RESULT: First succeeds, second gets error
-
-User A Request (arrives first):
-{
-  "boxId": 1,
-  "date": "2024-08-19",
-  "startTime": "09:00",
-  "duration": 2
-}
-
-User B Request (arrives second):
-{
-  "boxId": 1,
-  "date": "2024-08-19",
-  "startTime": "09:00",  # SAME time slot
-  "duration": 1
-}
-
-Processing Timeline:
-1. User A passes pre-validation ✅
-2. User B passes pre-validation ✅ (slot still appears free)
-3. User A enters atomic transaction
-4. User B enters atomic transaction
-5. User A creates booking successfully ✅
-6. User B hits unique constraint violation ❌
-7. User A transaction commits
-8. User B transaction rolls back
-
-Database State After Conflict Resolution:
-bookings_booking:
-+----+--------+------+------------+------------+----------+
-| id | box_id | date | start_time | end_time   | duration |
-+----+--------+------+------------+------------+----------+
-| 1  | 1      | 2024-08-19 | 09:00 | 11:00 | 2        |
-+----+--------+------+------------+------------+----------+
-
-Results:
-✅ User A: Booking confirmed
-❌ User B: "This time slot was just booked by another user"
-```
-
-### Example 3: Overlapping Duration Conflict
-
-```python
-# SCENARIO: Bookings with different start times but overlapping durations
-# RESULT: Database constraint prevents overlap
-
-Existing Booking:
-{
-  "start_time": "09:00",
-  "end_time": "11:00",
-  "duration": 2
-}
-
-New Booking Request:
-{
-  "boxId": 1,
-  "date": "2024-08-19",
-  "startTime": "10:00",  # Would overlap with existing 09:00-11:00
-  "duration": 1
-}
-
-Frontend Validation:
-- isTimeSlotAvailable("10:00") checks if 10:00 is in bookedSlots
-- bookedSlots contains ["09:00", "10:00"] (from existing 2-hour booking)
-- Returns false ❌
-
-Result: ❌ Frontend prevents submission
-Message: "Selected time slot is not available for selected duration"
-```
+Both rely solely on the [database safety net](#layer-2-the-database-safety-net)
+for correctness — which is exactly why that layer is designed to be
+self-sufficient rather than a mere backstop for the Redis layer.
 
 ---
 
-## Key Benefits
+## Known scope limitation
 
-### 1. **Zero Double Bookings**
-```
-🔒 GUARANTEED UNIQUENESS:
-- Database constraint: unique_together = ('box', 'date', 'start_time')
-- Application validation: Pre-existence checks
-- Transaction isolation: Concurrent request protection
-- Frontend validation: User experience optimization
-```
+**Cross-signature overlap isn't queued together.** The Redis layer scopes
+contention to the exact `(box, date, start_time, duration)` signature a
+user requested. Two different-duration requests for the same
+box+date+start_time — say, a 1-hour booking and a 2-hour booking both
+starting at 09:00 — get **independent** holds and queues with no mutual
+awareness of each other in Redis.
 
-### 2. **Data Consistency**
-```
-📊 CONSISTENT STATE GUARANTEES:
-- Either complete booking record OR no record at all
-- No partial data from failed transactions
-- Referential integrity maintained (User ↔ Box relationships)
-- Audit trail preserved (created_at, updated_at timestamps)
-```
-
-### 3. **Error Recovery**
-```
-🔄 ROBUST ERROR HANDLING:
-- Failed transactions automatically roll back
-- Original database state preserved on conflicts
-- Meaningful error messages for users
-- Logging for debugging and monitoring
-```
-
-### 4. **Concurrent Safety**
-```
-⚡ MULTI-USER PROTECTION:
-- Thousands of concurrent users supported
-- Race condition handling at database level
-- Optimistic locking patterns in frontend
-- Performance optimization through pre-validation
-```
-
-### 5. **Predictable Behavior**
-```
-🎯 DETERMINISTIC OUTCOMES:
-- Same inputs always produce same results
-- Clear success/failure states
-- No ambiguous intermediate states
-- Testable and verifiable logic
-```
+This is a deliberate, documented trade-off (see the module docstring in
+`reservation.py` and the "Known limitations" section of
+`DEPLOYMENT.md`), not a bug: the frontend only ever offers a fixed set of
+hourly slot buttons, so identical-signature collisions are the dominant
+real-world case, and the [database safety net](#layer-2-the-database-safety-net)
+(`overlaps()` + the conditional unique constraint) remains fully
+authoritative and will correctly reject whichever of the two conflicting
+bookings loses — the customer just gets a plain "this slot's no longer
+available" error in that specific edge case rather than a graceful queue
+promotion. Closing this gap would mean modelling per-box-per-day interval
+trees in Redis; not implemented, and not currently planned as a priority.
 
 ---
 
-## Production Considerations
+## Failure modes and what happens
 
-### Performance Optimization
-
-```python
-# OPTIMIZED ATOMIC BOOKING CREATION
-def create(self, request, *args, **kwargs):
-    # 1. FAST INPUT VALIDATION (No DB queries)
-    validated_data = self.validate_input(request.data)
-    
-    # 2. SINGLE QUERY FOR OBJECT RETRIEVAL
-    box = Box.objects.select_related().get(pk=validated_data['box_id'])
-    
-    # 3. EFFICIENT CONFLICT CHECK (Indexed query)
-    conflict_exists = Booking.objects.filter(
-        box=box,
-        date=validated_data['date'],
-        start_time=validated_data['start_time'],
-        booking_status='Confirmed'
-    ).exists()  # Uses EXISTS query - more efficient than count()
-    
-    if conflict_exists:
-        raise ValidationError("Time slot already booked")
-    
-    # 4. MINIMAL ATOMIC BLOCK (Only write operations)
-    with transaction.atomic():
-        # Keep atomic block as small as possible
-        booking = Booking.objects.create(**validated_data)
-        
-    return Response(BookingSerializer(booking).data, status=201)
-```
-
-### Monitoring and Alerting
-
-```python
-import logging
-from django.db import IntegrityError
-
-logger = logging.getLogger('booking_system')
-
-def create(self, request, *args, **kwargs):
-    try:
-        with transaction.atomic():
-            booking = Booking.objects.create(...)
-            
-        # Log successful booking
-        logger.info(f"Booking created: ID={booking.id}, User={request.user.id}, "
-                   f"Box={box.id}, Date={date_str}, Time={start_time_str}")
-                   
-    except IntegrityError as e:
-        # Log conflict attempts for monitoring
-        logger.warning(f"Booking conflict detected: User={request.user.id}, "
-                      f"Box={box.id}, Date={date_str}, Time={start_time_str}, "
-                      f"Error={str(e)}")
-        raise ValidationError("This time slot was just booked by another user")
-```
-
-### Database Indexing for Performance
-
-```sql
--- Recommended indexes for optimal atomic performance
-CREATE INDEX idx_booking_availability ON bookings_booking (box_id, date, start_time, booking_status);
-CREATE INDEX idx_booking_user_date ON bookings_booking (user_id, date);
-CREATE INDEX idx_booking_box_date ON bookings_booking (box_id, date);
-
--- Unique constraint (already defined in model)
-ALTER TABLE bookings_booking ADD CONSTRAINT unique_box_date_start_time UNIQUE (box_id, date, start_time);
-```
-
-### Testing Atomicity
-
-```python
-# Unit test for atomic behavior
-from django.test import TestCase, TransactionTestCase
-from django.db import transaction
-import threading
-
-class BookingAtomicityTest(TransactionTestCase):
-    def test_concurrent_booking_conflict(self):
-        """Test that concurrent bookings for same slot result in exactly one success"""
-        
-        box = Box.objects.create(name="Test Box", price=100)
-        user1 = User.objects.create(username="user1")
-        user2 = User.objects.create(username="user2")
-        
-        booking_data = {
-            'box': box,
-            'date': '2024-08-19',
-            'start_time': '09:00',
-            'end_time': '10:00',
-            'duration': 1,
-            'total_amount': 100,
-            'booking_status': 'Confirmed'
-        }
-        
-        results = []
-        
-        def create_booking(user):
-            try:
-                with transaction.atomic():
-                    booking = Booking.objects.create(user=user, **booking_data)
-                results.append(('success', booking.id))
-            except IntegrityError:
-                results.append(('conflict', None))
-        
-        # Simulate concurrent requests
-        thread1 = threading.Thread(target=create_booking, args=(user1,))
-        thread2 = threading.Thread(target=create_booking, args=(user2,))
-        
-        thread1.start()
-        thread2.start()
-        
-        thread1.join()
-        thread2.join()
-        
-        # Verify exactly one success and one conflict
-        successes = [r for r in results if r[0] == 'success']
-        conflicts = [r for r in results if r[0] == 'conflict']
-        
-        self.assertEqual(len(successes), 1, "Exactly one booking should succeed")
-        self.assertEqual(len(conflicts), 1, "Exactly one booking should conflict")
-        self.assertEqual(Booking.objects.count(), 1, "Only one booking should exist in database")
-```
+| Scenario | Result |
+|---|---|
+| Two users `reserve()` the same signature simultaneously | Redis `SET ... EX` + the Lua script's atomicity guarantee exactly one gets `held`, the other gets `queued` at position 1. No race window. |
+| A held user's browser crashes / they close the tab | The hold's TTL (`RESERVATION_HOLD_TTL_SECONDS`) expires normally; `expire_hold_task` fires at the scheduled ETA and promotes the next queued user. No manual cleanup needed. |
+| A `confirm()` call arrives for a hold that already expired | `confirm_reservation()`'s `get_holdmeta()` lookup returns `None` (holdmeta TTL'd, hold gone) → `ConfirmResult(status='invalid')`. The view returns an error rather than writing a stale booking. |
+| The DB write at confirm-time is rejected (overlap/unique-constraint) despite Redis saying this user held the slot | The view releases the hold (promoting the next queued user) and returns an error — this only happens via the [known scope limitation](#known-scope-limitation) above, since same-signature collisions can't reach this state (Redis already serialized them). |
+| A duplicate/stale `expire_hold_task` fires (e.g. after the holder already confirmed or released early) | The Lua script's expected-holder guard makes this a safe no-op (`status: 'stale'`) — nothing is promoted, nothing breaks. |
+| Redis itself is unavailable | The hold/queue UX layer fails; anything routed through `reserve`/`confirm` would error. The DB safety net alone still guarantees no double-booking for any write path that reaches it (recurring/owner-manual paths never touched Redis in the first place). Redis is a hard operational dependency for the *reserve/confirm* UX, not for booking-row correctness. |
 
 ---
 
-## Summary
+## Where to look in the code
 
-The BookMyBox booking system implements **comprehensive atomicity** at multiple layers:
-
-1. **Database Transactions** ensure all-or-nothing operations
-2. **Unique Constraints** prevent impossible data states at the database level
-3. **Pre-validation** provides early conflict detection for better user experience
-4. **Frontend State Management** prevents double submissions and maintains UI consistency
-5. **Error Handling** ensures graceful failure recovery
-
-This multi-layered approach guarantees that even with thousands of concurrent users, **no two bookings can occupy the same time slot**, and the database **always remains in a consistent state**.
-
-The system is **production-ready**, **scalable**, and **maintainable**, with proper monitoring, testing, and performance optimization built in.
-
----
-
-*This documentation serves as a comprehensive guide for understanding and maintaining the atomic booking system in the BookMyBox platform.*
+- `backend/BookMyBox/bookings/reservation.py` — the engine itself; short,
+  heavily commented, read this first.
+- `backend/BookMyBox/bookings/views.py` — `reserve`, `confirm`,
+  `release_hold` actions on `BookingViewSet`.
+- `backend/BookMyBox/bookings/services.py` — `create_booking_row()`, the
+  DB safety net.
+- `backend/BookMyBox/bookings/models.py` — the `Booking.overlaps()` method
+  and the conditional `UniqueConstraint` in `Meta`.
+- `backend/BookMyBox/bookings/tasks.py` — `expire_hold_task`, the
+  self-rescheduling Celery task.
+- `backend/BookMyBox/bookings/consumers.py`, `routing.py`, `ws_auth.py`,
+  `broadcasting.py` — the WebSocket delivery layer.
+- `backend/BookMyBox/owner_dashboard/views.py` — `OwnerBookingViewSet.book()`,
+  the preemption path.
+- `backend/BookMyBox/DEPLOYMENT.md` — what processes (Redis, ASGI server,
+  Celery worker, Celery Beat) must actually be running for this to work,
+  and the same known-limitation writeup from an operations angle.

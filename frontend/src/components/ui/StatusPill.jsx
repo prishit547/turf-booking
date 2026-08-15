@@ -15,6 +15,11 @@ const STATUS_TONE = {
     failed: 'danger',
     refunded: 'success',
     'no-show': 'warning',
+    // Booking-invite statuses (BookingInvite.STATUS_CHOICES) — reused by
+    // BookingConfirmation.jsx's "Who's coming" squad list.
+    accepted: 'success',
+    declined: 'danger',
+    expired: 'neutral',
 };
 
 /** Small uppercase status pill, color-coded by semantic booking/approval status. */

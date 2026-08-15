@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Helmet } from 'react-helmet-async'
 import { motion } from 'framer-motion'
 import { Timer, Wallet, Ban, Bell, RefreshCw, Mail } from 'lucide-react'
 import { animations, useScrollAnimation } from '../utils/animations'
@@ -9,7 +10,7 @@ const sections = [
     id: 'overview',
     title: '1. Overview',
     body: [
-      'This policy explains when you can cancel a booking on BookMyBox, what happens to any money you\'ve put toward it, and how cancellations initiated by a facility owner or admin are handled. It applies to every booking made through the platform, regardless of sport or venue.',
+      'This policy explains when you can cancel a booking on BoxNplay, what happens to any money you\'ve put toward it, and how cancellations initiated by a facility owner or admin are handled. It applies to every booking made through the platform, regardless of sport or venue.',
     ],
   },
   {
@@ -31,10 +32,10 @@ const sections = [
     id: 'refunds',
     title: '4. How Refunds Work',
     body: [
-      'BookMyBox does not currently integrate an external payment gateway, so how a refund works depends on how the booking was paid for:',
+      'BoxNplay does not currently integrate an external payment gateway, so how a refund works depends on how the booking was paid for:',
       'Paid with wallet credit: if any part of your booking was paid using your in-app wallet balance, that exact amount is credited straight back to your wallet the moment the booking is cancelled — instantly, automatically, no request needed.',
       'Paid at the venue: most bookings are paid for in person when you arrive, which means nothing was actually collected by the platform up front. Cancelling one of these simply cancels the booking — there\'s no online charge to reverse, since none was made.',
-      'There is currently no mechanism to refund money to an external bank account, UPI ID, or card, because no booking payment is ever taken through an external gateway in the first place. Any refund the platform can issue lands in your BookMyBox wallet, ready to use on a future booking.',
+      'There is currently no mechanism to refund money to an external bank account, UPI ID, or card, because no booking payment is ever taken through an external gateway in the first place. Any refund the platform can issue lands in your BoxNplay wallet, ready to use on a future booking.',
     ],
   },
   {
@@ -50,6 +51,17 @@ const sections = [
 const CancellationPolicy = () => {
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Cancellation Policy | BoxNplay</title>
+        <meta name="description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
+        <link rel="canonical" href={`${window.location.origin}/cancellation-policy`} />
+        <meta property="og:title" content="Cancellation Policy | BoxNplay" />
+        <meta property="og:description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
+        <meta property="og:url" content={`${window.location.origin}/cancellation-policy`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Cancellation Policy | BoxNplay" />
+        <meta name="twitter:description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
+      </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-16 px-4 sm:px-6 lg:px-8">
         <motion.div className="max-w-3xl mx-auto text-center" {...animations.slideInUp} {...useScrollAnimation()}>
@@ -146,8 +158,8 @@ const CancellationPolicy = () => {
                   <h2 className="font-display font-semibold text-xl text-foreground mb-2">Need help with a specific booking?</h2>
                   <p className="text-muted-foreground leading-relaxed">
                     Email{' '}
-                    <a href="mailto:support@bookmybox.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
-                      support@bookmybox.com
+                    <a href="mailto:Info@boxnplay.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
+                      Info@boxnplay.com
                     </a>{' '}
                     or call +91 98253 27667. For the broader rules around bookings and payments, see our{' '}
                     <Link to="/terms" className="text-primary hover:text-primary/80 underline underline-offset-2">Terms of Service</Link>.

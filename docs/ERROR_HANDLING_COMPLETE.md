@@ -102,4 +102,4 @@ Beautiful HTML page with:
 ✅ **Health monitoring** at `/api/health/`  
 ✅ **Detailed error context** for debugging  
 
-Your BookMyBox platform now handles errors gracefully and provides helpful information to both users and developers! 🎉
+Your BoxNplay platform now handles errors gracefully and provides helpful information to both users and developers! 🎉

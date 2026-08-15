@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Helmet } from 'react-helmet-async'
 import { motion } from 'framer-motion'
 import { Lock, UserRound, FileCheck2, Database, ShieldCheck, Mail } from 'lucide-react'
 import { animations, useScrollAnimation } from '../utils/animations'
@@ -9,7 +10,7 @@ const sections = [
     id: 'scope',
     title: '1. Scope of this Policy',
     body: [
-      'This Privacy Policy explains what personal information BookMyBox collects when you use our platform to browse, book, or list sports facilities, how we use it, and the choices you have. It applies to Players, Facility Owners, and anyone who contacts us through the Contact page.',
+      'This Privacy Policy explains what personal information BoxNplay collects when you use our platform to browse, book, or list sports facilities, how we use it, and the choices you have. It applies to Players, Facility Owners, and anyone who contacts us through the Contact page.',
     ],
   },
   {
@@ -35,7 +36,7 @@ const sections = [
     id: 'payments',
     title: '4. Payments & the In-App Wallet',
     body: [
-      'BookMyBox does not currently integrate a card, UPI, or bank payment gateway — most bookings are paid for directly at the venue, so we never collect or store your card, UPI, or bank account details. The one exception is the in-app wallet: wallet credit (from cashback, refunds, or rewards) is tracked and can be applied toward bookings, but it is platform-internal credit only, not a connection to any real bank account or payment method.',
+      'BoxNplay does not currently integrate a card, UPI, or bank payment gateway — most bookings are paid for directly at the venue, so we never collect or store your card, UPI, or bank account details. The one exception is the in-app wallet: wallet credit (from cashback, refunds, or rewards) is tracked and can be applied toward bookings, but it is platform-internal credit only, not a connection to any real bank account or payment method.',
     ],
   },
   {
@@ -50,7 +51,7 @@ const sections = [
     title: '6. Sharing of Information',
     body: [
       'When you make a booking, we share the booking details and the contact information needed to fulfil it (typically your name and phone number) with the Facility Owner whose venue you booked, so they can coordinate the slot.',
-      'We may share information with service providers who help us run the platform (for example, hosting and infrastructure providers), under obligations to protect it, and where required by law or to protect the rights, safety, or property of BookMyBox, our users, or the public. We do not sell personal information to third parties.',
+      'We may share information with service providers who help us run the platform (for example, hosting and infrastructure providers), under obligations to protect it, and where required by law or to protect the rights, safety, or property of BoxNplay, our users, or the public. We do not sell personal information to third parties.',
     ],
   },
   {
@@ -71,7 +72,7 @@ const sections = [
     id: 'children',
     title: '9. Children\'s Privacy',
     body: [
-      'BookMyBox is intended for users old enough to independently enter into a booking agreement. We do not knowingly collect personal information from young children. If you believe a child has created an account without appropriate consent, please contact us and we\'ll take appropriate action.',
+      'BoxNplay is intended for users old enough to independently enter into a booking agreement. We do not knowingly collect personal information from young children. If you believe a child has created an account without appropriate consent, please contact us and we\'ll take appropriate action.',
     ],
   },
   {
@@ -86,6 +87,17 @@ const sections = [
 const PrivacyPolicy = () => {
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Privacy Policy | BoxNplay</title>
+        <meta name="description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
+        <link rel="canonical" href={`${window.location.origin}/privacy`} />
+        <meta property="og:title" content="Privacy Policy | BoxNplay" />
+        <meta property="og:description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
+        <meta property="og:url" content={`${window.location.origin}/privacy`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Privacy Policy | BoxNplay" />
+        <meta name="twitter:description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
+      </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-16 px-4 sm:px-6 lg:px-8">
         <motion.div className="max-w-3xl mx-auto text-center" {...animations.slideInUp} {...useScrollAnimation()}>
@@ -165,8 +177,8 @@ const PrivacyPolicy = () => {
                   <h2 className="font-display font-semibold text-xl text-foreground mb-2">Privacy questions or requests</h2>
                   <p className="text-muted-foreground leading-relaxed">
                     Email us at{' '}
-                    <a href="mailto:support@bookmybox.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
-                      support@bookmybox.com
+                    <a href="mailto:Info@boxnplay.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
+                      Info@boxnplay.com
                     </a>{' '}
                     or call +91 98253 27667 for anything related to your personal data, including access, correction, or
                     deletion requests. See also our{' '}

@@ -1,0 +1,12 @@
+{
+  "name": "BoxNplay - Sports Box Booking Platform",
+  "short_name": "BoxNplay",
+  "description": "Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls.",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" }
+  ],
+  "theme_color": "#090A0C",
+  "background_color": "#090A0C",
+  "display": "standalone",
+  "start_url": "/"
+}

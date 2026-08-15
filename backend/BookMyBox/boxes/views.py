@@ -1,5 +1,5 @@
 # boxes/views.py
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from rest_framework import mixins, viewsets, status
 from rest_framework.response import Response
@@ -32,6 +32,33 @@ from user.audit import log_admin_action
 from user.notifications import notify
 from user.permissions import IsAdminUser, IsAdminOrOwner, IsOwnerUser
 from BookMyBox.pagination import StandardResultsPagination
+
+REVIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+REVIEW_IMAGE_ALLOWED_EXTENSIONS = ('jpg', 'jpeg', 'png', 'webp')
+
+
+def _validate_review_image(uploaded_file):
+    """Raises ValueError with a user-facing message if `uploaded_file`
+    isn't an actual image we're willing to store and serve back publicly
+    from /media/ — a bare extension check is easy to spoof (rename a
+    script to .jpg), so this also asks Pillow (already a hard dependency
+    via Box.image/ImageField) to genuinely decode it."""
+    from PIL import Image, UnidentifiedImageError
+
+    ext = uploaded_file.name.rsplit('.', 1)[-1].lower() if '.' in uploaded_file.name else ''
+    if ext not in REVIEW_IMAGE_ALLOWED_EXTENSIONS:
+        raise ValueError(f"'{uploaded_file.name}' isn't a supported image type (jpg, jpeg, png, webp only).")
+    if uploaded_file.size > REVIEW_IMAGE_MAX_BYTES:
+        raise ValueError(f"'{uploaded_file.name}' is larger than the 5MB limit.")
+    try:
+        Image.open(uploaded_file).verify()
+    except (UnidentifiedImageError, OSError):
+        raise ValueError(f"'{uploaded_file.name}' isn't a valid image file.")
+    finally:
+        # Image.verify() consumes the file's read pointer — reset it so the
+        # same InMemoryUploadedFile/TemporaryUploadedFile can still be
+        # handed to default_storage.save() afterward.
+        uploaded_file.seek(0)
 
 
 class MinLengthSearchFilter(drf_filters.SearchFilter):
@@ -212,12 +239,21 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
             )
         serializer = ReviewSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            review = serializer.save(box=box, user=request.user)
-
             # Same upload pattern as OwnerBoxViewSet.perform_create's extra
             # box images — capped at 4 since this is a customer review, not
-            # a facility listing.
+            # a facility listing. Validated *before* the review row is
+            # created (not after) so a rejected image can't leave behind a
+            # review with no way to retry the upload (the already-reviewed
+            # check above would then permanently block a second attempt).
             uploaded_images = request.FILES.getlist('images')[:4]
+            for img in uploaded_images:
+                try:
+                    _validate_review_image(img)
+                except ValueError as e:
+                    return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+            review = serializer.save(box=box, user=request.user)
+
             if uploaded_images:
                 review.images = [
                     default_storage.save(f"review_images/{img.name}", img)
@@ -396,10 +432,16 @@ class AdminReviewViewSet(mixins.ListModelMixin, mixins.DestroyModelMixin, viewse
     def destroy(self, request, pk=None):
         review = get_object_or_404(Review, pk=pk)
         box = review.box
+        review_id = review.pk
+        review_repr = f'{box.name} — {review.user.email} ({review.rating}★)'
         review.delete()
         new_avg = box.reviews.aggregate(models.Avg('rating'))['rating__avg']
         box.rating = new_avg or 0.0
         box.save(update_fields=['rating'])
+        log_admin_action(
+            request.user, 'review.delete',
+            target_type='Review', target_id=review_id, target_repr=review_repr,
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -537,34 +579,52 @@ class AdminCommissionRateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin,
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        rate = serializer.save(created_by=self.request.user)
+        log_admin_action(
+            self.request.user, 'commission_rate.create', target=rate,
+            details={'owner': rate.owner.email, 'sport': rate.sport, 'rate': str(rate.rate), 'effective_from': str(rate.effective_from)},
+        )
 
 
 class AdminPlatformCommissionView(APIView):
     """Platform-wide default commission rate — the admin-editable
     replacement for the env-var-only DEFAULT_COMMISSION_RATE, read by
     boxes/pricing.py's resolve_commission_rate() as the ultimate fallback
-    when no per-owner/sport CommissionRate override applies. Same
-    GET/PATCH singleton shape as rewards.AdminScratchCardAutoGrantView."""
+    when no per-owner/sport CommissionRate override applies. Append-only/
+    versioned (see PlatformCommissionSetting's docstring) — GET returns
+    whatever's currently effective, PATCH always creates a new row dated
+    today rather than mutating one in place, same reasoning as
+    AdminCommissionRateViewSet never allowing an edit-in-place."""
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        row = PlatformCommissionSetting.objects.first()
+        row = PlatformCommissionSetting.objects.filter(
+            effective_from__lte=timezone.localdate(),
+        ).order_by('-effective_from', '-id').first()
         if row:
             return Response(PlatformCommissionSettingSerializer(row).data)
         return Response({
             'default_rate': float(settings.DEFAULT_COMMISSION_RATE) * 100,
+            'effective_from': None,
             'updated_at': None,
             'updated_by': None,
         })
 
     def patch(self, request):
-        setting, _ = PlatformCommissionSetting.objects.get_or_create(
-            pk=1, defaults={'default_rate': Decimal(str(settings.DEFAULT_COMMISSION_RATE)) * 100},
-        )
         new_rate = request.data.get('default_rate')
-        if new_rate is not None:
-            setting.default_rate = new_rate
-        setting.updated_by = request.user
-        setting.save()
+        if new_rate is None:
+            return Response({'detail': 'default_rate is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            new_rate = Decimal(str(new_rate))
+        except InvalidOperation:
+            return Response({'detail': 'default_rate must be a number.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_rate < 0 or new_rate > 100:
+            return Response({'detail': 'default_rate must be between 0 and 100.'}, status=status.HTTP_400_BAD_REQUEST)
+        setting = PlatformCommissionSetting.objects.create(
+            default_rate=new_rate, effective_from=timezone.localdate(), updated_by=request.user,
+        )
+        log_admin_action(
+            request.user, 'platform_commission.update', target=setting,
+            details={'default_rate': str(setting.default_rate), 'effective_from': str(setting.effective_from)},
+        )
         return Response(PlatformCommissionSettingSerializer(setting).data)

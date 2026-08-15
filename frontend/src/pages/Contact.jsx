@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Phone, MapPin, Clock, Send, MessageCircle, Sparkles, ArrowRight, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
 import { api } from '../api';
@@ -136,7 +137,7 @@ const Contact = () => {
     {
       icon: Mail,
       title: 'Email Us',
-      details: 'support@bookmybox.com',
+      details: 'Info@boxnplay.com',
       description: 'Send us an email anytime'
     },
     {
@@ -180,6 +181,17 @@ const Contact = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Contact Us | BoxNplay</title>
+        <meta name="description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
+        <link rel="canonical" href={`${window.location.origin}/contact`} />
+        <meta property="og:title" content="Contact Us | BoxNplay" />
+        <meta property="og:description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
+        <meta property="og:url" content={`${window.location.origin}/contact`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Contact Us | BoxNplay" />
+        <meta name="twitter:description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
+      </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-16 px-4 sm:px-6 lg:px-8">
         <motion.div
@@ -426,7 +438,7 @@ const Contact = () => {
                 <div className="space-y-2">
                   {[
                     { title: 'Frequently Asked Questions', href: '#faq' },
-                    { title: 'Support Center', href: 'mailto:support@bookmybox.com' },
+                    { title: 'Support Center', href: 'mailto:Info@boxnplay.com' },
                     { title: 'Partner with Us', href: '#contact-form' },
                   ].map((link) => (
                     <motion.a
@@ -463,7 +475,7 @@ const Contact = () => {
               Frequently asked questions
             </h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto mt-3">
-              Find quick answers to common questions about BookMyBox
+              Find quick answers to common questions about BoxNplay
             </p>
           </motion.div>
 

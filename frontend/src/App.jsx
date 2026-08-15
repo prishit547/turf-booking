@@ -69,9 +69,28 @@ function App() {
             of none at all. Pages that render their own <Helmet> (Home,
             BoxListings, BoxDetails) override these per-key automatically. */}
         <Helmet>
-          <meta name="description" content="Book sports boxes by the hour on BookMyBox. Live availability, instant confirmation, no phone calls." />
-          <meta property="og:site_name" content="BookMyBox" />
+          <meta name="description" content="Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
+          <meta property="og:site_name" content="BoxNplay" />
           <meta property="og:type" content="website" />
+          <link rel="canonical" href={`${window.location.origin}${location.pathname}`} />
+          <meta name="twitter:card" content="summary_large_image" />
+          <meta name="twitter:title" content="BoxNplay - Book Sports Boxes by the Hour" />
+          <meta name="twitter:description" content="Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
+          <script type="application/ld+json">
+            {JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'Organization',
+              name: 'BoxNplay',
+              url: window.location.origin,
+              description: 'Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls.',
+              email: 'Info@boxnplay.com',
+              contactPoint: {
+                '@type': 'ContactPoint',
+                email: 'Info@boxnplay.com',
+                contactType: 'customer support',
+              },
+            })}
+          </script>
         </Helmet>
         <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick pauseOnHover draggable theme="dark" />
         <ScrollToTop />

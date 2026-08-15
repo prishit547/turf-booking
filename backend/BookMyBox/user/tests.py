@@ -327,7 +327,7 @@ class AdminCreateUserTests(APITestCase):
     def test_create_with_explicit_password_can_then_log_in(self):
         response = self.client.post('/api/user/users/create/', {
             'email': 'newbie@example.com', 'first_name': 'New', 'last_name': 'Bie',
-            'role': 'user', 'password': 'explicitpass123',
+            'phone': '9876543210', 'role': 'user', 'password': 'explicitpass123',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
 
@@ -339,7 +339,8 @@ class AdminCreateUserTests(APITestCase):
     @patch('user.views.send_email_task.delay')
     def test_create_without_password_sets_unusable_password_and_queues_reset_email(self, mock_delay):
         response = self.client.post('/api/user/users/create/', {
-            'email': 'nopass@example.com', 'first_name': 'No', 'last_name': 'Pass', 'role': 'user',
+            'email': 'nopass@example.com', 'first_name': 'No', 'last_name': 'Pass',
+            'phone': '9876543210', 'role': 'user',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
 
@@ -351,10 +352,58 @@ class AdminCreateUserTests(APITestCase):
     def test_admin_role_allowed_unlike_public_registration(self):
         response = self.client.post('/api/user/users/create/', {
             'email': 'newadmin@example.com', 'first_name': 'New', 'last_name': 'Admin',
-            'role': 'admin', 'password': 'explicitpass123',
+            'phone': '9876543210', 'role': 'admin', 'password': 'explicitpass123',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(User.objects.get(email='newadmin@example.com').role, 'admin')
+
+    def test_phone_is_required_for_any_admin_created_account(self):
+        response = self.client.post('/api/user/users/create/', {
+            'email': 'nophone@example.com', 'first_name': 'No', 'last_name': 'Phone',
+            'role': 'user', 'password': 'explicitpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('phone', response.data)
+
+    def test_owner_missing_phone_is_rejected(self):
+        # phone is a required serializer field, so a missing phone short-
+        # circuits at field-level validation before the role-conditional
+        # object-level validate() below even runs -- covered separately
+        # from the other owner-only fields for that reason.
+        response = self.client.post('/api/user/users/create/', {
+            'email': 'baldowner@example.com', 'first_name': 'Bald', 'last_name': 'Owner',
+            'role': 'owner', 'business_name': 'Bald Sports', 'location': 'Nowhere',
+            'password': 'explicitpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('phone', response.data)
+
+    def test_owner_requires_name_business_name_and_location(self):
+        response = self.client.post('/api/user/users/create/', {
+            'email': 'baldowner2@example.com', 'phone': '9876543210',
+            'role': 'owner', 'password': 'explicitpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        for field in ('first_name', 'last_name', 'business_name', 'location'):
+            self.assertIn(field, response.data, response.data)
+
+    def test_owner_with_all_required_fields_succeeds(self):
+        response = self.client.post('/api/user/users/create/', {
+            'email': 'realowner@example.com', 'first_name': 'Real', 'last_name': 'Owner',
+            'phone': '9876543210', 'role': 'owner', 'business_name': 'Real Sports Arena',
+            'location': 'Pune, Maharashtra', 'password': 'explicitpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        created = User.objects.get(email='realowner@example.com')
+        self.assertEqual(created.business_name, 'Real Sports Arena')
+        self.assertEqual(created.location, 'Pune, Maharashtra')
+
+    def test_customer_created_by_admin_does_not_need_business_name(self):
+        response = self.client.post('/api/user/users/create/', {
+            'email': 'plaincustomer@example.com', 'first_name': 'Plain', 'last_name': 'Customer',
+            'phone': '9876543210', 'role': 'user', 'password': 'explicitpass123',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
 
 
 class AdminUserDeleteTests(APITestCase):
@@ -468,7 +517,8 @@ class AdminActionLogTests(APITestCase):
     def test_create_writes_audit_log(self):
         response = self.client.post('/api/user/users/create/', {
             'email': 'audit-created@example.com', 'first_name': 'Audit', 'last_name': 'Created',
-            'role': 'owner', 'business_name': 'Audit Created Sports', 'password': 'explicitpass123',
+            'phone': '9876543210', 'role': 'owner', 'business_name': 'Audit Created Sports',
+            'location': 'Delhi, India', 'password': 'explicitpass123',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         created = User.objects.get(email='audit-created@example.com')
@@ -971,6 +1021,49 @@ class PasswordResetThrottleTests(APITestCase):
         self.assertEqual(throttled.status_code, 429)
 
 
+class PublicRegistrationRequiredFieldsTests(APITestCase):
+    """A phone number is required for every self-signup (customer or
+    owner) — see UserRegistrationSerializer.phone. A self-signed-up
+    facility owner additionally needs business_name + location, mirroring
+    what AdminCreateUserSerializer requires when an admin creates an owner
+    account (see AdminCreateUserTests)."""
+
+    def test_customer_signup_without_phone_is_rejected(self):
+        response = self.client.post('/api/user/register/', {
+            'email': 'nophonecustomer@example.com', 'password': 'brandnewpass123',
+            'confirm_password': 'brandnewpass123', 'first_name': 'No', 'last_name': 'Phone', 'role': 'user',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('phone', response.data['errors'])
+
+    def test_customer_signup_with_phone_succeeds(self):
+        response = self.client.post('/api/user/register/', {
+            'email': 'withphonecustomer@example.com', 'password': 'brandnewpass123',
+            'confirm_password': 'brandnewpass123', 'first_name': 'With', 'last_name': 'Phone',
+            'phone': '9876543210', 'role': 'user',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def test_owner_signup_without_business_name_or_location_is_rejected(self):
+        response = self.client.post('/api/user/register/', {
+            'email': 'baldowner-signup@example.com', 'password': 'brandnewpass123',
+            'confirm_password': 'brandnewpass123', 'first_name': 'Bald', 'last_name': 'Owner',
+            'phone': '9876543210', 'role': 'owner',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('business_name', response.data['errors'])
+        self.assertIn('location', response.data['errors'])
+
+    def test_owner_signup_with_all_required_fields_succeeds(self):
+        response = self.client.post('/api/user/register/', {
+            'email': 'realowner-signup@example.com', 'password': 'brandnewpass123',
+            'confirm_password': 'brandnewpass123', 'first_name': 'Real', 'last_name': 'Owner',
+            'phone': '9876543210', 'role': 'owner', 'business_name': 'Real Owner Sports',
+            'location': 'Bengaluru, Karnataka',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+
 class SignupThrottleTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -983,12 +1076,14 @@ class SignupThrottleTests(APITestCase):
         for i in range(10):
             response = self.client.post('/api/user/register/', {
                 'email': f'signup{i}@example.com', 'password': 'brandnewpass123',
-                'confirm_password': 'brandnewpass123', 'first_name': 'New', 'last_name': 'User', 'role': 'user',
+                'confirm_password': 'brandnewpass123', 'first_name': 'New', 'last_name': 'User',
+                'phone': '9876543210', 'role': 'user',
             }, format='json')
             self.assertEqual(response.status_code, 201, response.data)
         throttled = self.client.post('/api/user/register/', {
             'email': 'oneMore@example.com', 'password': 'brandnewpass123',
-            'confirm_password': 'brandnewpass123', 'first_name': 'New', 'last_name': 'User', 'role': 'user',
+            'confirm_password': 'brandnewpass123', 'first_name': 'New', 'last_name': 'User',
+            'phone': '9876543210', 'role': 'user',
         }, format='json')
         self.assertEqual(throttled.status_code, 429)
 

@@ -1,4 +1,6 @@
 # rewards/views.py
+from decimal import Decimal, InvalidOperation
+
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
@@ -7,10 +9,12 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from BookMyBox.pagination import StandardResultsPagination
 from boxes.models import Box
+from user.audit import log_admin_action
 from user.permissions import IsAdminUser, IsOwnerUser
 from .models import (
     CashbackRule, OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting,
@@ -24,6 +28,19 @@ from . import services
 from .services import get_or_create_wallet
 
 User = get_user_model()
+
+
+def _parse_positive_value(raw):
+    """Parses a redeem-code `value` into a positive Decimal, or returns None
+    if it isn't one — shared by both the owner and admin `generate` actions
+    below, which previously only checked `if not value` (true only for
+    blank/zero/None, so a negative value sailed through and, once applied
+    at checkout, *increased* the booking total instead of discounting it)."""
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, TypeError):
+        return None
+    return value if value > 0 else None
 
 
 class WalletView(APIView):
@@ -69,7 +86,11 @@ class AdminCashbackRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, v
     queryset = CashbackRule.objects.all()
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        rule = serializer.save(created_by=self.request.user)
+        log_admin_action(
+            self.request.user, 'cashback_rule.create', target=rule,
+            details={'percent': str(rule.percent), 'active': rule.active},
+        )
 
 
 class ScratchCardViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -97,6 +118,29 @@ class AdminScratchCardConfigViewSet(viewsets.ModelViewSet):
     serializer_class = ScratchCardConfigSerializer
     permission_classes = [IsAdminUser]
     queryset = ScratchCardConfig.objects.all()
+
+    def perform_create(self, serializer):
+        config = serializer.save()
+        log_admin_action(
+            self.request.user, 'scratch_card_config.create', target=config,
+            details={'label': config.label, 'prize_amount': str(config.prize_amount), 'active': config.active},
+        )
+
+    def perform_update(self, serializer):
+        config = serializer.save()
+        log_admin_action(
+            self.request.user, 'scratch_card_config.update', target=config,
+            details={'label': config.label, 'prize_amount': str(config.prize_amount), 'active': config.active},
+        )
+
+    def perform_destroy(self, instance):
+        config_id = instance.pk
+        config_repr = str(instance)
+        instance.delete()
+        log_admin_action(
+            self.request.user, 'scratch_card_config.delete',
+            target_type='ScratchCardConfig', target_id=config_id, target_repr=config_repr,
+        )
 
 
 class SpinWheelView(APIView):
@@ -127,6 +171,29 @@ class AdminSpinWheelSegmentViewSet(viewsets.ModelViewSet):
     serializer_class = SpinWheelSegmentSerializer
     permission_classes = [IsAdminUser]
     queryset = SpinWheelSegment.objects.all()
+
+    def perform_create(self, serializer):
+        segment = serializer.save()
+        log_admin_action(
+            self.request.user, 'spin_wheel_segment.create', target=segment,
+            details={'label': segment.label, 'prize_amount': str(segment.prize_amount), 'active': segment.active},
+        )
+
+    def perform_update(self, serializer):
+        segment = serializer.save()
+        log_admin_action(
+            self.request.user, 'spin_wheel_segment.update', target=segment,
+            details={'label': segment.label, 'prize_amount': str(segment.prize_amount), 'active': segment.active},
+        )
+
+    def perform_destroy(self, instance):
+        segment_id = instance.pk
+        segment_repr = str(instance)
+        instance.delete()
+        log_admin_action(
+            self.request.user, 'spin_wheel_segment.delete',
+            target_type='SpinWheelSegment', target_id=segment_id, target_repr=segment_repr,
+        )
 
 
 class RedeemCodeView(APIView):
@@ -164,17 +231,24 @@ class AdminRedeemCodeViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
     @action(detail=False, methods=['post'])
     def generate(self, request):
-        value = request.data.get('value')
-        quantity = int(request.data.get('quantity', 1))
+        value = _parse_positive_value(request.data.get('value'))
+        try:
+            quantity = int(request.data.get('quantity', 1))
+        except (TypeError, ValueError):
+            quantity = 0
         batch_label = request.data.get('batch_label', '')
         expires_at = request.data.get('expires_at')
-        if not value or quantity < 1 or quantity > 1000:
-            return Response({'detail': 'A value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if value is None or quantity < 1 or quantity > 1000:
+            return Response({'detail': 'A positive value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
         codes = [
             RedeemCode(value=value, batch_label=batch_label, expires_at=expires_at, created_by=request.user)
             for _ in range(quantity)
         ]
         created = RedeemCode.objects.bulk_create(codes)
+        log_admin_action(
+            request.user, 'redeem_code.generate',
+            details={'quantity': quantity, 'value': str(value), 'batch_label': batch_label},
+        )
         return Response(RedeemCodeSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
 
 
@@ -192,6 +266,10 @@ class AdminScratchCardAutoGrantView(APIView):
         setting.enabled = bool(request.data.get('enabled', setting.enabled))
         setting.updated_by = request.user
         setting.save()
+        log_admin_action(
+            request.user, 'scratch_card_auto_grant.toggle',
+            details={'enabled': setting.enabled},
+        )
         return Response({'enabled': setting.enabled})
 
 
@@ -220,14 +298,25 @@ class AdminGrantScratchCardView(APIView):
         card = services.grant_scratch_card(user)
         if card is None:
             return Response({'detail': 'No active scratch card prize tiers configured.'}, status=400)
+        log_admin_action(
+            request.user, 'scratch_card.grant', target=card,
+            details={'user': user.email},
+        )
         return Response(ScratchCardSerializer(card).data, status=201)
 
 
 class OwnerGrantScratchCardView(APIView):
     """Owner-triggered equivalent of AdminGrantScratchCardView — any
     facility owner can gift a scratch card to any user, not just their own
-    customers, same as the admin one."""
+    customers, same as the admin one. That "any user" scope is deliberate
+    (see above), but nothing previously stopped an owner from calling this
+    in a loop to mint unlimited real wallet credit — the ScopedRateThrottle
+    below is the actual guardrail against that, same pattern as the auth
+    endpoints in user/views.py (see REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']
+    in settings.py for the rate)."""
     permission_classes = [IsOwnerUser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'owner_scratch_grant'
 
     def post(self, request):
         user = get_object_or_404(User, pk=request.data.get('user_id'))
@@ -255,15 +344,18 @@ class OwnerRedeemCodeViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def generate(self, request):
         box_id = request.data.get('box')
-        value = request.data.get('value')
-        quantity = int(request.data.get('quantity', 1))
+        value = _parse_positive_value(request.data.get('value'))
+        try:
+            quantity = int(request.data.get('quantity', 1))
+        except (TypeError, ValueError):
+            quantity = 0
         batch_label = request.data.get('batch_label', '')
         expires_at = request.data.get('expires_at')
         box = Box.objects.filter(pk=box_id, owner=request.user).first()
         if not box:
             return Response({'detail': 'That box is not yours.'}, status=status.HTTP_403_FORBIDDEN)
-        if not value or quantity < 1 or quantity > 1000:
-            return Response({'detail': 'A value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if value is None or quantity < 1 or quantity > 1000:
+            return Response({'detail': 'A positive value and a quantity (1-1000) are required.'}, status=status.HTTP_400_BAD_REQUEST)
         codes = [
             RedeemCode(box=box, value=value, batch_label=batch_label, expires_at=expires_at, created_by=request.user)
             for _ in range(quantity)

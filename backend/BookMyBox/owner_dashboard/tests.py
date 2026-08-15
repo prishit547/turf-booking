@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -228,12 +228,46 @@ class ScheduledPayoutsTests(APITestCase):
         today = date(2026, 8, 17)  # a Monday
         schedule = PayoutSchedule(frequency='weekly', day_of_week=0, active=True)
         self.assertTrue(is_due_today(schedule, today))
-        self.assertFalse(is_due_today(schedule, date(2026, 8, 18)))  # Tuesday
+
+    def test_is_due_today_weekly_not_due_before_target_weekday(self):
+        # Target is Thursday — Wednesday of the same week hasn't reached it
+        # yet (Monday is an awkward choice for this case: as weekday 0, the
+        # "day before" always belongs to the *previous* week's already-past
+        # cycle, i.e. legitimately due-for-catch-up rather than not-yet-due —
+        # see test_is_due_today_weekly_catches_up_a_missed_run below).
+        schedule = PayoutSchedule(frequency='weekly', day_of_week=3, active=True)
+        self.assertFalse(is_due_today(schedule, date(2026, 8, 19)))  # Wednesday
+        self.assertTrue(is_due_today(schedule, date(2026, 8, 20)))  # Thursday
+
+    def test_is_due_today_weekly_catches_up_a_missed_run(self):
+        # The scheduled Monday run was missed (e.g. Celery Beat downtime) —
+        # it should still fire the next time the task runs, not silently
+        # wait a full week for the next Monday.
+        schedule = PayoutSchedule(frequency='weekly', day_of_week=0, active=True)  # never run
+        self.assertTrue(is_due_today(schedule, date(2026, 8, 18)))  # Tuesday
+
+    def test_is_due_today_weekly_not_due_again_after_already_running_this_week(self):
+        schedule = PayoutSchedule(
+            frequency='weekly', day_of_week=0, active=True,
+            last_run_at=timezone.make_aware(datetime.combine(date(2026, 8, 17), time(9, 0))),
+        )
+        self.assertFalse(is_due_today(schedule, date(2026, 8, 18)))  # already ran this Monday
 
     def test_is_due_today_monthly(self):
         schedule = PayoutSchedule(frequency='monthly', day_of_month=15, active=True)
         self.assertTrue(is_due_today(schedule, date(2026, 8, 15)))
-        self.assertFalse(is_due_today(schedule, date(2026, 8, 16)))
+        self.assertFalse(is_due_today(schedule, date(2026, 8, 14)))  # before the target day
+
+    def test_is_due_today_monthly_catches_up_a_missed_run(self):
+        schedule = PayoutSchedule(frequency='monthly', day_of_month=15, active=True)  # never run
+        self.assertTrue(is_due_today(schedule, date(2026, 8, 20)))  # past the 15th, never ran
+
+    def test_is_due_today_monthly_not_due_again_after_already_running_this_month(self):
+        schedule = PayoutSchedule(
+            frequency='monthly', day_of_month=15, active=True,
+            last_run_at=timezone.make_aware(datetime.combine(date(2026, 8, 15), time(9, 0))),
+        )
+        self.assertFalse(is_due_today(schedule, date(2026, 8, 20)))
 
     def test_is_due_today_inactive_schedule_never_due(self):
         schedule = PayoutSchedule(frequency='monthly', day_of_month=15, active=False)

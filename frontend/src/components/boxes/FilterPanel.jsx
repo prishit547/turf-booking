@@ -20,7 +20,7 @@ export const defaultFilters = {
  * Sidebar/drawer filter panel, mirroring the reference design's
  * FilterPanel exactly — sport pills, a price-range slider, rating
  * quick-select, and amenity pills. Only real, backend-honored filters are
- * included: BookMyBox has no distance/geo filtering on the main listing
+ * included: BoxNplay has no distance/geo filtering on the main listing
  * endpoint (only a separate "nearby" endpoint) and no indoor/outdoor field
  * on the box model, so those reference sections are intentionally omitted
  * rather than faked.

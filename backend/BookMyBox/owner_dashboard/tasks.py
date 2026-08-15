@@ -5,6 +5,8 @@ today, records a Payout row for whatever the owner has earned since their
 last scheduled run. Stays in the same "record-keeping only, never a live
 payment gateway" spirit as the existing manual Payout ledger — this task
 never moves real money, it just automates the bookkeeping + notification."""
+from datetime import timedelta
+
 from celery import shared_task
 from django.utils import timezone
 
@@ -14,20 +16,52 @@ from .services import compute_owner_earnings
 
 
 def is_due_today(schedule, today):
+    """Whether `schedule` should fire if the task runs on `today` — "due",
+    not "due exactly today": once a schedule's target day for the current
+    period has arrived, it stays due on every subsequent day until it
+    actually runs, instead of only matching the exact target day. That's
+    deliberate — Celery Beat downtime, a deploy, or any other reason the
+    daily task doesn't execute right on the target day would otherwise
+    silently skip that whole period's payout, with nothing waiting to catch
+    it up (see run_scheduled_payouts_task's own docstring: the earnings
+    window it computes already spans back to last_run_at regardless of how
+    many days were missed, so firing once as soon as the task next runs is
+    sufficient to catch up — no need to fire once per missed day)."""
     if not schedule.active:
         return False
+
     if schedule.frequency == 'monthly':
-        day = schedule.day_of_month or 1
-        return today.day == min(day, 28)
+        target_day = min(schedule.day_of_month or 1, 28)
+        if today.day < target_day:
+            return False
+        if schedule.last_run_at and schedule.last_run_at.date().year == today.year \
+                and schedule.last_run_at.date().month == today.month:
+            return False  # already ran for this month's cycle
+        return True
+
     if schedule.frequency == 'weekly':
-        return today.weekday() == (schedule.day_of_week or 0)
+        target_weekday = schedule.day_of_week or 0
+        if today.weekday() < target_weekday:
+            return False
+        period_start = today - timedelta(days=today.weekday() - target_weekday)
+        if schedule.last_run_at and schedule.last_run_at.date() >= period_start:
+            return False  # already ran for this week's cycle
+        return True
+
     if schedule.frequency == 'biweekly':
-        if today.weekday() != (schedule.day_of_week or 0):
+        target_weekday = schedule.day_of_week or 0
+        if today.weekday() < target_weekday:
             return False
         # Every other matching weekday, anchored to the schedule's creation
         # week — simple and deterministic without needing extra state.
         weeks_since_creation = (today - schedule.created_at.date()).days // 7
-        return weeks_since_creation % 2 == 0
+        if weeks_since_creation % 2 != 0:
+            return False
+        period_start = today - timedelta(days=today.weekday() - target_weekday)
+        if schedule.last_run_at and schedule.last_run_at.date() >= period_start:
+            return False  # already ran for this 2-week cycle
+        return True
+
     return False
 
 

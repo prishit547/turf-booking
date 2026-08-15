@@ -31,7 +31,7 @@ const TESTIMONIALS = [
   { name: 'Rohan Mehta', role: 'Weekend footballer, Mumbai', quote: 'Booked a 5-a-side slot for eight of us in under a minute. No calls, no back and forth.' },
   { name: 'Ayesha Khan', role: 'Badminton regular, Pune', quote: 'The live slot grid actually works — what I see is what I get when I show up.' },
   { name: 'Devansh Rao', role: 'Box cricket captain, Bengaluru', quote: 'Cancelling and rebooking around weather has never been this painless.' },
-  { name: 'Priya Nair', role: 'Turf owner, Ahmedabad', quote: 'Managing bookings for our ground got a lot simpler once we moved onto BookMyBox.' },
+  { name: 'Priya Nair', role: 'Turf owner, Ahmedabad', quote: 'Managing bookings for our ground got a lot simpler once we moved onto BoxNplay.' },
 ]
 
 const Home = () => {
@@ -64,12 +64,16 @@ const Home = () => {
   return (
     <div className="min-h-screen">
       <Helmet>
-        <title>BookMyBox - Book Sports Boxes by the Hour</title>
+        <title>BoxNplay - Book Sports Boxes by the Hour</title>
         <meta name="description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
         <link rel="canonical" href={`${window.location.origin}/`} />
-        <meta property="og:title" content="BookMyBox - Book Sports Boxes by the Hour" />
+        <meta property="og:title" content="BoxNplay - Book Sports Boxes by the Hour" />
         <meta property="og:description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
         <meta property="og:url" content={`${window.location.origin}/`} />
+        <meta property="og:image" content={`${window.location.origin}${heroBanner}`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="BoxNplay - Book Sports Boxes by the Hour" />
+        <meta name="twitter:description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
       </Helmet>
       {/* Hero */}
       <section ref={heroRef} className="relative overflow-hidden">

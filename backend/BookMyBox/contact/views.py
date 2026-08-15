@@ -25,7 +25,7 @@ def submit_contact(request):
     submission = serializer.save()
 
     html = (
-        f"<p>New contact form submission from BookMyBox.</p>"
+        f"<p>New contact form submission from BoxNplay.</p>"
         f"<p><strong>Name:</strong> {escape(submission.name)}<br>"
         f"<strong>Email:</strong> {escape(submission.email)}<br>"
         f"<strong>Phone:</strong> {escape(submission.phone) or '—'}<br>"

@@ -12,6 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from user.permissions import IsAdminUser
+from user.audit import log_admin_action
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters
@@ -22,6 +23,7 @@ from BookMyBox.tasks import send_email_task
 from . import broadcasting, reservation, services
 from .filters import AdminBookingFilter
 from .models import Booking, BookingInvite, Coupon, WaitlistEntry
+from .permissions import IsCustomerUser
 from .serializers import AdminBookingSerializer, BookingInviteSerializer, BookingSerializer, CouponSerializer, WaitlistEntrySerializer
 from .services import BookingWriteError, CancellationError, cancel_booking
 from .tasks import expire_hold_task, promote_and_broadcast
@@ -337,6 +339,21 @@ class BookingViewSet(viewsets.ModelViewSet):
             status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
 
+    def destroy(self, request, *args, **kwargs):
+        # get_permissions() grants admin the 'destroy' action, but DRF's
+        # default ModelViewSet.destroy() is a raw DB delete — it never runs
+        # cancel_booking() (the `cancel` action below does), so it skips
+        # the refund, the customer/owner notification, the waitlist
+        # release, and booking_status ever becoming 'Cancelled'. It also
+        # left no trace in the admin action log. Same fix as update/
+        # partial_update above: block it outright rather than have a
+        # same-named REST verb quietly mean something different from
+        # "cancel" everywhere else in this app.
+        return Response(
+            {"detail": "Bookings can't be deleted directly. Use the cancel action instead, which handles refunds and notifications correctly."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def cancel(self, request, pk=None):
         booking = self.get_object()
@@ -589,6 +606,16 @@ class BookingViewSet(viewsets.ModelViewSet):
             self.permission_classes = [IsAdminUser]
         elif self.action in ('booked_slots', 'invite_detail'):
             self.permission_classes = []
+        elif self.action in ('create', 'recurring', 'reserve', 'confirm'):
+            # These are the only actions that actually put a NEW booking on
+            # the books as the caller themselves (direct create, weekly
+            # recurring create, and the two phases of the hold/queue flow).
+            # Admin/owner accounts are deliberately excluded here — they can
+            # still view/cancel/reschedule via the branches above, and an
+            # owner has their own walk-in-booking action on
+            # OwnerBookingViewSet (a different permission class entirely,
+            # unaffected by this one).
+            self.permission_classes = [IsAuthenticated, IsCustomerUser]
         else:
             self.permission_classes = [IsAuthenticated]
         return super().get_permissions()
@@ -623,7 +650,15 @@ class AdminCouponViewSet(viewsets.ModelViewSet):
     queryset = Coupon.objects.all()
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        coupon = serializer.save(created_by=self.request.user)
+        log_admin_action(
+            self.request.user, 'coupon.create', target=coupon,
+            details={
+                'code': coupon.code,
+                'discount_type': coupon.discount_type,
+                'value': str(coupon.value),
+            },
+        )
 
 
 class WaitlistViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):

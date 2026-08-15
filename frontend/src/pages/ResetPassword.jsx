@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Lock } from 'lucide-react';
@@ -58,7 +59,12 @@ const ResetPassword = () => {
   };
 
   return (
-    <AuthShell title="Set a new password" subtitle="Choose a new password for your account">
+    <>
+      <Helmet>
+        <title>Reset Password | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <AuthShell title="Set a new password" subtitle="Choose a new password for your account">
       <form className="space-y-5" onSubmit={handleSubmit}>
         {(errors.general || errors.token || errors.non_field_errors) && (
           <motion.div
@@ -111,7 +117,8 @@ const ResetPassword = () => {
           <Link to="/login" className="font-medium text-primary hover:text-primary/80">Back to sign in</Link>
         </p>
       </form>
-    </AuthShell>
+      </AuthShell>
+    </>
   );
 };
 

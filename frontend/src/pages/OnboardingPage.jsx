@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Phone, MapPin, BriefcaseBusiness } from 'lucide-react';
@@ -76,9 +77,14 @@ const OnboardingPage = () => {
   };
 
   return (
-    <AuthShell
+    <>
+      <Helmet>
+        <title>Complete Your Profile | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <AuthShell
       title="Complete your profile"
-      subtitle={`${isNewUser ? 'Welcome to BookMyBox! ' : ''}Just a few more details to get started`}
+      subtitle={`${isNewUser ? 'Welcome to BoxNplay! ' : ''}Just a few more details to get started`}
     >
       <form className="space-y-5" onSubmit={handleSubmit}>
         {errors.general && (
@@ -124,7 +130,8 @@ const OnboardingPage = () => {
           {loading ? 'Completing setup…' : 'Complete setup'}
         </MagneticButton>
       </form>
-    </AuthShell>
+      </AuthShell>
+    </>
   );
 };
 

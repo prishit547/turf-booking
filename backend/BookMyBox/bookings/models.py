@@ -7,6 +7,14 @@ from django.conf import settings  # For AUTH_USER_MODEL
 from django.utils import timezone
 
 
+def _minutes(time_str):
+    """Converts a "HH:MM" string to minutes since midnight, for comparing/
+    arithmetic on the plain-string time fields this app stores throughout
+    (see Booking.overlaps)."""
+    hour, minute = map(int, time_str.split(':'))
+    return hour * 60 + minute
+
+
 class Booking(models.Model):
     PAYMENT_STATUS_CHOICES = [
         ('Not Required', 'Not Required'),
@@ -155,12 +163,25 @@ class Booking(models.Model):
         if self.booking_status == 'Cancelled':
             return False
         try:
-            self_start = tuple(map(int, self.start_time.split(':')))
-            self_end = tuple(map(int, self.end_time.split(':')))
-            other_start = tuple(map(int, other_start.split(':')))
-            other_end = tuple(map(int, other_end.split(':')))
+            self_start = _minutes(self.start_time)
+            self_end = _minutes(self.end_time)
+            other_start = _minutes(other_start)
+            other_end = _minutes(other_end)
         except (ValueError, AttributeError):
             return False
+        # bookings/services.py::compute_end_time_str rejects any booking
+        # whose end would cross midnight, so in practice every end here is
+        # already after its own start on the same calendar day — but this
+        # doesn't lean on that holding true forever. If either range's "end"
+        # comes at or before its own "start", treat it as wrapping past
+        # midnight instead of silently comparing it as if it were earlier
+        # in the day than its own start (which previously made two
+        # bookings at the exact same wrapped start_time compare as
+        # non-overlapping, reaching the DB's UNIQUE constraint uncaught).
+        if self_end <= self_start:
+            self_end += 24 * 60
+        if other_end <= other_start:
+            other_end += 24 * 60
         # Two intervals overlap if self_start < other_end and other_start < self_end
         return self_start < other_end and other_start < self_end
 

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 from rest_framework import status
@@ -265,6 +265,15 @@ def compute_end_time_str(booking_date, start_time_str, duration_hours):
     start_time_obj = parse_time(start_time_str)
     start_datetime = datetime.combine(booking_date, start_time_obj)
     end_datetime = start_datetime + timedelta(hours=duration_hours)
+    # A booking can never cross midnight into the next calendar day. Python's
+    # datetime arithmetic normalizes the hour back into 0-23 and rolls the
+    # date forward instead of ever producing an out-of-range hour, so
+    # checking end_datetime.hour alone (as the check below does) can never
+    # actually detect this case — a 22:00 start with a 4-hour duration ends
+    # up looking like a perfectly ordinary "hour 2" same-day time. Comparing
+    # the date is the only reliable way to catch the wraparound.
+    if end_datetime.date() != start_datetime.date():
+        raise ValidationError("Booking cannot extend past midnight.")
     # Bookings must end by 23:00 at the latest
     if end_datetime.hour > 23 or (end_datetime.hour == 23 and end_datetime.minute > 0):
         raise ValidationError("Booking cannot extend past 23:00.")
@@ -461,25 +470,41 @@ def create_booking_row(user, box_id, booking_date, start_time_str, duration_hour
         if any(existing.overlaps(booking_date, start_time_str, end_time_str) for existing in existing_bookings):
             raise BookingWriteError("This time slot overlaps with an existing booking.", status.HTTP_409_CONFLICT)
 
-        booking = Booking.objects.create(
-            user=user,
-            box=box,
-            date=booking_date,
-            start_time=start_time_str,
-            end_time=end_time_str,
-            duration=duration_hours,
-            total_amount=expected_total_amount,
-            payment_status=payment_status,
-            payment_id=None,
-            booking_status='Confirmed',
-            booking_source=booking_source,
-            created_by=created_by,
-            customer_name=customer_name,
-            customer_phone=customer_phone,
-            recurring_group_id=recurring_group_id,
-            coupon_code=(applied_coupon.code if applied_coupon else (applied_redeem.code if applied_redeem else '')),
-            discount_amount=discount_amount,
-        )
+        try:
+            # The Python-level overlaps() check above is the primary guard,
+            # but it runs against a SELECT that isn't itself locked against
+            # a concurrent transaction also mid-flight on this exact slot
+            # (select_for_update() on the box row doesn't block a plain read
+            # of Booking rows from another transaction on every backend this
+            # app runs against — notably SQLite in local dev). The DB's own
+            # conditional UniqueConstraint (see Booking.Meta) is the real
+            # backstop for that race; catching it here turns a genuine but
+            # rare double-submit into a clean conflict response instead of
+            # an unhandled 500 that leaks a raw traceback to the client.
+            booking = Booking.objects.create(
+                user=user,
+                box=box,
+                date=booking_date,
+                start_time=start_time_str,
+                end_time=end_time_str,
+                duration=duration_hours,
+                total_amount=expected_total_amount,
+                payment_status=payment_status,
+                payment_id=None,
+                booking_status='Confirmed',
+                booking_source=booking_source,
+                created_by=created_by,
+                customer_name=customer_name,
+                customer_phone=customer_phone,
+                recurring_group_id=recurring_group_id,
+                coupon_code=(applied_coupon.code if applied_coupon else (applied_redeem.code if applied_redeem else '')),
+                discount_amount=discount_amount,
+            )
+        except IntegrityError:
+            raise BookingWriteError(
+                "This time slot was just booked by someone else. Please pick another slot.",
+                status.HTTP_409_CONFLICT,
+            )
 
         if applied_redeem:
             applied_redeem.is_used = True

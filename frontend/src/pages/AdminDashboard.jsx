@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Helmet } from 'react-helmet-async'
 import { motion } from 'framer-motion'
 import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, ShieldCheck, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus, Gift, UserPlus, XCircle, History } from 'lucide-react'
 import { Line, Doughnut, Bar } from 'react-chartjs-2'
@@ -553,9 +554,29 @@ const AdminDashboard = () => {
     setShowUserCreateModal(true)
   }
 
+  // Phone is required for every admin-created account (customer or owner,
+  // same as public self-signup); owners additionally need first/last name,
+  // business name, and location captured up front so the account is
+  // actually usable (payouts, support, box listings) rather than a
+  // half-filled shell. Shared by the Create button's disabled state and
+  // the submit-time guard below so the two can't drift.
+  const newUserMissingFields = () => {
+    const missing = []
+    if (!newUserForm.email.trim()) missing.push('Email')
+    if (!newUserForm.first_name.trim()) missing.push('First name')
+    if (!newUserForm.phone.trim()) missing.push('Phone')
+    if (newUserForm.role === 'owner') {
+      if (!newUserForm.last_name.trim()) missing.push('Last name')
+      if (!newUserForm.business_name.trim()) missing.push('Business name')
+      if (!newUserForm.location.trim()) missing.push('Location')
+    }
+    return missing
+  }
+
   const handleCreateUser = async () => {
-    if (!newUserForm.email.trim() || !newUserForm.first_name.trim()) {
-      toast.error('Email and first name are required.')
+    const missing = newUserMissingFields()
+    if (missing.length > 0) {
+      toast.error(`Required: ${missing.join(', ')}.`)
       return
     }
     setCreatingUser(true)
@@ -887,6 +908,10 @@ const AdminDashboard = () => {
 
   return (
     <div className="min-h-screen bg-background py-8">
+      <Helmet>
+        <title>Admin Dashboard | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header panel */}
         <motion.div
@@ -904,7 +929,7 @@ const AdminDashboard = () => {
                 Welcome, {user?.first_name || user?.name?.split('@')[0] || user?.name || 'Admin'}
               </h1>
               <p className="mt-1.5 text-muted-foreground text-sm sm:text-base">
-                Monitor and manage the entire BookMyBox platform
+                Monitor and manage the entire BoxNplay platform
               </p>
             </div>
           </div>
@@ -1545,9 +1570,15 @@ const AdminDashboard = () => {
                           <td className="py-3 px-4 text-foreground font-medium tabular-nums">₹{row.net_revenue.toLocaleString()}</td>
                           <td className="py-3 px-4 text-success tabular-nums">₹{row.total_paid.toLocaleString()}</td>
                           <td className="py-3 px-4 font-medium tabular-nums">
-                            <span className={row.balance_due > 0 ? 'text-warning' : 'text-muted-foreground'}>
-                              ₹{row.balance_due.toLocaleString()}
-                            </span>
+                            {row.balance_due < 0 ? (
+                              <span className="text-danger" title="A cancellation/refund after this owner was already paid out has dropped their live balance below zero — reconcile manually before recording another payout.">
+                                Overpaid ₹{Math.abs(row.balance_due).toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className={row.balance_due > 0 ? 'text-warning' : 'text-muted-foreground'}>
+                                ₹{row.balance_due.toLocaleString()}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">
                             {payoutSchedules[row.owner_id]
@@ -2049,7 +2080,7 @@ const AdminDashboard = () => {
             <Button
               onClick={handleCreateUser}
               loading={creatingUser}
-              disabled={!newUserForm.email.trim() || !newUserForm.first_name.trim()}
+              disabled={newUserMissingFields().length > 0}
             >
               Create user
             </Button>
@@ -2059,23 +2090,24 @@ const AdminDashboard = () => {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="First name"
+              label="First name *"
               value={newUserForm.first_name}
               onChange={(e) => setNewUserForm((f) => ({ ...f, first_name: e.target.value }))}
             />
             <Input
-              label="Last name"
+              label={newUserForm.role === 'owner' ? 'Last name *' : 'Last name'}
               value={newUserForm.last_name}
               onChange={(e) => setNewUserForm((f) => ({ ...f, last_name: e.target.value }))}
+              placeholder={newUserForm.role === 'owner' ? 'Required for owners' : undefined}
             />
             <Input
-              label="Email"
+              label="Email *"
               type="email"
               value={newUserForm.email}
               onChange={(e) => setNewUserForm((f) => ({ ...f, email: e.target.value }))}
             />
             <Input
-              label="Phone"
+              label="Phone *"
               value={newUserForm.phone}
               onChange={(e) => setNewUserForm((f) => ({ ...f, phone: e.target.value }))}
             />
@@ -2089,15 +2121,16 @@ const AdminDashboard = () => {
               <option value="admin">Admin</option>
             </Select>
             <Input
-              label="Business name"
+              label={newUserForm.role === 'owner' ? 'Business name *' : 'Business name'}
               value={newUserForm.business_name}
               onChange={(e) => setNewUserForm((f) => ({ ...f, business_name: e.target.value }))}
               placeholder="Required for owners"
             />
             <Input
-              label="Location"
+              label={newUserForm.role === 'owner' ? 'Location *' : 'Location'}
               value={newUserForm.location}
               onChange={(e) => setNewUserForm((f) => ({ ...f, location: e.target.value }))}
+              placeholder={newUserForm.role === 'owner' ? 'Required for owners' : undefined}
             />
           </div>
           <Input
@@ -2329,7 +2362,14 @@ const AdminDashboard = () => {
           <div className="space-y-4">
             <p className="text-muted-foreground text-sm">
               Recording a payout to <span className="font-medium text-foreground">{payoutTarget.owner_name}</span>.
-              Current balance due: <span className="font-medium text-foreground">₹{payoutTarget.balance_due.toLocaleString()}</span>.
+              {payoutTarget.balance_due < 0 ? (
+                <>
+                  {' '}Current balance: <span className="font-medium text-danger">overpaid by ₹{Math.abs(payoutTarget.balance_due).toLocaleString()}</span>.
+                  {' '}A cancellation/refund after an earlier payout likely caused this — reconcile with the owner before recording anything further.
+                </>
+              ) : (
+                <> Current balance due: <span className="font-medium text-foreground">₹{payoutTarget.balance_due.toLocaleString()}</span>.</>
+              )}
             </p>
 
             {/* Read-only — only the owner edits their own payout details (Owner Dashboard's

@@ -156,6 +156,15 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
     plaintext password)."""
 
     password = serializers.CharField(required=False, allow_blank=True, min_length=8, write_only=True)
+    # phone is blank=True/null=True on the model (so plain ModelSerializer
+    # inference would make it optional) — explicitly overridden here since
+    # a phone number is required for every account an admin creates,
+    # customer or owner alike, for the same reason it's required at public
+    # self-signup (see UserRegistrationSerializer below).
+    phone = serializers.CharField(required=True, allow_blank=False, error_messages={
+        'blank': 'Phone number is required.',
+        'required': 'Phone number is required.',
+    })
 
     class Meta:
         model = User
@@ -167,10 +176,9 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
         return value
 
     def validate_phone(self, value):
-        if value:
-            digits_only = ''.join(filter(str.isdigit, value))
-            if len(digits_only) != 10:
-                raise serializers.ValidationError("Phone number must be 10 digits.")
+        digits_only = ''.join(filter(str.isdigit, value))
+        if len(digits_only) != 10:
+            raise serializers.ValidationError("Phone number must be 10 digits.")
         return value
 
     def validate_password(self, value):
@@ -187,8 +195,17 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if attrs.get('role') == 'owner' and not attrs.get('business_name'):
-            raise serializers.ValidationError("Business name is required for facility owners.")
+        # Facility owners created by an admin need their identifying/contact
+        # info captured properly up front — name, phone (checked above),
+        # business name, and location — so the account is actually usable
+        # (payouts, support, box listings) rather than a half-filled shell.
+        # Customer ('user') accounts stay looser: only phone is required,
+        # matching self-signup.
+        if attrs.get('role') == 'owner':
+            required = ('first_name', 'last_name', 'business_name', 'location')
+            errors = {f: 'This field is required for facility owners.' for f in required if not attrs.get(f)}
+            if errors:
+                raise serializers.ValidationError(errors)
         return attrs
 
 # --- User Registration Serializer ---
@@ -198,6 +215,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     # of passing here only to be rejected by validate_password() below.
     password = serializers.CharField(write_only=True, min_length=8)
     confirm_password = serializers.CharField(write_only=True)
+    # phone is blank=True/null=True on the model (so plain ModelSerializer
+    # inference would make it optional) — explicitly overridden here since a
+    # reachable phone number is required for every self-signup, customer or
+    # owner alike.
+    phone = serializers.CharField(required=True, allow_blank=False, error_messages={
+        'blank': 'Phone number is required.',
+        'required': 'Phone number is required.',
+    })
 
     class Meta:
         model = User
@@ -212,10 +237,9 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return value
 
     def validate_phone(self, value):
-        if value:
-            digits_only = ''.join(filter(str.isdigit, value))
-            if len(digits_only) != 10:
-                raise serializers.ValidationError("Phone number must be 10 digits.")
+        digits_only = ''.join(filter(str.isdigit, value))
+        if len(digits_only) != 10:
+            raise serializers.ValidationError("Phone number must be 10 digits.")
         return value
 
     def validate_password(self, value):
@@ -234,9 +258,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         if attrs['password'] != attrs['confirm_password']:
             raise serializers.ValidationError("Passwords do not match.")
 
-        # Validate business name for owners
-        if attrs.get('role') == 'owner' and not attrs.get('business_name'):
-            raise serializers.ValidationError("Business name is required for facility owners.")
+        # Someone self-signing up as a facility owner needs the same
+        # identifying info an admin would be required to collect when
+        # creating an owner account (see AdminCreateUserSerializer.validate)
+        # — business name and location — so their account is actually usable
+        # from the start rather than a half-filled shell.
+        if attrs.get('role') == 'owner':
+            required = ('business_name', 'location')
+            errors = {f: 'This field is required for facility owners.' for f in required if not attrs.get(f)}
+            if errors:
+                raise serializers.ValidationError(errors)
 
         return attrs
 

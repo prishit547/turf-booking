@@ -1,744 +1,317 @@
-# BookMyBox - Scalability Questions & Answers Guide
-## Comprehensive Interview Preparation Document
+# BoxNplay — Scalability & Infrastructure Q&A
+
+## Status
+
+This document was rewritten to describe what's **actually implemented and
+verified today**, not an aspirational roadmap. The previous version was
+written before Redis, Celery, Django Channels, or the reservation system
+existed in this codebase, and described PostgreSQL/Redis/load-balancing
+as future work; all of that now exists and some of it has been verified
+against real infrastructure (see `backend/BookMyBox/DEPLOYMENT.md`, which
+this doc treats as the source of truth and cross-references rather than
+duplicates). Sections describing things that genuinely don't exist yet
+(monitoring/APM, read replicas, sharding, microservices, a load balancer)
+say so plainly instead of showing hypothetical code for them.
+
+Keep the Q&A format where it still reads well; every answer below is
+intended to be true of the current code, not a forward-looking pitch.
 
 ---
 
-## 🎯 **Section 1: Architecture Scalability**
+## Section 1: Architecture
 
-### **Q1: How scalable is your current BookMyBox architecture?**
+### Q1: What does the current architecture actually look like?
 
-**A:** Our architecture scores **7/10** on scalability with excellent foundational design but some infrastructure limitations:
+Django 5 + Django REST Framework backend, JWT auth
+(`rest_framework_simplejwt`), served over ASGI (not WSGI — see Q7) so it
+can handle both normal HTTP and the live slot-reservation WebSocket
+traffic in the same process. React 18 + Vite SPA frontend, calling the API
+over `axios`. Redis is a **required** runtime dependency, not optional —
+it backs four distinct concerns (see Q4). Celery, with both a worker and a
+Beat scheduler process, handles the reservation hold-expiry cascade and
+two periodic jobs (booking completion, scheduled payouts). PostgreSQL is
+the production database; SQLite is a local-dev-only fallback.
 
-**Strengths (9/10):**
-- Clean separation of concerns (React frontend + Django REST API)
-- Stateless JWT authentication
-- Atomic transaction handling
-- Modular component architecture
-- RESTful API design
+This is a genuine increase in moving parts over a plain
+Django+SQLite+WSGI setup — four processes (ASGI server, Celery worker,
+Celery Beat, Redis) instead of one, plus a real inter-process dependency
+on Redis being up. That's the cost of the reservation feature (see
+`docs/ATOMICITY_DOCUMENTATION.md`) actually working correctly under
+contention — there isn't a way to get hold/queue/cascade behavior without
+some out-of-request-cycle scheduling mechanism.
 
-**Current Limitations:**
-- SQLite database (single-file, no connection pooling)
-- No caching layer implemented
-- Local file storage for images
-- No CDN integration
+### Q2: What makes it horizontally scalable, and what doesn't yet?
 
-**Scaling Potential:** Can easily handle 10,000+ concurrent users with infrastructure upgrades.
+**Does scale horizontally today:**
+- Stateless JWT auth means no server-side session affinity is needed
+  between requests.
+- The ASGI backend can run multiple worker processes within one container
+  (`gunicorn ... -k uvicorn.workers.UvicornWorker --workers N`) — verified
+  to roughly double sustained throughput at realistic concurrency (see Q7).
+- Celery workers can scale out horizontally (multiple worker processes/
+  containers consuming the same queue) — Celery Beat explicitly cannot
+  (it's a single scheduler that must never run more than once; a separate
+  container from the worker in `docker-compose.prod.yml` for exactly this
+  reason).
+- The frontend is a static build served by nginx — scales independently
+  of the backend, trivially cacheable/CDN-able (not currently behind a
+  CDN, see Q8).
 
----
+**Doesn't yet, and is a real, flagged gap** (not a secret — see
+`DEPLOYMENT.md`'s "Known limitations" section):
+- JWT is stored in browser `localStorage`, not an httpOnly cookie —
+  functional either way for horizontal scaling, but an XSS-exposure
+  trade-off inherent to the current auth model. A real fix (cookie-based
+  SimpleJWT, CSRF handling, CORS credential mode, and a redesigned
+  WebSocket auth flow since httpOnly cookies aren't readable by JS to put
+  in a WS connection URL) is a real auth-architecture migration, not
+  implemented.
+- No load balancer / multi-instance deployment is actually configured —
+  `docker-compose.prod.yml` runs exactly one `backend` container (with
+  `WEB_CONCURRENCY` worker *processes* inside it, not multiple
+  *containers*). Running genuinely multiple backend containers behind a
+  load balancer would work given the stateless design, but isn't wired up
+  in the shipped compose file.
 
-### **Q2: What makes your architecture horizontally scalable?**
+### Q3: What does the database layer actually look like?
 
-**A:** Several key design decisions enable horizontal scaling:
+`DATABASES` in `BookMyBox/settings.py` is driven by `DATABASE_URL` via
+`dj-database-url`. Unset → falls back to SQLite (`db.sqlite3`) for local
+dev with zero configuration. Set to a `postgresql://...` URL → Postgres in
+production.
 
-1. **Stateless Design**
-```javascript
-// JWT tokens eliminate server sessions
-const token = localStorage.getItem('token')
-// No sticky sessions required
-```
+**Verified, not aspirational**: this has been run against a real
+PostgreSQL 16 instance (via Docker) — all 40+ migrations apply cleanly
+with no schema-compatibility issues (`DEPLOYMENT.md`). A documented
+`dumpdata`/`loaddata` procedure exists for migrating real SQLite data to
+Postgres.
 
-2. **API-First Architecture**
-```python
-# Django REST Framework endpoints
-@api_view(['GET', 'POST'])
-def box_listings(request):
-    # Stateless operations
-    # Can run on multiple servers
-```
+**Not implemented**: read replicas, a `DatabaseRouter`, or any sharding
+strategy. There's exactly one database connection target (`default`).
+`DB_CONN_MAX_AGE` (env var, default `600`s) is the one real tuning knob
+that exists — `settings.py` carries a comment recommending it be set low
+(or `0`) unless Postgres's `max_connections` has been tuned for the
+connection volume `WEB_CONCURRENCY` worker processes will actually
+generate, based on a stress test that exhausted Postgres's default
+100-connection limit under ASGI (which, unlike WSGI, can hold more
+concurrent connections open per process).
 
-3. **Decoupled Frontend**
-```javascript
-// React SPA can be served from CDN
-// Scales independently from backend
-npm run build  // Static files deployable anywhere
-```
+### Q4: What caching actually exists?
 
----
+One real Redis instance, split across four logical database indices so
+these concerns can never collide (`REDIS_URL`, `/0`–`/3`, see the comment
+above `CACHES` in `settings.py`):
 
-### **Q3: How would you scale the database layer?**
+- **`/0` — Django cache** (`django_redis`). The one place this is
+  actually used for response caching today is
+  `boxes/views.py::PublicBoxViewSet` — `list`/`retrieve`/`featured`/
+  `popular` are wrapped in `cache_page` for a short TTL (on the order of
+  15 seconds). A stress test found these the most-hit read endpoints and
+  cutting their latency roughly 3–5x. `nearby` (lat/lng radius search) is
+  deliberately **not** cached — real GPS coordinates are high-cardinality
+  enough as a cache key that caching would mostly consume cache memory
+  without hits.
+- **`/1` — Channels layer** (`channels_redis`), the WebSocket pub/sub
+  backing the slot-reservation broadcasts.
+- **`/2` — Celery broker + result backend**.
+- **`/3` — Reservation hold/queue state** (`REDIS_RESERVATION_URL`), kept
+  on its own logical DB specifically so cache eviction (`/0`) can never
+  accidentally touch live hold/queue state.
 
-**A:** Multi-phase database scaling approach:
+**Not implemented**: general query-level or fragment caching beyond the
+one `PublicBoxViewSet` case above, and no frontend HTTP-cache layer
+(no React Query or equivalent — the frontend just re-fetches).
 
-**Phase 1: PostgreSQL Migration**
-```python
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'bookmybox_prod',
-        'OPTIONS': {
-            'MAX_CONNS': 20,  # Connection pooling
-        }
-    }
-}
-```
+A real, accepted consequence of the 15s cache TTL: a newly-approved or
+newly-edited box can take up to that TTL to show up on public listings.
+This is the same bounded-staleness trade-off already made elsewhere (the
+frontend polls `booked_slots` every 30s rather than getting a push for
+every booking change).
 
-**Phase 2: Read Replicas**
-```python
-DATABASES = {
-    'default': {},  # Master (writes)
-    'users_db': {},  # Read replica
-}
+### Q5: How are concurrent booking requests actually handled?
 
-class DatabaseRouter:
-    def db_for_read(self, model, **hints):
-        if model._meta.app_label == 'users':
-            return 'users_db'
-        return 'default'
-```
+See `docs/ATOMICITY_DOCUMENTATION.md` for the full mechanism — summary:
+a Redis-backed Lua-scripted hold/wait-queue engine
+(`bookings/reservation.py`) gives contended slots a live hold-with-
+countdown or FIFO-queue-position UX over a Channels WebSocket, backed by
+a database-level safety net (`transaction.atomic()` +
+`select_for_update()` + an interval-overlap check + a conditional unique
+constraint) that remains the authoritative guarantee against
+double-booking independent of the Redis layer.
 
-**Phase 3: Sharding**
-```python
-# Partition by user location or booking date
-def get_database_for_booking(booking_date):
-    return f'bookings_{booking_date.year}'
-```
+### Q6: What's the strategy for large datasets / large lists?
 
----
-
-## 🚀 **Section 2: Performance Optimization**
-
-### **Q4: What caching strategies would you implement?**
-
-**A:** Multi-layer caching approach:
-
-**1. Redis Cache**
-```python
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': 'redis://127.0.0.1:6379/1',
-        'OPTIONS': {
-            'CONNECTION_POOL_KWARGS': {
-                'max_connections': 50,
-            }
-        }
-    }
-}
-```
-
-**2. Query-Level Caching**
-```python
-@cache_page(60 * 15)  # 15 minutes
-def box_listings_view(request):
-    boxes = Box.objects.select_related('owner')
-    return Response(BoxSerializer(boxes, many=True).data)
-```
-
-**3. Application-Level Caching**
-```python
-def get_user_bookings(user_id):
-    cache_key = f'user_bookings_{user_id}'
-    bookings = cache.get(cache_key)
-    if not bookings:
-        bookings = Booking.objects.filter(user_id=user_id)
-        cache.set(cache_key, bookings, 300)  # 5 minutes
-    return bookings
-```
-
-**4. Frontend Caching**
-```javascript
-// React Query for API response caching
-const { data: boxes } = useQuery(
-  ['boxes', filters], 
-  () => fetchBoxes(filters),
-  { staleTime: 5 * 60 * 1000 }  // 5 minutes
-)
-```
-
----
-
-### **Q5: How do you handle concurrent booking requests?**
-
-**A:** Atomic transactions with optimistic locking:
-
-**Database-Level Protection**
-```python
-class Booking(models.Model):
-    class Meta:
-        unique_together = ('box', 'date', 'start_time')
-```
-
-**Transaction Atomicity**
-```python
-@transaction.atomic
-def create_booking(self, validated_data):
-    # Check availability
-    existing = Booking.objects.filter(
-        box=validated_data['box'],
-        date=validated_data['date'],
-        start_time=validated_data['start_time']
-    ).exists()
-    
-    if existing:
-        raise ValidationError("Slot already booked")
-    
-    # Create booking atomically
-    return Booking.objects.create(**validated_data)
-```
-
-**Real-time Slot Updates**
-```javascript
-// Frontend optimistic updates
-const { mutate: bookSlot } = useMutation(createBooking, {
-  onMutate: async (newBooking) => {
-    // Optimistically update UI
-    queryClient.setQueryData(['availableSlots'], old => 
-      old.filter(slot => slot.id !== newBooking.slotId)
-    )
-  }
-})
-```
+- **Pagination**: `REST_FRAMEWORK['DEFAULT_PAGINATION_CLASS'] =
+  PageNumberPagination`, `PAGE_SIZE = 100`, applied globally. Several
+  admin-facing list endpoints (users, bookings, reviews, action log,
+  redeem codes) rely on this plus `django_filters`-backed filtering and
+  search rather than returning unbounded lists.
+- **Box listings** (`BoxListings.jsx`) take the opposite approach
+  deliberately: the frontend fetches the full public box list once and
+  does all filtering/sorting/searching client-side, to keep the grid's
+  filter/animation interactions instant rather than round-tripping to the
+  server on every filter change. This is a real, intentional trade-off
+  documented in the frontend code, not an oversight — it works because
+  the current box catalog size is small; it would need revisiting (server-
+  side filtering + pagination) at a much larger catalog size.
+- **Not implemented**: no virtualized/windowed list rendering
+  (e.g. `react-window`) was found anywhere in the frontend, no image CDN
+  or responsive image pipeline, no database-level composite index audit
+  beyond whatever Django's default per-field indexing and the handful of
+  explicit `db_index=True`/indexed fields provide.
 
 ---
 
-### **Q6: What's your strategy for handling large datasets?**
+## Section 2: Production Infrastructure (verified)
 
-**A:** Multi-pronged approach for data management:
+### Q7: What does the actual production deployment look like?
 
-**1. Database Optimization**
-```python
-class Box(models.Model):
-    name = models.CharField(max_length=255, db_index=True)
-    location = models.CharField(max_length=255, db_index=True)
-    sport = models.CharField(max_length=100, db_index=True)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['location', 'sport']),
-            models.Index(fields=['price', 'rating']),
-        ]
+`docker-compose.prod.yml` (repo root) is the real, current production
+topology — six services: Postgres, Redis, the Django backend, a Celery
+worker, a Celery Beat scheduler, and the React frontend built and served
+by nginx. This has been verified end-to-end, not just written: all
+migrations apply cleanly against a real `postgres:16-alpine` container,
+the Django cache round-trips through the `redis` service, and a full
+reserve → queue → confirm cycle correctly holds a slot, queues a second
+user, writes a `Confirmed` booking to Postgres, and drains the queued
+user's Redis entry.
+
+**The backend runs on ASGI, not WSGI** — it serves WebSocket traffic
+(`/ws/bookings/slot/...`) alongside normal HTTP, which a WSGI server
+can't do:
+```bash
+gunicorn BookMyBox.asgi:application -k uvicorn.workers.UvicornWorker \
+  --workers 2 --bind 0.0.0.0:8000 --timeout 60
 ```
+A single ASGI process is one Python process on one core — a stress test
+found the backend GIL/CPU-saturated with throughput completely flat
+regardless of concurrency (10 through 150 concurrent users all got the
+same ~25–30 requests/sec with one worker). Multiple gunicorn worker
+processes let concurrent requests actually run in parallel; this roughly
+doubled sustained throughput at realistic concurrency (50–150 users) with
+no loss of WebSocket functionality. `daphne` (still in `requirements.txt`)
+remains a valid single-process alternative if you'd rather keep Daphne —
+Channels' own reference server — as the process supervisor, at the cost
+of that concurrency ceiling.
 
-**2. Pagination**
-```python
-REST_FRAMEWORK = {
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20
-}
-```
+**Four processes, not one, are required** for the reservation feature to
+work at all (detailed in `DEPLOYMENT.md`'s "Process model" section):
+Redis, the ASGI server, a Celery worker (fires the one-shot hold-expiry
+checks), and Celery Beat (ticks the two periodic jobs —
+`mark_completed_bookings_task` hourly, `run_scheduled_payouts_task`
+daily). Without Beat specifically, nothing ever enqueues those two jobs —
+bookings never transition out of `Confirmed`, and no rewards ever fire —
+even with a healthy, idle worker process running.
 
-**3. Virtual Scrolling (Frontend)**
-```javascript
-// React Virtual for large lists
-import { FixedSizeList } from 'react-window'
+Celery's prefork pool defaults `--concurrency` to
+`multiprocessing.cpu_count()` — which reads the **host's** CPU count, not
+a container's cgroup limit. A stress test found it forking 8 worker
+processes (the test host's core count) inside a container capped at a
+fraction of one core — each a full Django process sitting at the memory
+limit for no throughput benefit. `WEB_CONCURRENCY`/`CELERY_CONCURRENCY`
+both default to `2` in the env checklist, tuned for
+`docker-compose.stress.yml`'s specific test profile — not a universal
+number; size them to whatever CPU is actually allocated to each container.
 
-const BoxList = ({ boxes }) => (
-  <FixedSizeList
-    height={600}
-    itemCount={boxes.length}
-    itemSize={200}
-  >
-    {({ index, style }) => (
-      <div style={style}>
-        <BoxCard box={boxes[index]} />
-      </div>
-    )}
-  </FixedSizeList>
-)
-```
+Deployment mechanics worth knowing (all verified against the real compose
+file, not assumed):
+- `migrate` runs as its own one-shot service; `backend`/`celery_worker`
+  both wait on it (`service_completed_successfully`) so migrations run
+  exactly once rather than racing across containers.
+- Static and media files are shared Docker volumes mounted into both
+  `backend` (writes them) and the frontend nginx container (serves them
+  directly at `/static/`/`/media/`) — `django.conf.urls.static` for
+  `MEDIA_URL` is a no-op once `DEBUG=False`, so nginx serving the volume
+  directly is what actually makes uploaded images reachable in this
+  deployment.
+- The frontend is built with `VITE_API_BASE_URL=/api` (relative), so it
+  calls the same origin nginx serves from, which nginx proxies to
+  `backend:8000` — this sidesteps CORS entirely for the deployed stack.
+  Vite inlines `VITE_*` vars at build time, so changing this needs an
+  image rebuild, not a runtime env change.
+- `SECURE_SSL_REDIRECT` defaults `True` whenever `DEBUG=False`, correct
+  once a real TLS terminator sits in front of the stack — but the shipped
+  `frontend/nginx.conf` only listens on plain `:80` with no certs.
+  `.env.docker.example` explicitly overrides this to `False` for that
+  reason; a real deployment with its own TLS termination (cloud load
+  balancer, managed ingress, or nginx with real certs) should remove that
+  override.
 
-**4. Lazy Loading**
-```javascript
-// Image lazy loading
-<img 
-  src={box.image} 
-  loading="lazy"
-  alt={box.name}
-/>
-```
+### Q8: What about static assets, media, and a CDN?
+
+**Static files** (Django admin CSS, DRF browsable API assets, the
+jazzmin admin theme): served by `whitenoise` directly from the Django
+process — real, works today, no separate static-file server needed for a
+first production deploy.
+
+**Media files (user-uploaded box/review images)**: **not solved**, and
+explicitly flagged as such in `DEPLOYMENT.md` rather than left silently
+broken. The current setup is `MEDIA_ROOT`-based local disk storage, which
+doesn't work reliably on most production platforms (ephemeral or
+non-shared filesystems mean uploaded images can vanish on redeploy or be
+invisible to other instances). In the Docker Compose deployment
+specifically, a shared volume between `backend` and the frontend's nginx
+papers over this for a single-host deployment — but it is still local
+disk, not durable object storage, and would not survive a multi-host or
+managed-platform deployment. Wiring up real object storage
+(`django-storages` + S3, Cloudinary, or similar) needs real cloud
+credentials that don't exist in this environment and hasn't been done.
+
+**No CDN** is configured anywhere for static or media assets today.
+
+### Q9: What monitoring/observability actually exists?
+
+**None is currently wired up.** No APM, no request-timing middleware, no
+structured metrics export, no error-tracking service (Sentry or
+equivalent) integration was found anywhere in the settings or app code.
+The stress-test findings quoted throughout this document (throughput
+numbers, connection-pool exhaustion, Celery concurrency behavior) came
+from one-off manual stress-test runs during development, not from any
+always-on monitoring the running application produces. This is a real,
+current gap, not a deferred nice-to-have described elsewhere as done.
 
 ---
 
-## 🏗️ **Section 3: Infrastructure Scaling**
-
-### **Q7: How would you design the production infrastructure?**
-
-**A:** Multi-tier production architecture:
-
-**Load Balancer Setup**
-```nginx
-upstream django_backend {
-    least_conn;
-    server app1.bookmybox.com:8000;
-    server app2.bookmybox.com:8000;
-    server app3.bookmybox.com:8000;
-}
-
-server {
-    listen 80;
-    server_name api.bookmybox.com;
-    
-    location / {
-        proxy_pass http://django_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-**Container Orchestration**
-```dockerfile
-# Dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-EXPOSE 8000
-CMD ["gunicorn", "BookMyBox.wsgi:application"]
-```
-
-**Docker Compose**
-```yaml
-version: '3.8'
-services:
-  web:
-    build: .
-    ports:
-      - "8000:8000"
-    depends_on:
-      - db
-      - redis
-    
-  db:
-    image: postgres:14
-    environment:
-      POSTGRES_DB: bookmybox
-    
-  redis:
-    image: redis:7-alpine
-    
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-```
-
----
-
-### **Q8: How do you handle static assets at scale?**
-
-**A:** CDN-first approach with optimized delivery:
-
-**CDN Configuration**
-```python
-# settings.py
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-STATICFILES_STORAGE = 'storages.backends.s3boto3.StaticS3Boto3Storage'
-
-AWS_S3_CUSTOM_DOMAIN = 'cdn.bookmybox.com'
-AWS_S3_OBJECT_PARAMETERS = {
-    'CacheControl': 'max-age=86400',  # 24 hours
-}
-```
-
-**Image Optimization**
-```python
-from PIL import Image
-from django.core.files.storage import default_storage
-
-def optimize_image(image_file):
-    with Image.open(image_file) as img:
-        # Resize for different screen sizes
-        sizes = [(800, 600), (400, 300), (200, 150)]
-        optimized_images = {}
-        
-        for width, height in sizes:
-            resized = img.resize((width, height), Image.LANCZOS)
-            optimized_images[f'{width}x{height}'] = resized
-        
-        return optimized_images
-```
-
-**Frontend Asset Optimization**
-```javascript
-// vite.config.js
-export default defineConfig({
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          charts: ['chart.js', 'react-chartjs-2'],
-          maps: ['leaflet', 'react-leaflet']
-        }
-      }
-    }
-  }
-})
-```
-
----
-
-## 📊 **Section 4: Monitoring & Performance**
-
-### **Q9: How do you monitor application performance at scale?**
-
-**A:** Comprehensive monitoring strategy:
-
-**Application Metrics**
-```python
-# Django middleware for metrics
-import time
-from django.utils.deprecation import MiddlewareMixin
-
-class PerformanceMonitoringMiddleware(MiddlewareMixin):
-    def process_request(self, request):
-        request.start_time = time.time()
-    
-    def process_response(self, request, response):
-        if hasattr(request, 'start_time'):
-            duration = time.time() - request.start_time
-            # Log to monitoring service
-            logger.info(f"Request to {request.path} took {duration:.2f}s")
-        return response
-```
-
-**Database Query Monitoring**
-```python
-# Settings for query debugging
-if DEBUG:
-    LOGGING = {
-        'loggers': {
-            'django.db.backends': {
-                'level': 'DEBUG',
-                'handlers': ['console'],
-            }
-        }
-    }
-```
-
-**Frontend Performance**
-```javascript
-// Performance monitoring
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.entryType === 'navigation') {
-      console.log('Page load time:', entry.loadEventEnd - entry.loadEventStart)
-    }
-  }
-})
-observer.observe({ entryTypes: ['navigation'] })
-```
-
----
-
-### **Q10: What's your scaling roadmap from 100 to 100,000 users?**
-
-**A:** Phase-by-phase scaling plan:
-
-**Phase 1: 100-1,000 Users (Week 1-2)**
-```
-✅ Migrate SQLite → PostgreSQL
-✅ Add Redis caching
-✅ Basic monitoring setup
-✅ CDN for static assets
-
-Estimated Capacity: 1,000 concurrent users
-Infrastructure Cost: $200-500/month
-```
-
-**Phase 2: 1,000-10,000 Users (Month 1-2)**
-```
-✅ Load balancer + multiple app instances
-✅ Database read replicas
-✅ Advanced caching strategies
-✅ Image optimization pipeline
-
-Estimated Capacity: 10,000 concurrent users
-Infrastructure Cost: $1,000-2,000/month
-```
-
-**Phase 3: 10,000-100,000 Users (Month 3-6)**
-```
-✅ Microservices architecture
-✅ Database sharding
-✅ Real-time features with WebSockets
-✅ Auto-scaling infrastructure
-
-Estimated Capacity: 100,000+ concurrent users
-Infrastructure Cost: $5,000-10,000/month
-```
-
----
-
-## 🔄 **Section 5: Microservices Migration**
-
-### **Q11: How would you break down the monolith into microservices?**
-
-**A:** Service decomposition by business domains:
-
-**Authentication Service**
-```python
-# auth-service/
-class UserService:
-    def authenticate(self, email, password):
-        # JWT token generation
-        pass
-    
-    def authorize(self, token, required_role):
-        # Role-based access control
-        pass
-```
-
-**Booking Service**
-```python
-# booking-service/
-class BookingService:
-    def create_booking(self, user_id, box_id, slot_data):
-        # Atomic booking creation
-        pass
-    
-    def check_availability(self, box_id, date):
-        # Real-time availability
-        pass
-```
-
-**Facility Service**
-```python
-# facility-service/
-class FacilityService:
-    def search_boxes(self, filters):
-        # Search and filtering
-        pass
-    
-    def get_box_details(self, box_id):
-        # Box information
-        pass
-```
-
-**Service Communication**
-```python
-# Inter-service communication
-import httpx
-
-class ServiceClient:
-    async def call_service(self, service_name, endpoint, data=None):
-        url = f"http://{service_name}-service/{endpoint}"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data)
-            return response.json()
-```
-
----
-
-### **Q12: How do you ensure data consistency across microservices?**
-
-**A:** Event-driven architecture with eventual consistency:
-
-**Event Sourcing**
-```python
-class BookingEvent:
-    def __init__(self, event_type, data, timestamp):
-        self.event_type = event_type
-        self.data = data
-        self.timestamp = timestamp
-
-class EventStore:
-    def append_event(self, stream_id, event):
-        # Store event in database
-        pass
-    
-    def get_events(self, stream_id):
-        # Replay events for state reconstruction
-        pass
-```
-
-**Saga Pattern**
-```python
-class BookingCreationSaga:
-    def __init__(self):
-        self.steps = [
-            self.reserve_slot,
-            self.process_payment,
-            self.send_confirmation,
-            self.update_availability
-        ]
-    
-    async def execute(self, booking_data):
-        for step in self.steps:
-            try:
-                await step(booking_data)
-            except Exception as e:
-                await self.compensate(step, booking_data)
-                raise
-```
-
----
-
-## 🛡️ **Section 6: Security at Scale**
-
-### **Q13: How do you handle security concerns at scale?**
-
-**A:** Multi-layer security approach:
-
-**Rate Limiting**
-```python
-from django_ratelimit.decorators import ratelimit
-
-@ratelimit(key='ip', rate='100/h', method='POST')
-def create_booking_view(request):
-    # Prevent abuse
-    pass
-```
-
-**API Security**
-```python
-# JWT token validation
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-}
-```
-
-**Input Validation**
-```python
-from django.core.validators import MinValueValidator, MaxValueValidator
-
-class BookingSerializer(serializers.ModelSerializer):
-    duration = serializers.IntegerField(
-        validators=[MinValueValidator(1), MaxValueValidator(12)]
-    )
-    
-    def validate_date(self, value):
-        if value < date.today():
-            raise serializers.ValidationError("Cannot book past dates")
-        return value
-```
-
----
-
-## 📈 **Section 7: Performance Metrics**
-
-### **Q14: What performance metrics do you track?**
-
-**A:** Comprehensive metric tracking:
-
-**Response Time Metrics**
-```python
-# API response time targets
-PERFORMANCE_TARGETS = {
-    'api_response_time': {
-        'p50': 100,  # 50th percentile: 100ms
-        'p95': 300,  # 95th percentile: 300ms
-        'p99': 500,  # 99th percentile: 500ms
-    }
-}
-```
-
-**Business Metrics**
-```python
-# Key business indicators
-BUSINESS_METRICS = {
-    'booking_conversion_rate': 15,  # 15% of searches result in bookings
-    'user_retention_30_day': 70,   # 70% of users return within 30 days
-    'average_session_duration': 12, # 12 minutes average session
-}
-```
-
-**Infrastructure Metrics**
-```python
-# System health indicators
-INFRASTRUCTURE_METRICS = {
-    'cpu_utilization': 70,     # Target 70% CPU usage
-    'memory_utilization': 80,  # Target 80% memory usage
-    'database_connections': 15, # Average 15 connections
-    'cache_hit_ratio': 85,     # 85% cache hit rate
-}
-```
-
----
-
-## 🎯 **Section 8: Interview-Ready Summary**
-
-### **Q15: Give me a 2-minute elevator pitch on BookMyBox scalability**
-
-**A:** 
-
-"BookMyBox is built with scalability as a core principle. Our architecture follows a **separation of concerns** approach with a React frontend consuming Django REST APIs, making it inherently horizontally scalable.
-
-**Key scalability features:**
-- **Stateless JWT authentication** eliminates server sessions
-- **Atomic transactions** prevent booking conflicts at any scale
-- **Modular component architecture** allows independent scaling
-- **API-first design** enables multiple frontend clients
-
-**Current capacity:** 100 concurrent users with SQLite
-**With infrastructure upgrades:** 10,000+ concurrent users
-
-**Scaling path:** PostgreSQL → Redis caching → Load balancing → Microservices
-
-**The beauty of our architecture** is that scaling is primarily an infrastructure concern, not a code rewrite. Our clean separation and atomic operations provide the foundation that most scaling projects struggle with.
-
-**Timeline:** We can 10x our capacity in 2-3 days with database and caching upgrades, and 100x our capacity in 2-3 months with microservices migration."
-
----
-
-### **Q16: What would you do differently if starting fresh with scale in mind?**
-
-**A:**
-
-**Day 1 Decisions:**
-1. **PostgreSQL from start** - No SQLite migration needed
-2. **Redis integration** - Caching strategy from beginning  
-3. **Docker containers** - Consistent deployment from development
-4. **Message queue** - Async processing for emails, notifications
-5. **Event sourcing** - Better audit trails and data replay capability
-
-**Architecture Improvements:**
-```python
-# Event-driven from start
-class BookingCreatedEvent:
-    def __init__(self, booking_id, user_id, box_id):
-        self.booking_id = booking_id
-        self.timestamp = timezone.now()
-        
-# Async task processing
-from celery import shared_task
-
-@shared_task
-def send_booking_confirmation(booking_id):
-    # Non-blocking email sending
-    pass
-```
-
-**But honestly,** our current architecture decisions were smart for an MVP. Premature optimization is the root of all evil, and we chose technologies that let us move fast while maintaining a clear upgrade path to scale.
-
----
-
-## 📚 **Quick Reference: Key Numbers for Interview**
-
-```
-Current Scale:
-- 100 concurrent users
-- 200ms response time
-- SQLite database
-- Local file storage
-
-With Basic Upgrades (PostgreSQL + Redis):
-- 1,000 concurrent users  
-- 100ms response time
-- Connection pooling
-- Query caching
-
-With Full Scale Infrastructure:
-- 10,000+ concurrent users
-- 50ms response time  
-- Load balancing
-- CDN delivery
-- Microservices ready
-
-Migration Timeline:
-- Database upgrade: 4-6 hours
-- Caching layer: 2-3 hours  
-- Load balancing: 1-2 days
-- Microservices: 2-3 months
-```
-
----
-
-**💡 Pro Tip for Interview:** Always emphasize that you chose **proven, scalable technologies** and **clean architecture patterns** that provide a clear scaling path without major rewrites. The key is showing you understand both current limitations and future solutions!
+## Section 3: Known limitations (accepted, not accidental)
+
+Carried over verbatim in substance from `DEPLOYMENT.md`'s "Known
+limitations" section — repeated here because they're directly relevant to
+any scalability/production-readiness conversation about this app:
+
+- **Media storage** needs object storage before a real multi-host
+  production launch (Q8).
+- **No online payments** — bookings are pay-at-venue by design; there is
+  no payment gateway integration anywhere in the app (see
+  `docs/PLAYER_FEATURES.md`'s Checkout section for the frontend-side
+  detail — the payment-method selector is presentational only).
+- **Cross-signature slot overlap** — the Redis reservation layer scopes
+  contention to an exact `(box, date, start_time, duration)` signature; a
+  same-box-and-start-time request with a *different* duration gets an
+  independent hold/queue with no mutual awareness. The database-level
+  safety net remains authoritative and will still correctly reject the
+  losing booking — this is a UX gap for one specific edge case, not a
+  correctness bug. See `docs/ATOMICITY_DOCUMENTATION.md` for the full
+  writeup.
+- **JWT in `localStorage`, not an httpOnly cookie** — flagged, not fixed
+  (Q2).
+- **`react-router-dom` one major version behind on security patches** —
+  the installed `6.30.4` is the newest 6.x release; the CVEs `npm audit`
+  flags for it are patched only in `7.18.0+`. The SSR-only CVE doesn't
+  apply to this pure client-rendered SPA; the open-redirect CVE is real
+  but narrow (only matters if user-controlled input is ever passed
+  verbatim into `<Link to>`/`useNavigate`, which the app doesn't
+  currently do). Upgrading is a v6→v7 major migration, not a patch bump.
+
+## Section 4: What's genuinely not implemented (and not currently planned)
+
+Said plainly, once, rather than scattered as caveats: there is no
+microservices split, no event sourcing / saga pattern, no database
+sharding, no read replicas, no message-queue-based inter-service
+communication, and no load balancer in front of multiple backend
+instances. The architecture is a single Django monolith (ASGI, with
+multiple worker *processes* inside one container) plus Redis plus Celery
+— appropriate for the app's current real scale, with a genuinely clear
+incremental path (more `WEB_CONCURRENCY`, more Celery workers, Postgres
+connection pooling, a real load balancer in front of multiple backend
+containers) if load ever demands it, but none of those next steps have
+been built, and there's no committed timeline for them.

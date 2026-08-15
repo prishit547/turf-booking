@@ -3,8 +3,17 @@ import secrets
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator
 from django.db import models
 from django.utils import timezone
+
+VERIFICATION_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def validate_verification_document_size(f):
+    if f.size > VERIFICATION_DOCUMENT_MAX_BYTES:
+        raise ValidationError("File must be 10MB or smaller.")
 
 class User(AbstractUser):
     ROLE_CHOICES = [
@@ -89,7 +98,14 @@ class OwnerVerification(models.Model):
     user = models.OneToOneField('User', on_delete=models.CASCADE, related_name='owner_verification')
     pan_number = models.CharField(max_length=20, blank=True, default='')
     gst_number = models.CharField(max_length=20, blank=True, default='')
-    verification_document = models.FileField(upload_to='owner_verification_docs/', blank=True, null=True)
+    verification_document = models.FileField(
+        upload_to='owner_verification_docs/', blank=True, null=True,
+        validators=[
+            FileExtensionValidator(allowed_extensions=['pdf', 'jpg', 'jpeg', 'png']),
+            validate_verification_document_size,
+        ],
+        help_text="PAN card, GST certificate, or similar — PDF/JPG/PNG only, up to 10MB.",
+    )
     verification_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='not_submitted')
     rejection_reason = models.TextField(blank=True, default='')
     submitted_at = models.DateTimeField(null=True, blank=True)

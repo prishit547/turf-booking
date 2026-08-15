@@ -166,6 +166,81 @@ class BookingInviteTests(APITestCase):
         response = self.client.post(f'/api/bookings/invites/{invite.token}/accept/')
         self.assertEqual(response.status_code, 409)
 
+    @patch('bookings.views.send_email_task.delay')
+    def test_can_invite_several_people_to_one_booking(self, mock_delay):
+        # Product ask: a booker should be able to invite a genuine squad
+        # (3-4+ people) to one booking — confirm there's no artificial cap
+        # anywhere in the `invite` action.
+        self._auth(self.booker_token)
+        emails = ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com']
+        for email in emails:
+            response = self.client.post(
+                f'/api/bookings/{self.booking.id}/invite/', {'invited_email': email}, format='json',
+            )
+            self.assertEqual(response.status_code, 201)
+        self.assertEqual(BookingInvite.objects.filter(booking=self.booking).count(), len(emails))
+
+    def test_booking_detail_reflects_mixed_invite_statuses(self):
+        # "Who's coming" needs an accurate mix of pending/accepted/declined
+        # on the booking's own `invites` list, exactly as BookingSerializer
+        # nests it — this is what BookingConfirmation.jsx renders.
+        pending = BookingInvite.objects.create(
+            booking=self.booking, invited_by=self.booker, invited_email='pending@example.com',
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        accepted = BookingInvite.objects.create(
+            booking=self.booking, invited_by=self.booker, invited_user=self.invitee,
+            invited_email='invitee@example.com', expires_at=timezone.now() + timedelta(days=7),
+        )
+        declined = BookingInvite.objects.create(
+            booking=self.booking, invited_by=self.booker, invited_email='declined@example.com',
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        self._auth(self.invitee_token)
+        self.client.post(f'/api/bookings/invites/{accepted.token}/accept/')
+        self.client.post(f'/api/bookings/invites/{declined.token}/decline/')
+
+        self._auth(self.booker_token)
+        response = self.client.get(f'/api/bookings/{self.booking.id}/')
+        self.assertEqual(response.status_code, 200)
+        by_id = {row['id']: row for row in response.data['invites']}
+        self.assertEqual(by_id[pending.id]['status'], 'pending')
+        self.assertEqual(by_id[accepted.id]['status'], 'accepted')
+        self.assertEqual(by_id[accepted.id]['invited_user_name'], self.invitee.full_name or self.invitee.email)
+        self.assertEqual(by_id[declined.id]['status'], 'declined')
+        self.assertIsNone(by_id[declined.id]['invited_user_name'])
+
+    def test_invites_still_visible_after_booking_completes(self):
+        # The whole point of this feature: "who joined" stays a visible
+        # historical record after the event, not just while upcoming.
+        # Simulate the Completed transition directly rather than depending
+        # on Celery Beat (see bookings/tasks.py's
+        # mark_completed_bookings_task, which never touches BookingInvite
+        # rows — nothing should make this data disappear).
+        accepted = BookingInvite.objects.create(
+            booking=self.booking, invited_by=self.booker, invited_user=self.invitee,
+            invited_email='invitee@example.com', expires_at=timezone.now() + timedelta(days=7),
+            status='accepted', responded_at=timezone.now(),
+        )
+        self.booking.booking_status = 'Completed'
+        self.booking.save(update_fields=['booking_status'])
+
+        self._auth(self.booker_token)
+        response = self.client.get(f'/api/bookings/{self.booking.id}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['booking_status'], 'Completed')
+        invite_ids = [row['id'] for row in response.data['invites']]
+        self.assertIn(accepted.id, invite_ids)
+
+        # Also visible to the box owner viewing the same booking.
+        owner_token = str(RefreshToken.for_user(self.owner).access_token)
+        self._auth(owner_token)
+        owner_response = self.client.get(f'/api/bookings/{self.booking.id}/')
+        self.assertEqual(owner_response.status_code, 200)
+        self.assertEqual(
+            [row['id'] for row in owner_response.data['invites']], invite_ids,
+        )
+
 
 class UserSearchTests(APITestCase):
     def setUp(self):

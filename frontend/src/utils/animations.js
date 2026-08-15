@@ -1,4 +1,4 @@
-// Enhanced Animation Utilities for BookMyBox
+// Enhanced Animation Utilities for BoxNplay
 export const animations = {
   // Page transitions
   pageTransition: {

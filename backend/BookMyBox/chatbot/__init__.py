@@ -1,1 +1,1 @@
-# Chatbot app for BookMyBox
+# Chatbot app for BoxNplay

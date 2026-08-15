@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail } from 'lucide-react';
@@ -40,22 +41,33 @@ const ForgotPassword = () => {
 
   if (sent) {
     return (
-      <AuthShell title="Check your email" subtitle="If that email is registered, we've sent a link to reset your password.">
-        <p className="text-sm text-muted-foreground">
-          The link expires in 45 minutes. Didn&apos;t get it? Check spam, or{' '}
-          <button type="button" onClick={() => setSent(false)} className="font-medium text-primary hover:text-primary/80">
-            try again
-          </button>.
-        </p>
-        <p className="mt-5 text-center text-muted-foreground">
-          <Link to="/login" className="font-medium text-primary hover:text-primary/80">Back to sign in</Link>
-        </p>
-      </AuthShell>
+      <>
+        <Helmet>
+          <title>Forgot Password | BoxNplay</title>
+          <meta name="robots" content="noindex, nofollow" />
+        </Helmet>
+        <AuthShell title="Check your email" subtitle="If that email is registered, we've sent a link to reset your password.">
+          <p className="text-sm text-muted-foreground">
+            The link expires in 45 minutes. Didn&apos;t get it? Check spam, or{' '}
+            <button type="button" onClick={() => setSent(false)} className="font-medium text-primary hover:text-primary/80">
+              try again
+            </button>.
+          </p>
+          <p className="mt-5 text-center text-muted-foreground">
+            <Link to="/login" className="font-medium text-primary hover:text-primary/80">Back to sign in</Link>
+          </p>
+        </AuthShell>
+      </>
     );
   }
 
   return (
-    <AuthShell title="Forgot password" subtitle="Enter your email and we'll send you a link to reset it">
+    <>
+      <Helmet>
+        <title>Forgot Password | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <AuthShell title="Forgot password" subtitle="Enter your email and we'll send you a link to reset it">
       <form className="space-y-5" onSubmit={handleSubmit}>
         {error && (
           <motion.div
@@ -87,7 +99,8 @@ const ForgotPassword = () => {
           <Link to="/login" className="font-medium text-primary hover:text-primary/80">Back to sign in</Link>
         </p>
       </form>
-    </AuthShell>
+      </AuthShell>
+    </>
   );
 };
 

@@ -78,14 +78,14 @@ const Footer = () => {
                 Contact
               </Link>
             </li>
-            <li>support@bookmybox.com</li>
+            <li>Info@boxnplay.com</li>
             <li>+91 98253 27667</li>
           </ul>
         </div>
       </div>
       <div className="border-t border-border px-4 py-5 text-xs text-muted-foreground">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-3 sm:flex-row sm:justify-between">
-          <span>© {currentYear} BookMyBox. Play more, plan less.</span>
+          <span>© {currentYear} BoxNplay. Play more, plan less.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
             <Link to="/terms" className="hover:text-primary">Terms of Service</Link>
             <Link to="/privacy" className="hover:text-primary">Privacy Policy</Link>

@@ -19,12 +19,12 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 
-# Project context for BookMyBox
+# Project context for BoxNplay
 PROJECT_CONTEXT = """
-You are a helpful AI assistant for BookMyBox, a sports facility booking platform. Here's the key information about our platform:
+You are a helpful AI assistant for BoxNplay, a sports facility booking platform. Here's the key information about our platform:
 
-ABOUT BOOKMYBOX:
-- BookMyBox is a comprehensive sports facility booking platform
+ABOUT BOXNPLAY:
+- BoxNplay is a comprehensive sports facility booking platform
 - Users can book sports boxes/facilities for various sports like cricket, football, badminton, etc.
 - Platform serves both facility owners and users who want to book sports facilities
 
@@ -78,7 +78,7 @@ PRICING & POLICIES:
 - Secure payment processing
 
 When answering user questions:
-- Be helpful and specific to BookMyBox features
+- Be helpful and specific to BoxNplay features
 - Provide step-by-step guidance for booking processes
 - Mention relevant features like favorites, map view, time slots
 - Always maintain a friendly, professional tone
@@ -152,7 +152,7 @@ CONVERSATION HISTORY:
 
 Current User Question: {user_message}
 
-Please provide a helpful, accurate response based on the BookMyBox platform context above. Be specific to our features and guide users appropriately. Keep responses concise but informative.
+Please provide a helpful, accurate response based on the BoxNplay platform context above. Be specific to our features and guide users appropriately. Keep responses concise but informative.
 """
 
         response = model.generate_content(prompt)

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Helmet } from 'react-helmet-async'
 import { motion } from 'framer-motion'
 import { ScrollText, ShieldCheck, Users, Wallet, Gavel, AlertTriangle } from 'lucide-react'
 import { animations, useScrollAnimation } from '../utils/animations'
@@ -9,8 +10,8 @@ const sections = [
     id: 'acceptance',
     title: '1. Acceptance of these Terms',
     body: [
-      'These Terms of Service ("Terms") govern your access to and use of BookMyBox — the website, mobile experience, and any related services (together, the "Platform"). By creating an account, browsing facility listings, or making a booking, you agree to be bound by these Terms. If you do not agree, please do not use the Platform.',
-      'BookMyBox is operated from India, and these Terms are written with that in mind — see Section 9 for governing law.',
+      'These Terms of Service ("Terms") govern your access to and use of BoxNplay — the website, mobile experience, and any related services (together, the "Platform"). By creating an account, browsing facility listings, or making a booking, you agree to be bound by these Terms. If you do not agree, please do not use the Platform.',
+      'BoxNplay is operated from India, and these Terms are written with that in mind — see Section 9 for governing law.',
     ],
   },
   {
@@ -50,17 +51,17 @@ const sections = [
     id: 'owners',
     title: '5. Facility Owners are Independent Operators',
     body: [
-      'Facility Owners who list venues on BookMyBox are independent, third-party venue operators — they are not employees, agents, or franchisees of BookMyBox. BookMyBox reviews and approves listings before they go live and provides the booking, scheduling, and payment-coordination infrastructure, but is not the operator of any venue and does not control day-to-day conditions, staffing, equipment, or safety at any facility.',
+      'Facility Owners who list venues on BoxNplay are independent, third-party venue operators — they are not employees, agents, or franchisees of BoxNplay. BoxNplay reviews and approves listings before they go live and provides the booking, scheduling, and payment-coordination infrastructure, but is not the operator of any venue and does not control day-to-day conditions, staffing, equipment, or safety at any facility.',
       'Facility Owners are responsible for the accuracy of their listings (pricing, amenities, opening hours, photos), for honoring confirmed bookings, and for the condition and safety of their premises. If you have an issue with a specific venue, please raise it with us through the Contact page so we can look into it — including, where appropriate, suspending or removing a listing.',
-      'BookMyBox charges Facility Owners a commission on completed bookings made through the Platform, deducted from their payouts. Commission rates are set by BookMyBox and may vary by owner or sport.',
+      'BoxNplay charges Facility Owners a commission on completed bookings made through the Platform, deducted from their payouts. Commission rates are set by BoxNplay and may vary by owner or sport.',
     ],
   },
   {
     id: 'wallet',
     title: '6. Wallet, Cashback & Rewards',
     body: [
-      'The Platform includes an in-app wallet that can hold cashback, refunds, and other promotional credit, along with scratch-card and spin-the-wheel rewards and redeemable codes. Wallet balance is platform credit only — it has no cash value outside BookMyBox, cannot be withdrawn to a bank account, and can only be applied toward bookings made on the Platform.',
-      'Promotional rewards (cashback rates, scratch cards, spin rewards, redeem codes) are offered at BookMyBox\'s discretion and may be changed, paused, or withdrawn at any time for future activity, without affecting wallet credit you\'ve already earned.',
+      'The Platform includes an in-app wallet that can hold cashback, refunds, and other promotional credit, along with scratch-card and spin-the-wheel rewards and redeemable codes. Wallet balance is platform credit only — it has no cash value outside BoxNplay, cannot be withdrawn to a bank account, and can only be applied toward bookings made on the Platform.',
+      'Promotional rewards (cashback rates, scratch cards, spin rewards, redeem codes) are offered at BoxNplay\'s discretion and may be changed, paused, or withdrawn at any time for future activity, without affecting wallet credit you\'ve already earned.',
     ],
   },
   {
@@ -75,8 +76,8 @@ const sections = [
     id: 'liability',
     title: '8. Disclaimers & Limitation of Liability',
     body: [
-      'The Platform is provided "as is." BookMyBox facilitates discovery and booking of third-party venues but is not responsible for injuries, property damage, or disputes arising from your use of a facility itself — those are between you and the Facility Owner, though we\'re glad to help mediate.',
-      'To the fullest extent permitted by law, BookMyBox\'s liability for any claim relating to the Platform is limited to the amount you actually paid through the Platform for the booking giving rise to the claim.',
+      'The Platform is provided "as is." BoxNplay facilitates discovery and booking of third-party venues but is not responsible for injuries, property damage, or disputes arising from your use of a facility itself — those are between you and the Facility Owner, though we\'re glad to help mediate.',
+      'To the fullest extent permitted by law, BoxNplay\'s liability for any claim relating to the Platform is limited to the amount you actually paid through the Platform for the booking giving rise to the claim.',
     ],
   },
   {
@@ -92,6 +93,17 @@ const sections = [
 const Terms = () => {
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>Terms of Service | BoxNplay</title>
+        <meta name="description" content="Read the Terms of Service governing your access to and use of BoxNplay, including account creation, bookings, wallet credit, and Facility Owner listings." />
+        <link rel="canonical" href={`${window.location.origin}/terms`} />
+        <meta property="og:title" content="Terms of Service | BoxNplay" />
+        <meta property="og:description" content="Read the Terms of Service governing your access to and use of BoxNplay, including account creation, bookings, wallet credit, and Facility Owner listings." />
+        <meta property="og:url" content={`${window.location.origin}/terms`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Terms of Service | BoxNplay" />
+        <meta name="twitter:description" content="Read the Terms of Service governing your access to and use of BoxNplay, including account creation, bookings, wallet credit, and Facility Owner listings." />
+      </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-16 px-4 sm:px-6 lg:px-8">
         <motion.div className="max-w-3xl mx-auto text-center" {...animations.slideInUp} {...useScrollAnimation()}>
@@ -103,7 +115,7 @@ const Terms = () => {
             Terms of Service
           </h1>
           <p className="text-lg lg:text-xl text-muted-foreground leading-relaxed max-w-2xl mx-auto mt-6">
-            The rules of the road for booking and listing sports facilities on BookMyBox.
+            The rules of the road for booking and listing sports facilities on BoxNplay.
           </p>
           <Badge tone="neutral" size="sm" className="mt-6">Last updated: August 2026</Badge>
         </motion.div>
@@ -120,7 +132,7 @@ const Terms = () => {
             viewport={{ once: true }}
           >
             {[
-              { icon: Users, label: 'Independent owners', body: 'Facility owners run their own venues — BookMyBox connects you to them.' },
+              { icon: Users, label: 'Independent owners', body: 'Facility owners run their own venues — BoxNplay connects you to them.' },
               { icon: Wallet, label: 'Pay at venue or wallet', body: 'No online gateway yet — pay on arrival, or use in-app wallet credit.' },
               { icon: ShieldCheck, label: '2-hour cancellation', body: 'Free to cancel until 2 hours before your slot, every time.' },
             ].map((item) => (
@@ -171,8 +183,8 @@ const Terms = () => {
                   <h2 className="font-display font-semibold text-xl text-foreground mb-2">Questions about these Terms?</h2>
                   <p className="text-muted-foreground leading-relaxed">
                     Reach out any time at{' '}
-                    <a href="mailto:support@bookmybox.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
-                      support@bookmybox.com
+                    <a href="mailto:Info@boxnplay.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
+                      Info@boxnplay.com
                     </a>{' '}
                     or call +91 98253 27667. You can also see our{' '}
                     <Link to="/privacy" className="text-primary hover:text-primary/80 underline underline-offset-2">Privacy Policy</Link>{' '}

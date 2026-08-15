@@ -1,8 +1,15 @@
 # ChatBot Setup Instructions
 
-## 🤖 BookMyBox AI Chatbot Feature
+## 🤖 BoxNplay AI Chatbot Feature
 
-The chatbot has been successfully integrated into your BookMyBox platform! Here's how to complete the setup:
+> Verified against the current `backend/BookMyBox/chatbot/views.py` as of
+> the BoxNplay rebrand — the env var name, setup steps, and model below
+> still match the code. Minor corrections from the original version of
+> this doc: the chat widget is not Home-page-only (see "Usage" below),
+> and two behaviors worth knowing about are called out under "Technical
+> Details."
+
+The chatbot has been successfully integrated into your BoxNplay platform! Here's how to complete the setup:
 
 ### 📋 Setup Steps
 
@@ -25,7 +32,7 @@ The chatbot has been successfully integrated into your BookMyBox platform! Here'
 
 ### ✨ Features
 
-- **Contextual Responses:** The chatbot understands your BookMyBox platform
+- **Contextual Responses:** The chatbot understands your BoxNplay platform
 - **Project-Specific Knowledge:** Knows about booking, facilities, pricing, etc.
 - **Modern UI:** Floating chat icon with smooth animations
 - **Conversation Memory:** Maintains context across messages
@@ -48,10 +55,32 @@ The chatbot has been successfully integrated into your BookMyBox platform! Here'
 
 ### 🚀 Usage
 
-1. Visit your Home page
+1. Visit the Home page, the Browse Boxes listing page, or a Box Details
+   page — the chat widget (`components/common/Chatbot.jsx`) is mounted on
+   all three, not just Home
 2. Look for the floating chat icon in the bottom-right corner
 3. Click to open the chat window
-4. Ask any questions about BookMyBox!
+4. Ask any questions about BoxNplay!
+
+### 🔧 Technical Details (verified against current code)
+
+- **Backend endpoint:** a single `POST /api/chatbot/` (`IsAuthenticated`)
+  in `chatbot/views.py`. There's no separate "get conversation history"
+  endpoint — the frontend round-trips its own last-5-message history in
+  each request (`conversation_history`); the `ChatConversation`/
+  `ChatMessage` database rows exist for persistence/audit (viewable via
+  Django admin), not for a read-back API.
+- **Model:** `gemini-1.5-flash`, via the `google.generativeai` SDK
+  (`genai.GenerativeModel('gemini-1.5-flash')`).
+- **Rate limiting:** 20 requests per 60 seconds per authenticated user
+  (`BookMyBox/rate_limit.py`), returning HTTP 429 with a friendly message
+  if exceeded.
+- **Error handling is deliberately "soft":** both a missing API key and
+  any exception from the Gemini call return **HTTP 200** (not an error
+  status) with `status: 'error'` and a friendly fallback message in the
+  body — the frontend's axios interceptor treats non-2xx as a thrown
+  error, so this is intentional, not a bug, to keep the fallback message
+  rendering instead of a generic network-error toast.
 
 ### 🔒 Security
 

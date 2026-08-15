@@ -32,13 +32,14 @@ def resolve_commission_rate(owner, sport, on_date=None):
     from django.utils import timezone
     from .models import CommissionRate, PlatformCommissionSetting
 
-    if owner is None:
-        return PlatformCommissionSetting.get_rate_fraction()
-
     on_date = on_date or timezone.now().date()
+
+    if owner is None:
+        return PlatformCommissionSetting.get_rate_fraction(on_date)
+
     rate = CommissionRate.objects.filter(
         owner=owner, sport=sport, effective_from__lte=on_date,
-    ).order_by('-effective_from').values_list('rate', flat=True).first()
+    ).order_by('-effective_from', '-id').values_list('rate', flat=True).first()
     if rate is not None:
         return rate / Decimal('100')
-    return PlatformCommissionSetting.get_rate_fraction()
+    return PlatformCommissionSetting.get_rate_fraction(on_date)

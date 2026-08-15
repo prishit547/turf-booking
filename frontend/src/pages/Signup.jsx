@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Helmet } from 'react-helmet-async'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Eye, EyeOff, Mail, Lock, Phone, MapPin, BriefcaseBusiness } from 'lucide-react'
@@ -84,7 +85,7 @@ const Signup = () => {
       const result = await signup(formData)
 
       if (result.success) {
-        toast.success('Registration successful! Welcome to BookMyBox.')
+        toast.success('Registration successful! Welcome to BoxNplay.')
         // A pending booking invite (see InviteClaim.jsx) takes priority
         // over the normal role-based redirect.
         const pendingInviteToken = localStorage.getItem(PENDING_INVITE_KEY)
@@ -120,7 +121,12 @@ const Signup = () => {
   }
 
   return (
-    <AuthShell title="Create your account" subtitle="Join us to get started with your journey">
+    <>
+      <Helmet>
+        <title>Sign Up | BoxNplay</title>
+        <meta name="description" content="Create a BoxNplay account to book sports boxes by the hour, or sign up as a facility owner to list your venue." />
+      </Helmet>
+      <AuthShell title="Create your account" subtitle="Join us to get started with your journey">
       <form className="space-y-5" onSubmit={handleSubmit}>
         {errors.general && (
           <motion.div
@@ -233,7 +239,8 @@ const Signup = () => {
           </Link>
         </p>
       </form>
-    </AuthShell>
+      </AuthShell>
+    </>
   )
 }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
@@ -78,7 +79,12 @@ const Login = () => {
   };
 
   return (
-    <AuthShell title="Welcome back" subtitle="Sign in to your BookMyBox account and continue your sports journey">
+    <>
+      <Helmet>
+        <title>Log In | BoxNplay</title>
+        <meta name="description" content="Sign in to your BoxNplay account to book sports boxes, manage your bookings, and continue your sports journey." />
+      </Helmet>
+      <AuthShell title="Welcome back" subtitle="Sign in to your BoxNplay account and continue your sports journey">
       <form className="space-y-5" onSubmit={handleSubmit}>
         {(errors.general || authContextGeneralError) && (
           <motion.div
@@ -156,7 +162,8 @@ const Login = () => {
           </Link>
         </p>
       </form>
-    </AuthShell>
+      </AuthShell>
+    </>
   );
 };
 

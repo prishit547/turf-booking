@@ -1,9 +1,9 @@
-# BookMyBox - Sports Box Booking Platform
+# BoxNplay - Sports Box Booking Platform
 ## Comprehensive Project Proposal
 
 ### Executive Summary
 
-BookMyBox is a modern sports facility booking platform that revolutionizes how users discover, book, and manage sports venues. Built with React.js and Django, it offers an intuitive interface for booking various sports boxes while leveraging machine learning for personalized recommendations and trend analysis.
+BoxNplay is a modern sports facility booking platform that revolutionizes how users discover, book, and manage sports venues. Built with React.js and Django, it offers an intuitive interface for booking various sports boxes while leveraging machine learning for personalized recommendations and trend analysis.
 
 ### Technical Architecture
 
@@ -427,7 +427,7 @@ POST /api/bookings/{id}/cancel/
 ### Project Structure
 
 ```
-bookmybox-frontend/
+boxnplay-frontend/
 ├── public/
 │   ├── index.html
 │   ├── favicon.ico
@@ -700,6 +700,6 @@ Features for Popularity Prediction:
 
 ## Conclusion
 
-BookMyBox represents a comprehensive solution for sports facility booking with modern web technologies and intelligent features. The platform combines user-friendly design with powerful backend capabilities and machine learning to create an exceptional booking experience.
+BoxNplay represents a comprehensive solution for sports facility booking with modern web technologies and intelligent features. The platform combines user-friendly design with powerful backend capabilities and machine learning to create an exceptional booking experience.
 
-The project emphasizes scalability, performance, and user experience while maintaining clean code architecture and robust security measures. With its innovative features and thoughtful design, BookMyBox is positioned to become a leading platform in the sports facility booking industry.
+The project emphasizes scalability, performance, and user experience while maintaining clean code architecture and robust security measures. With its innovative features and thoughtful design, BoxNplay is positioned to become a leading platform in the sports facility booking industry.

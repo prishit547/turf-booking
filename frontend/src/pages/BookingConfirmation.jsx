@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useLocation, useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { LayoutDashboard, CalendarPlus, CalendarClock, Share2, UserPlus, Link2, XCircle, Phone, Mail } from 'lucide-react';
@@ -89,15 +90,15 @@ function buildICS(booking, boxName, boxLocation) {
     const lines = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
-        'PRODID:-//BookMyBox//Booking//EN',
+        'PRODID:-//BoxNplay//Booking//EN',
         'BEGIN:VEVENT',
-        `UID:booking-${booking.id}@bookmybox.local`,
+        `UID:booking-${booking.id}@boxnplay.local`,
         `DTSTAMP:${stamp}`,
         `DTSTART:${icsDateTime(booking.date, booking.start_time)}`,
         `DTEND:${icsDateTime(booking.date, booking.end_time)}`,
-        `SUMMARY:${escapeICS(`${boxName} — BookMyBox`)}`,
+        `SUMMARY:${escapeICS(`${boxName} — BoxNplay`)}`,
         boxLocation ? `LOCATION:${escapeICS(boxLocation)}` : null,
-        `DESCRIPTION:${escapeICS(`Booking #${booking.id} via BookMyBox.`)}`,
+        `DESCRIPTION:${escapeICS(`Booking #${booking.id} via BoxNplay.`)}`,
         'END:VEVENT',
         'END:VCALENDAR',
     ].filter(Boolean);
@@ -233,6 +234,16 @@ const BookingConfirmation = () => {
     const showCustomerContact = isBoxOwner && !isOwnBooking;
     const customerPhone = booking.customer_phone_display || booking.customer_phone || '';
 
+    // "Who's coming" squad list — visible to the booker (their own invites,
+    // any status) and read-only to the box owner (headcount for their
+    // venue). Deliberately NOT gated on booking.booking_status: this is the
+    // historical record of who joined, so it must keep showing after the
+    // booking flips to Completed/No-show, not just while upcoming — see
+    // bookings/tasks.py's mark_completed_bookings_task, which never touches
+    // BookingInvite rows. Only rendered when there's actually a squad to
+    // show, same threshold UserDashboard.jsx uses for its split-ways hint.
+    const showSquad = (isOwnBooking || isBoxOwner) && (booking.invites?.length || 0) > 0;
+
     // Reschedule picker: same slot-availability rules BoxDetails.jsx uses
     // for a fresh booking, but against the booking's own fixed duration and
     // box (box/duration never change on a reschedule).
@@ -281,7 +292,7 @@ const BookingConfirmation = () => {
 
     const handleAddToCalendar = () => {
         const ics = buildICS(booking, boxName, boxLocation);
-        downloadICS(ics, `bookmybox-${booking.id}.ics`);
+        downloadICS(ics, `boxnplay-${booking.id}.ics`);
         toast.success('Calendar file downloaded — open it to add the event.');
     };
 
@@ -290,7 +301,7 @@ const BookingConfirmation = () => {
         const text = `My booking at ${boxName} — ${dateDisplay}, ${timeSlot}`;
         if (navigator.share) {
             try {
-                await navigator.share({ title: 'BookMyBox booking', text, url });
+                await navigator.share({ title: 'BoxNplay booking', text, url });
             } catch {
                 // user cancelled the share sheet — not an error
             }
@@ -320,6 +331,10 @@ const BookingConfirmation = () => {
 
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-14 relative overflow-hidden">
+            <Helmet>
+                <title>Booking Confirmation | BoxNplay</title>
+                <meta name="robots" content="noindex, nofollow" />
+            </Helmet>
             <div className="pointer-events-none absolute top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full bg-primary/20 blur-3xl" />
             <div className="relative max-w-lg w-full text-center">
                 {justBooked ? (
@@ -410,6 +425,30 @@ const BookingConfirmation = () => {
                                         <p className="text-sm text-muted-foreground">No contact info on file.</p>
                                     )}
                                 </div>
+                            </div>
+                        )}
+
+                        {showSquad && (
+                            <div className="mt-5 rounded-xl border border-border p-4 text-left">
+                                <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                                    Who&rsquo;s coming
+                                </p>
+                                <ul className="mt-2.5 space-y-2">
+                                    <li className="flex items-center justify-between gap-3 text-sm">
+                                        <span className="text-foreground font-medium">
+                                            {isOwnBooking ? 'You' : (booking.customer_name || booking.user)}
+                                        </span>
+                                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Booker</span>
+                                    </li>
+                                    {booking.invites.map((invite) => (
+                                        <li key={invite.id} className="flex items-center justify-between gap-3 text-sm">
+                                            <span className="text-foreground truncate">
+                                                {invite.invited_user_name || invite.invited_email}
+                                            </span>
+                                            <StatusPill status={invite.status} />
+                                        </li>
+                                    ))}
+                                </ul>
                             </div>
                         )}
 
@@ -559,6 +598,10 @@ const BookingConfirmation = () => {
                     booking={booking}
                     isOpen={inviteOpen}
                     onClose={() => setInviteOpen(false)}
+                    onInvited={async () => {
+                        const fresh = await fetchBookingById(booking.id);
+                        if (fresh.success) setBooking(fresh.data);
+                    }}
                 />
             )}
         </div>

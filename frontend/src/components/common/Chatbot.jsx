@@ -17,7 +17,7 @@ const Chatbot = ({ raised = false }) => {
         {
             id: 1,
             type: 'bot',
-            content: "Hi! I'm your BookMyBox assistant. I can help you with booking sports boxes, finding locations, pricing, amenities, and any other questions about our platform. How can I assist you today?",
+            content: "Hi! I'm your BoxNplay assistant. I can help you with booking sports boxes, finding locations, pricing, amenities, and any other questions about our platform. How can I assist you today?",
             timestamp: new Date()
         }
     ]);
@@ -167,7 +167,7 @@ const Chatbot = ({ raised = false }) => {
                                     <Bot size={18} />
                                 </div>
                                 <div>
-                                    <h3 className="font-semibold">BookMyBox Assistant</h3>
+                                    <h3 className="font-semibold">BoxNplay Assistant</h3>
                                     <p className="text-sm opacity-90">Always here to help</p>
                                 </div>
                             </div>

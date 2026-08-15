@@ -1,5 +1,5 @@
 """
-Gamification service for BookMyBox
+Gamification service for BoxNplay
 Handles badge checking and awarding for users and owners
 """
 import logging

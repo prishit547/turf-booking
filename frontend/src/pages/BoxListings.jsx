@@ -37,6 +37,17 @@ const BoxListings = () => {
     const loading = loadingMap.boxes;
     const error = errorMap.boxes;
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
+    // The price slider fires onChange continuously while dragging (unlike
+    // the sport/rating/amenity pills, which are one click = one change).
+    // Feeding every one of those straight into `results` floods the
+    // animated grid below with far more layout/AnimatePresence updates
+    // than a 0.35s transition can settle between, which is what caused
+    // cards to visibly glitch/overshoot when the slider was dragged fast —
+    // same class of problem the search box comment above already flags,
+    // just from a different input. Debounced here, same as search; the
+    // slider's own label still reads the live (non-debounced) value below
+    // so dragging itself stays instant, only the expensive re-filter lags.
+    const debouncedMaxPrice = useDebounce(filters.maxPrice, 150);
 
     const amenityOptions = useMemo(() => {
         const set = new Set();
@@ -49,7 +60,7 @@ const BoxListings = () => {
         const list = boxes.filter((b) => {
             if (location !== 'all' && !(b.location || '').toLowerCase().includes(location.toLowerCase())) return false;
             if (filters.sport && b.sport !== filters.sport) return false;
-            if ((parseFloat(b.price) || 0) > filters.maxPrice) return false;
+            if ((parseFloat(b.price) || 0) > debouncedMaxPrice) return false;
             if ((parseFloat(b.rating) || 0) < filters.minRating) return false;
             if (filters.amenities.length && !filters.amenities.every((a) => (b.amenities || []).includes(a))) return false;
             if (q) {
@@ -63,7 +74,7 @@ const BoxListings = () => {
             if (sort === 'price-high') return (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0);
             return (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0);
         });
-    }, [boxes, location, filters.sport, filters.maxPrice, filters.minRating, filters.amenities, debouncedSearchTerm, sort]);
+    }, [boxes, location, filters.sport, debouncedMaxPrice, filters.minRating, filters.amenities, debouncedSearchTerm, sort]);
 
     const clearAllFilters = useCallback(() => {
         setSearchTerm('');
@@ -74,12 +85,15 @@ const BoxListings = () => {
     return (
         <div className="min-h-screen">
             <Helmet>
-                <title>Browse Sports Boxes - BookMyBox</title>
+                <title>Browse Sports Boxes - BoxNplay</title>
                 <meta name="description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
                 <link rel="canonical" href={`${window.location.origin}/boxes`} />
-                <meta property="og:title" content="Browse Sports Boxes - BookMyBox" />
+                <meta property="og:title" content="Browse Sports Boxes - BoxNplay" />
                 <meta property="og:description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
                 <meta property="og:url" content={`${window.location.origin}/boxes`} />
+                <meta name="twitter:card" content="summary_large_image" />
+                <meta name="twitter:title" content="Browse Sports Boxes - BoxNplay" />
+                <meta name="twitter:description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
             </Helmet>
             <div className="mx-auto max-w-7xl px-4 py-8">
                 <header className="flex flex-wrap items-end justify-between gap-4">

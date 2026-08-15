@@ -276,6 +276,11 @@ REST_FRAMEWORK = {
         'login': '5/min',
         'password_reset': '3/min',
         'signup': '10/hour',
+        # Owner-triggered scratch-card grants mint real wallet credit and
+        # are deliberately not restricted to an owner's own customers (see
+        # OwnerGrantScratchCardView) — this is the actual cap against an
+        # owner calling it in a loop, since nothing else bounds it.
+        'owner_scratch_grant': '20/day',
     },
 }
 
@@ -381,7 +386,7 @@ FRONTEND_URL = env('FRONTEND_URL', 'http://localhost:5173')
 # Inbox that contact-form submissions (contact app) are forwarded to.
 # Defaults to the support address already shown to users in the app footer
 # (frontend/src/components/common/Footer.jsx).
-SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'support@bookmybox.com')
+SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'Info@boxnplay.com')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

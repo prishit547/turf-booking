@@ -20,7 +20,7 @@ export function Logo() {
         B
       </span>
       <span className="font-display text-lg font-black uppercase tracking-tight">
-        Book<span className="text-primary">MyBox</span>
+        Box<span className="text-primary">Nplay</span>
       </span>
     </Link>
   )
@@ -32,6 +32,10 @@ const Header = () => {
   const [showMap, setShowMap] = useState(false)
   const { user, isAuthenticated, logout } = useAuth()
   const navigate = useNavigate()
+
+  const displayName = user?.full_name || user?.name
+    || [user?.first_name, user?.last_name].filter(Boolean).join(' ')
+    || user?.email
 
   useEffect(() => {
     if (!isMenuOpen) return
@@ -95,7 +99,7 @@ const Header = () => {
                   onClick={() => setIsUserMenuOpen((v) => !v)}
                   className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-2 text-sm transition hover:border-primary/60"
                 >
-                  <LayoutDashboard className="h-4 w-4" /> {user?.name?.split(' ')[0] || 'Account'}
+                  <LayoutDashboard className="h-4 w-4" /> {displayName?.split(' ')[0] || 'Account'}
                   <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </button>
                 <AnimatePresence>
@@ -105,8 +109,18 @@ const Header = () => {
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.97, y: -8 }}
                       transition={{ duration: 0.15 }}
-                      className="absolute right-0 mt-2 w-52 overflow-hidden rounded-2xl border border-border bg-card py-2 shadow-lift"
+                      className="absolute right-0 mt-2 w-64 overflow-hidden rounded-2xl border border-border bg-card py-2 shadow-lift"
                     >
+                      <div className="px-4 py-2.5">
+                        <p className="truncate text-sm font-semibold text-foreground">{displayName || 'Account'}</p>
+                        <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
+                        {user?.role && user.role !== 'user' && (
+                          <span className="mt-1.5 inline-block rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">
+                            {user.role}
+                          </span>
+                        )}
+                      </div>
+                      <hr className="my-2 border-border" />
                       <Link
                         to={getDashboardRoute()}
                         className="flex items-center gap-3 px-4 py-2.5 text-foreground transition hover:bg-elevated"

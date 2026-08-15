@@ -124,6 +124,10 @@ function RateConfigSection() {
   }, [rates]);
 
   const handleCreate = async () => {
+    if (form.rate === '' || Number(form.rate) < 0 || Number(form.rate) > 100) {
+      toast.error('Enter a rate between 0 and 100');
+      return;
+    }
     setSaving(true);
     try {
       await api.post('/boxes/admin/commission-rates/', form);
@@ -238,11 +242,11 @@ function CommissionReportSection() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-elevated">
-              <tr>{['Owner', 'Gross revenue', 'Commission earned', 'Net owed', ''].map((h) => <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>)}</tr>
+              <tr>{['Owner', 'Gross revenue', 'Commission earned', 'Net revenue', 'Balance due', ''].map((h) => <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-border">
               {balances.length === 0 ? (
-                <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">No owner revenue yet</td></tr>
+                <tr><td colSpan={6} className="text-center py-10 text-muted-foreground">No owner revenue yet</td></tr>
               ) : balances.map((b) => (
                 <Fragment key={b.owner_id}>
                   <tr className="hover:bg-elevated/60">
@@ -250,6 +254,15 @@ function CommissionReportSection() {
                     <td className="py-3 px-4 text-muted-foreground">₹{b.gross_revenue}</td>
                     <td className="py-3 px-4 text-foreground">₹{b.commission}</td>
                     <td className="py-3 px-4 text-muted-foreground">₹{b.net_revenue}</td>
+                    <td className="py-3 px-4 font-medium">
+                      {b.balance_due < 0 ? (
+                        <span className="text-danger" title="A cancellation/refund after this owner was already paid out has dropped their live balance below zero.">
+                          Overpaid ₹{Math.abs(b.balance_due).toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className={b.balance_due > 0 ? 'text-warning' : 'text-muted-foreground'}>₹{b.balance_due}</span>
+                      )}
+                    </td>
                     <td className="py-3 px-4">
                       <button
                         type="button"
@@ -262,7 +275,7 @@ function CommissionReportSection() {
                   </tr>
                   {expandedOwner === b.owner_id && (
                     <tr>
-                      <td colSpan={5} className="px-4 pb-4">
+                      <td colSpan={6} className="px-4 pb-4">
                         <div className="rounded-lg border border-border overflow-hidden">
                           <table className="w-full text-xs">
                             <thead className="bg-elevated">

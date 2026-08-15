@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { Smartphone, CreditCard, Wallet, Ticket, ShieldCheck } from 'lucide-react';
+import { Smartphone, CreditCard, Wallet, Ticket, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { Card, Button, Input } from '../components/ui';
 import { MagneticButton } from '../components/motion/MagneticButton';
@@ -32,6 +33,7 @@ const Checkout = () => {
     const draft = location.state;
     const { confirmReservation, releaseHold } = useBooking();
     const { accessToken, user } = useAuth();
+    const isStaffAccount = user?.role === 'admin' || user?.role === 'owner';
 
     const [selectedPayment, setSelectedPayment] = useState('upi');
     const [couponCode, setCouponCode] = useState('');
@@ -123,6 +125,31 @@ const Checkout = () => {
         );
     }
 
+    // Defense in depth: BoxDetails.jsx already keeps admin/owner accounts
+    // from ever reaching this page with a valid hold (reserveSlot is
+    // rejected server-side by IsCustomerUser before a hold token can
+    // exist), but block here too in case this is reached directly by URL.
+    if (isStaffAccount) {
+        return (
+            <div className="min-h-screen flex items-center justify-center px-4">
+                <Card className="text-center max-w-md">
+                    <ShieldAlert className="mx-auto mb-3 h-8 w-8 text-warning" />
+                    <h2 className="text-2xl font-display font-semibold text-foreground mb-2">Booking not available</h2>
+                    <p className="text-muted-foreground mb-6">
+                        Only customer accounts can book a slot. Facility owners can add walk-in bookings from their
+                        dashboard instead.
+                    </p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+                        <Button as={Link} to="/boxes">Browse boxes</Button>
+                        {user?.role === 'owner' && (
+                            <Button as={Link} to="/owner-dashboard" variant="outline">Go to owner dashboard</Button>
+                        )}
+                    </div>
+                </Card>
+            </div>
+        );
+    }
+
     const grossTotal = resolvedRate ? Number(resolvedRate.total) : draft.pricePerHour * draft.duration;
     const total = appliedCoupon ? Number(appliedCoupon.final_amount) : grossTotal;
     const walletDeduction = useWallet ? Math.min(walletBalance, total) : 0;
@@ -191,6 +218,10 @@ const Checkout = () => {
 
     return (
         <div className="min-h-screen pb-20 px-4 sm:px-6 lg:px-8 py-8">
+            <Helmet>
+                <title>Checkout | BoxNplay</title>
+                <meta name="robots" content="noindex, nofollow" />
+            </Helmet>
             <div className="max-w-5xl mx-auto">
                 <h1 className="font-display font-black uppercase tracking-tight text-3xl sm:text-4xl text-foreground mb-8">
                     Checkout

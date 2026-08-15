@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Helmet } from 'react-helmet-async'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { Target, Users, Award, Zap, Heart, Shield, ArrowRight, Star } from 'lucide-react'
@@ -107,6 +108,17 @@ const About = () => {
 
   return (
     <div className="min-h-screen">
+      <Helmet>
+        <title>About Us | BoxNplay</title>
+        <meta name="description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
+        <link rel="canonical" href={`${window.location.origin}/about`} />
+        <meta property="og:title" content="About Us | BoxNplay" />
+        <meta property="og:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
+        <meta property="og:url" content={`${window.location.origin}/about`} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="About Us | BoxNplay" />
+        <meta name="twitter:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
+      </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-4xl mx-auto text-center">
@@ -116,7 +128,7 @@ const About = () => {
             </Badge>
 
             <h1 className="font-display font-black uppercase text-5xl lg:text-7xl leading-[0.95] tracking-tight text-foreground">
-              About BookMyBox
+              About BoxNplay
             </h1>
             <p className="text-lg lg:text-xl text-muted-foreground leading-relaxed max-w-2xl mx-auto mt-6">
               We&apos;re revolutionizing how people discover, book, and enjoy sports facilities.
@@ -158,7 +170,7 @@ const About = () => {
         <div className="max-w-7xl mx-auto">
           <motion.div {...animations.slideInUp} {...useScrollAnimation()} className="text-center mb-14">
             <h2 className="font-display font-extrabold uppercase tracking-tight text-3xl sm:text-4xl text-foreground">
-              Why Choose BookMyBox?
+              Why Choose BoxNplay?
             </h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto mt-3">
               We&apos;re more than just a booking platform. We&apos;re your partner in making sports accessible and enjoyable.
@@ -250,13 +262,13 @@ const About = () => {
               </h2>
               <div className="space-y-5 text-muted-foreground leading-relaxed">
                 <p className="text-lg">
-                  BookMyBox was born from a simple frustration: finding and booking quality sports facilities was unnecessarily complicated. Our founders, all avid sports players, experienced firsthand the challenges of coordinating games with friends.
+                  BoxNplay was born from a simple frustration: finding and booking quality sports facilities was unnecessarily complicated. Our founders, all avid sports players, experienced firsthand the challenges of coordinating games with friends.
                 </p>
                 <p className="text-lg">
                   In 2025, we set out to solve this problem by creating a platform that would make sports booking as easy as ordering food online. We started with a handful of cricket boxes in Mumbai and have since expanded to over 500 facilities across 50+ cities.
                 </p>
                 <p className="text-lg">
-                  Today, BookMyBox is India&apos;s leading sports facility booking platform, trusted by thousands of players and facility owners. But we&apos;re just getting started &ndash; our vision is to make sports accessible to every Indian, in every city, at every skill level.
+                  Today, BoxNplay is India&apos;s leading sports facility booking platform, trusted by thousands of players and facility owners. But we&apos;re just getting started &ndash; our vision is to make sports accessible to every Indian, in every city, at every skill level.
                 </p>
               </div>
 

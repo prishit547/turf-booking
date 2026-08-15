@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Helmet } from 'react-helmet-async';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Calendar, Clock, MapPin, UserPlus, X } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -67,6 +68,10 @@ const InviteClaim = () => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
+        <Helmet>
+          <title>Booking Invite | BoxNplay</title>
+          <meta name="robots" content="noindex, nofollow" />
+        </Helmet>
         <Loader text="Loading invite..." />
       </div>
     );
@@ -74,31 +79,48 @@ const InviteClaim = () => {
 
   if (error || !invite) {
     return (
-      <AuthShell title="Invite not found" subtitle="This link may be invalid.">
-        <Link to="/" className="text-sm font-medium text-primary hover:text-primary/80">Back to home</Link>
-      </AuthShell>
+      <>
+        <Helmet>
+          <title>Booking Invite | BoxNplay</title>
+          <meta name="robots" content="noindex, nofollow" />
+        </Helmet>
+        <AuthShell title="Invite not found" subtitle="This link may be invalid.">
+          <Link to="/" className="text-sm font-medium text-primary hover:text-primary/80">Back to home</Link>
+        </AuthShell>
+      </>
     );
   }
 
   if (!invite.valid) {
     return (
-      <AuthShell
-        title={invite.status === 'accepted' ? 'Already accepted' : invite.status === 'declined' ? 'Invite declined' : 'Invite expired'}
-        subtitle={
-          invite.status === 'accepted'
-            ? 'This invite has already been accepted.'
-            : invite.status === 'declined'
-            ? 'This invite was declined and is no longer active.'
-            : 'This invite link has expired.'
-        }
-      >
-        <Link to="/" className="text-sm font-medium text-primary hover:text-primary/80">Back to home</Link>
-      </AuthShell>
+      <>
+        <Helmet>
+          <title>Booking Invite | BoxNplay</title>
+          <meta name="robots" content="noindex, nofollow" />
+        </Helmet>
+        <AuthShell
+          title={invite.status === 'accepted' ? 'Already accepted' : invite.status === 'declined' ? 'Invite declined' : 'Invite expired'}
+          subtitle={
+            invite.status === 'accepted'
+              ? 'This invite has already been accepted.'
+              : invite.status === 'declined'
+              ? 'This invite was declined and is no longer active.'
+              : 'This invite link has expired.'
+          }
+        >
+          <Link to="/" className="text-sm font-medium text-primary hover:text-primary/80">Back to home</Link>
+        </AuthShell>
+      </>
     );
   }
 
   return (
-    <AuthShell
+    <>
+      <Helmet>
+        <title>Booking Invite | BoxNplay</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <AuthShell
       title="You're invited!"
       subtitle={`${invite.invited_by_name} invited you to join their booking`}
     >
@@ -132,7 +154,8 @@ const InviteClaim = () => {
           </div>
         )}
       </div>
-    </AuthShell>
+      </AuthShell>
+    </>
   );
 };
 

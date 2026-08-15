@@ -1,4 +1,4 @@
-# BookMyBox Backend — Deployment Notes
+# BoxNplay Backend — Deployment Notes
 
 ## Database
 

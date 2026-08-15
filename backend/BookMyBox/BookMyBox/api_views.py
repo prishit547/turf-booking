@@ -33,7 +33,7 @@ def health_check(request):
     """
     return JsonResponse({
         'status': 'healthy',
-        'message': 'BookMyBox API is running successfully',
+        'message': 'BoxNplay API is running successfully',
         'endpoints': {
             'user': '/api/user/',
             'boxes': '/api/boxes/',
@@ -51,7 +51,7 @@ def api_info(request):
     API information endpoint
     """
     return JsonResponse({
-        'name': 'BookMyBox API',
+        'name': 'BoxNplay API',
         'version': '1.0.0',
         'description': 'Sports facility booking platform API',
         'documentation': 'Available endpoints listed below',

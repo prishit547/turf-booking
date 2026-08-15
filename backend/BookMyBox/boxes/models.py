@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -35,14 +36,14 @@ class Box(models.Model):
     sport = models.CharField(max_length=100)
     sports = models.JSONField(default=list, blank=True)
     location = models.CharField(max_length=255)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.0)
     
     # --- THIS IS THE NEW FIELD THAT FIXES THE ERROR ---
     is_featured = models.BooleanField(default=False, help_text="Mark this box as featured to show it on the homepage.")
     # --- END OF NEW FIELD ---
 
-    capacity = models.IntegerField(default=1)
+    capacity = models.IntegerField(default=1, validators=[MinValueValidator(1)])
 
     opening_time = models.CharField(max_length=5, default='06:00', help_text="Daily opening time (HH:MM, 24-hour)")
     closing_time = models.CharField(max_length=5, default='23:00', help_text="Daily closing time (HH:MM, 24-hour)")
@@ -146,27 +147,46 @@ class CommissionRate(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['-effective_from']
+        # `-id` tiebreaks rows that share the same effective_from (e.g. two
+        # edits on the same day, now that backdating is blocked) — without
+        # it, "the latest rate" is ambiguous whenever dates tie, since SQL
+        # doesn't guarantee any particular order among equal sort keys.
+        ordering = ['-effective_from', '-id']
 
     def __str__(self):
         return f"{self.owner.email} / {self.sport}: {self.rate}% from {self.effective_from}"
 
 
 class PlatformCommissionSetting(models.Model):
-    """Singleton: the platform-wide default commission percent, editable by
-    admins — see boxes/pricing.py::resolve_commission_rate(). Falls back to
+    """The platform-wide default commission percent, editable by admins —
+    see boxes/pricing.py::resolve_commission_rate(). Falls back to
     settings.DEFAULT_COMMISSION_RATE if no row exists yet, same pattern as
-    rewards.ScratchCardAutoGrantSetting."""
+    rewards.ScratchCardAutoGrantSetting.
+
+    Append-only and versioned by `effective_from`, same design as
+    CommissionRate above and for the identical reason: a new default rate is
+    always a new row (AdminPlatformCommissionView.patch() never mutates an
+    existing one), so changing it never silently rewrites the commission
+    already resolved for a past booking. Used to be a true singleton
+    (mutate-in-place, pk=1) — that meant every booking, past or present,
+    resolved to whatever the *current* default happened to be at read time,
+    the exact bug CommissionRate's own versioning was designed to avoid."""
     default_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Percent, 0-100.")
+    effective_from = models.DateField(default=timezone.localdate)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
+    class Meta:
+        # `-id` tiebreaks rows that share the same effective_from (e.g. two
+        # edits the same day) — see the identical reasoning on CommissionRate.
+        ordering = ['-effective_from', '-id']
+
     def __str__(self):
-        return f"Platform default commission: {self.default_rate}%"
+        return f"Platform default commission: {self.default_rate}% from {self.effective_from}"
 
     @classmethod
-    def get_rate_fraction(cls):
-        row = cls.objects.first()
+    def get_rate_fraction(cls, on_date=None):
+        row = cls.objects.filter(effective_from__lte=on_date or timezone.localdate()).order_by('-effective_from', '-id').first()
         if row:
             return row.default_rate / Decimal('100')
         return Decimal(str(settings.DEFAULT_COMMISSION_RATE))

@@ -1,15 +1,20 @@
 # boxes/serializers.py
 
+import re
+
 from django.core.exceptions import ObjectDoesNotExist
+from django.utils import timezone
 from rest_framework import serializers
 from .models import Box, Review, BlockedDate, CommissionRate, PlatformCommissionSetting, PricingRule
+
+_TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 
 
 class PlatformCommissionSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlatformCommissionSetting
-        fields = ['default_rate', 'updated_at', 'updated_by']
-        read_only_fields = ['updated_at', 'updated_by']
+        fields = ['default_rate', 'effective_from', 'updated_at', 'updated_by']
+        read_only_fields = ['effective_from', 'updated_at', 'updated_by']
 
 
 class BlockedDateSerializer(serializers.ModelSerializer):
@@ -57,6 +62,25 @@ class CommissionRateSerializer(serializers.ModelSerializer):
         fields = ['id', 'owner', 'owner_email', 'sport', 'rate', 'effective_from', 'created_at']
         read_only_fields = ['created_at']
 
+    def validate_rate(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError("Commission rate must be between 0 and 100.")
+        return value
+
+    def validate_effective_from(self, value):
+        # CommissionRate is append-only by design (see its docstring): a new
+        # rate is a new row, never an edit-in-place, specifically so a rate
+        # change never rewrites the commission owed on past bookings.
+        # Backdating effective_from defeats that entirely — any booking on
+        # or after the backdated date immediately resolves to the new rate,
+        # including ones a payout was already computed and paid out against.
+        if value < timezone.localdate():
+            raise serializers.ValidationError(
+                "effective_from cannot be in the past — a new rate can only take effect from "
+                "today onward, otherwise it silently rewrites commission already owed on past bookings."
+            )
+        return value
+
 
 class ReviewSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField(read_only=True)
@@ -96,6 +120,11 @@ class BoxSerializer(serializers.ModelSerializer):
     blocked_dates = serializers.SerializerMethodField()
     pricing_rules = PricingRuleSerializer(many=True, read_only=True)
     min_price = serializers.SerializerMethodField()
+    # Just the numeric FK id, not owner details (name/email/phone stay
+    # private) — lets BoxDetails.jsx detect "this is my own box" for a
+    # logged-in owner (offer a link to their dashboard's walk-in booking
+    # flow instead of the blocked customer flow) without a second request.
+    owner_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Box
@@ -104,7 +133,7 @@ class BoxSerializer(serializers.ModelSerializer):
             'capacity', 'opening_time', 'closing_time', 'image', 'images',
             'amenities', 'description', 'full_description', 'rules',
             'latitude', 'longitude', 'reviews', 'status', 'rejection_reason', 'blocked_dates',
-            'pricing_rules', 'min_price',
+            'pricing_rules', 'min_price', 'owner_id',
         ]
         read_only_fields = ['status', 'rejection_reason']
 
@@ -117,6 +146,9 @@ class BoxSerializer(serializers.ModelSerializer):
         without a per-card extra request (pricing_rules is prefetched)."""
         rule_prices = [r.price for r in obj.pricing_rules.all()]
         return min([obj.price, *rule_prices]) if rule_prices else obj.price
+
+    def get_owner_id(self, obj):
+        return obj.owner_id
 
     def get_images(self, obj):
         """Return a list of absolute media URLs for all box images."""
@@ -168,6 +200,28 @@ class OwnerBoxSerializer(serializers.ModelSerializer):
         # a box to a different owner. Read-only access is what the admin
         # Commission tab needs (picking an owner's boxes to see their sports).
         read_only_fields = ['owner', 'status', 'rejection_reason']
+
+    def validate_opening_time(self, value):
+        if not _TIME_RE.match(value or ''):
+            raise serializers.ValidationError("Must be a valid 24-hour time in HH:MM format.")
+        return value
+
+    def validate_closing_time(self, value):
+        if not _TIME_RE.match(value or ''):
+            raise serializers.ValidationError("Must be a valid 24-hour time in HH:MM format.")
+        return value
+
+    def validate(self, attrs):
+        # Field-level validate_opening_time/validate_closing_time above have
+        # already confirmed both are well-formed HH:MM by the time this
+        # runs, so a plain string comparison correctly reflects time order.
+        # Falls back to the existing instance's value on a partial update
+        # (PATCH), same pattern as PricingRuleSerializer.validate() above.
+        opening = attrs.get('opening_time', getattr(self.instance, 'opening_time', None))
+        closing = attrs.get('closing_time', getattr(self.instance, 'closing_time', None))
+        if opening and closing and closing <= opening:
+            raise serializers.ValidationError("closing_time must be after opening_time.")
+        return attrs
 
     def create(self, validated_data):
         # If 'sport' is missing, set it from the first item in 'sports' (for compatibility)

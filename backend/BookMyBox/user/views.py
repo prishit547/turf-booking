@@ -310,7 +310,7 @@ def request_password_reset(request):
         reset_link = f"{settings.FRONTEND_URL}/reset-password/{reset_token.token}"
         send_email_task.delay(
             user.email,
-            'Reset your BookMyBox password',
+            'Reset your BoxNplay password',
             f"<p>Hi {user.first_name or user.email},</p>"
             f"<p>Click the link below to set a new password. This link expires in "
             f"{PASSWORD_RESET_TOKEN_TTL_MINUTES} minutes and can only be used once.</p>"
@@ -538,9 +538,9 @@ class AdminCreateUserView(generics.CreateAPIView):
             reset_link = f"{settings.FRONTEND_URL}/reset-password/{reset_token.token}"
             send_email_task.delay(
                 user.email,
-                'Set up your BookMyBox password',
+                'Set up your BoxNplay password',
                 f"<p>Hi {user.first_name or user.email},</p>"
-                f"<p>An administrator created an account for you on BookMyBox. Click the link "
+                f"<p>An administrator created an account for you on BoxNplay. Click the link "
                 f"below to set your password. This link expires in {PASSWORD_RESET_TOKEN_TTL_MINUTES} "
                 f"minutes and can only be used once.</p>"
                 f'<p><a href="{reset_link}">{reset_link}</a></p>',
@@ -1033,6 +1033,10 @@ class AdminOwnerVerificationViewSet(viewsets.ViewSet):
             'Your owner verification has been approved — your profile now shows as verified.',
             link='/owner-dashboard',
         )
+        log_admin_action(
+            request.user, 'owner_verification.approve', target=verification,
+            details={'owner': verification.user.email},
+        )
         return Response(OwnerVerificationSerializer(verification, context={'request': request}).data)
 
     def reject(self, request, pk=None):
@@ -1052,6 +1056,10 @@ class AdminOwnerVerificationViewSet(viewsets.ViewSet):
             verification.user, 'Verification rejected',
             f'Your owner verification was rejected: {reason}',
             link='/owner-dashboard',
+        )
+        log_admin_action(
+            request.user, 'owner_verification.reject', target=verification,
+            details={'owner': verification.user.email, 'reason': reason},
         )
         return Response(OwnerVerificationSerializer(verification, context={'request': request}).data)
 
