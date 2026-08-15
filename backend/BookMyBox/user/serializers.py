@@ -7,8 +7,71 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer # Needed for CustomTokenObtainPairSerializer inheritance
 from rest_framework_simplejwt.tokens import RefreshToken # Needed in CustomTokenObtainPairSerializer
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
-from .models import Notification, PasswordResetToken, User # Assuming your custom User model is here
+from .models import AdminActionLog, Notification, OwnerPayoutDetails, OwnerVerification, PasswordResetToken, User # Assuming your custom User model is here
+
+
+class OwnerVerificationSerializer(serializers.ModelSerializer):
+    """Backs both the owner's own GET/POST (my-verification) and the admin
+    review queue — same dual-purpose shape AdminBoxSerializer/OwnerBoxSerializer
+    use for boxes, just collapsed into one serializer here since there's no
+    public-facing view to keep separate. pan_number/gst_number/
+    verification_document are writable (the owner's submission uses this
+    serializer directly); verification_status/rejection_reason/submitted_at/
+    reviewed_at/reviewed_by are admin/system-only and read-only here — only
+    the admin approve/reject views (user/views.py) ever set them."""
+    owner_email = serializers.CharField(source='user.email', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    reviewed_by_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OwnerVerification
+        fields = [
+            'id', 'owner_email', 'owner_name', 'pan_number', 'gst_number',
+            'verification_document', 'verification_status', 'rejection_reason',
+            'submitted_at', 'reviewed_at', 'reviewed_by_email',
+        ]
+        read_only_fields = [
+            'id', 'owner_email', 'owner_name', 'verification_status',
+            'rejection_reason', 'submitted_at', 'reviewed_at', 'reviewed_by_email',
+        ]
+
+    def get_owner_name(self, obj):
+        return obj.user.full_name or obj.user.email
+
+    def get_reviewed_by_email(self, obj):
+        return obj.reviewed_by.email if obj.reviewed_by else None
+
+
+class OwnerPayoutDetailsSerializer(serializers.ModelSerializer):
+    """Backs the owner's own GET/PUT/PATCH (my-payout-details) and, read-only,
+    the admin-facing view embedded in the Record Payout data (see
+    owner_dashboard/views.py's PayoutViewSet._balance_for_owner). All fields
+    are optional — see OwnerPayoutDetails' docstring for why this must never
+    become a gate. The only validation is internal consistency: if either of
+    bank_account_number/ifsc_code is provided, both must be (upi_id is
+    independent and may be filled/left blank regardless)."""
+    class Meta:
+        model = OwnerPayoutDetails
+        fields = [
+            'account_holder_name', 'bank_account_number', 'ifsc_code', 'upi_id', 'updated_at',
+        ]
+        read_only_fields = ['updated_at']
+
+    def validate(self, attrs):
+        def _current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, '') if self.instance else ''
+
+        bank_account_number = _current('bank_account_number')
+        ifsc_code = _current('ifsc_code')
+        if bool(bank_account_number) != bool(ifsc_code):
+            raise serializers.ValidationError(
+                'Provide both a bank account number and an IFSC code together, or leave both blank.'
+            )
+        return attrs
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -45,18 +108,88 @@ class UserSerializer(serializers.ModelSerializer):
 
 # --- Admin-only user mutation serializer ---
 class AdminUserUpdateSerializer(serializers.ModelSerializer):
-    """Backs the admin-only role/suspend action — deliberately separate from
-    UserSerializer so the two writable fields it exposes can never be
-    reached through a regular profile-update request."""
+    """Backs the admin-only user-edit modal — role/suspend plus the core
+    User fields and a handful of UserProfile fields (via DRF's dotted
+    `source='profile.X'` pattern), all writable from one PATCH. Deliberately
+    separate from UserSerializer so these fields (especially role/is_active)
+    can never be reached through a regular self-profile-update request."""
+
+    address = serializers.CharField(source='profile.address', required=False, allow_blank=True)
+    date_of_birth = serializers.DateField(source='profile.date_of_birth', required=False, allow_null=True)
+    bio = serializers.CharField(source='profile.bio', required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ['role', 'is_active']
+        fields = [
+            'role', 'is_active', 'first_name', 'last_name', 'email', 'phone',
+            'business_name', 'location', 'address', 'date_of_birth', 'bio',
+        ]
 
     def validate_role(self, value):
         if value not in ('user', 'owner', 'admin'):
             raise serializers.ValidationError("Role must be one of: user, owner, admin.")
         return value
+
+    def update(self, instance, validated_data):
+        # 'profile' isn't a real User field — it's where DRF's dotted
+        # source='profile.X' fields land in validated_data. Pop it before
+        # calling super().update(), or setattr(instance, 'profile', {...})
+        # would clobber the actual OneToOne reverse-relation descriptor.
+        profile_data = validated_data.pop('profile', {})
+        instance = super().update(instance, validated_data)
+        if profile_data:
+            from user_profile.models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=instance)
+            for k, v in profile_data.items():
+                setattr(profile, k, v)
+            profile.save()
+        return instance
+
+
+# --- Admin-only user creation serializer ---
+class AdminCreateUserSerializer(serializers.ModelSerializer):
+    """Admin-only user creation — distinct from UserRegistrationSerializer
+    (public signup) in two ways: `role` may be 'admin' here, and `password`
+    is optional (if left blank, AdminCreateUserView emails the new user a
+    password-setup link via the same PasswordResetToken/send_email_task
+    flow request_password_reset uses, so an admin never sees/relays a
+    plaintext password)."""
+
+    password = serializers.CharField(required=False, allow_blank=True, min_length=8, write_only=True)
+
+    class Meta:
+        model = User
+        fields = ['email', 'first_name', 'last_name', 'phone', 'role', 'business_name', 'location', 'password']
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+
+    def validate_phone(self, value):
+        if value:
+            digits_only = ''.join(filter(str.isdigit, value))
+            if len(digits_only) != 10:
+                raise serializers.ValidationError("Phone number must be 10 digits.")
+        return value
+
+    def validate_password(self, value):
+        if value:
+            try:
+                validate_password(value)
+            except ValidationError as e:
+                raise serializers.ValidationError(e.messages)
+        return value
+
+    def validate_role(self, value):
+        if value not in ('user', 'owner', 'admin'):
+            raise serializers.ValidationError("Role must be one of: user, owner, admin.")
+        return value
+
+    def validate(self, attrs):
+        if attrs.get('role') == 'owner' and not attrs.get('business_name'):
+            raise serializers.ValidationError("Business name is required for facility owners.")
+        return attrs
 
 # --- User Registration Serializer ---
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -154,6 +287,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer): # <--- Confirm
             'user': UserSerializer(user).data # Include full user data, including 'role'
         }
 
+def _blacklist_all_outstanding_tokens(user):
+    """'Log out everywhere' — the standard simplejwt token_blacklist pattern
+    (BLACKLIST_AFTER_ROTATION is already on in settings.py, which is what
+    populates OutstandingToken as refresh tokens get issued/rotated). Used
+    by both PasswordChangeSerializer and PasswordResetConfirmSerializer
+    below: a password change/reset must kill every existing session, not
+    just the one that made this request — deliberately no attempt is made
+    to keep the current session's tokens alive, so the user has to log in
+    again with the new password."""
+    for token in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=token)
+
+
 # --- Password Change Serializer ---
 class PasswordChangeSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
@@ -182,6 +328,7 @@ class PasswordChangeSerializer(serializers.Serializer):
         user = self.context['request'].user
         user.set_password(self.validated_data['new_password'])
         user.save()
+        _blacklist_all_outstanding_tokens(user)
         return user
 
 class UserSearchResultSerializer(serializers.ModelSerializer):
@@ -232,6 +379,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.save()
         reset_token.used_at = timezone.now()
         reset_token.save(update_fields=['used_at'])
+        _blacklist_all_outstanding_tokens(user)
         return user
 
 
@@ -249,3 +397,24 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             if len(digits_only) != 10:
                 raise serializers.ValidationError("Phone number must be 10 digits.")
         return value
+
+
+# --- Admin action audit log (read-only) ---
+class AdminActionLogSerializer(serializers.ModelSerializer):
+    """Backs GET /user/admin/action-log/ — the admin-only Activity Log tab.
+    actor_email is denormalized here (rather than nesting a UserSerializer)
+    since the log only ever needs to display who did it, not their full
+    profile; it's also None-safe for a SET_NULL'd actor (an admin account
+    that's since been deleted)."""
+    actor_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdminActionLog
+        fields = [
+            'id', 'actor', 'actor_email', 'action',
+            'target_type', 'target_id', 'target_repr', 'details', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_actor_email(self, obj):
+        return obj.actor.email if obj.actor_id else None

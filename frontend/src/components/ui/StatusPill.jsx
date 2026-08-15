@@ -14,6 +14,7 @@ const STATUS_TONE = {
     rejected: 'danger',
     failed: 'danger',
     refunded: 'success',
+    'no-show': 'warning',
 };
 
 /** Small uppercase status pill, color-coded by semantic booking/approval status. */

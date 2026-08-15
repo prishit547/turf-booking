@@ -37,6 +37,7 @@ urlpatterns = [
     path('api/owner_dashboard/', include('owner_dashboard.urls')),
     path('api/dashboard/', include('user_dashboard.urls')),
     path('api/rewards/', include('rewards.urls')),
+    path('api/contact/', include('contact.urls')),
     path('', include('chatbot.urls')),  # Chatbot endpoints
     
     # API health and info endpoints

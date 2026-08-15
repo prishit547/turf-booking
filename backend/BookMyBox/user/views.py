@@ -5,30 +5,40 @@ import logging
 from django.conf import settings
 from django.db.models import Sum, Count, DecimalField, Q
 from django.db.models.functions import TruncMonth, Coalesce
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import status, generics, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework import status, generics, permissions, viewsets
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import authenticate
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters
 
-from boxes.models import Box
+from boxes.models import Box, CommissionRate, Review
 from boxes.pricing import resolve_commission_rate
 from bookings.models import Booking
+from owner_dashboard.models import Payout
 
-from .models import PasswordResetToken, User
+from .models import AdminActionLog, OwnerPayoutDetails, OwnerVerification, PasswordResetToken, User
+from .audit import log_admin_action
 from .filters import UserFilter
-from .permissions import IsAdminUser
+from .permissions import IsAdminUser, IsOwnerUser
+from .notifications import notify
 from .serializers import (
     UserRegistrationSerializer,
     # UserLoginSerializer,  # <--- CONFIRMED: This line should be commented out or removed
     UserSerializer,
     UserUpdateSerializer,
     AdminUserUpdateSerializer,
+    AdminCreateUserSerializer,
+    AdminActionLogSerializer,
+    OwnerVerificationSerializer,
+    OwnerPayoutDetailsSerializer,
     PasswordChangeSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
@@ -53,6 +63,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     access and refresh JWTs, along with serialized user data (including role).
     """
     serializer_class = CustomTokenObtainPairSerializer # Use your custom serializer
+    # Scoped (not Anon/UserRateThrottle) so this limits login attempts
+    # specifically, without throttling the rest of the API by IP/user — see
+    # REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] in settings.py for the rate.
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
 
 # --- Google OAuth Login/Signup Endpoint ---
@@ -152,6 +167,7 @@ def complete_onboarding(request):
 # --- User Registration Endpoint ---
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([ScopedRateThrottle])
 def register(request):
     """
     Handles new user registration.
@@ -177,6 +193,15 @@ def register(request):
         'success': False,
         'errors': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# `@api_view` wraps `register` into a dynamically generated APIView subclass
+# and returns `WrappedAPIView.as_view()`; DRF's `APIView.as_view()` stashes
+# that class on the returned function as `.cls` (see rest_framework/views.py),
+# which is how a `throttle_scope` gets attached to a function-based view —
+# `@throttle_classes` only sets which throttle *classes* run, ScopedRateThrottle
+# itself reads the scope off the view instance at request time.
+register.cls.throttle_scope = 'signup'
 
 
 # --- User Logout Endpoint ---
@@ -264,6 +289,7 @@ def change_password(request):
 # --- Self-service password reset ---
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([ScopedRateThrottle])
 def request_password_reset(request):
     """Starts the reset flow. Always returns success (even for an unknown
     email) so this endpoint can't be used to enumerate registered accounts —
@@ -298,14 +324,25 @@ def request_password_reset(request):
     })
 
 
+# See register.cls.throttle_scope's comment above for why `.cls` is how a
+# function-based view's throttle_scope gets set. Both reset-flow endpoints
+# share the 'password_reset' scope so requesting a link and then burning
+# through guesses against it count against the same limit.
+request_password_reset.cls.throttle_scope = 'password_reset'
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([ScopedRateThrottle])
 def confirm_password_reset(request):
     serializer = PasswordResetConfirmSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
         return Response({'success': True, 'message': 'Password reset successfully.'})
     return Response({'success': False, 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+confirm_password_reset.cls.throttle_scope = 'password_reset'
 
 
 # --- User search (for inviting someone to a booking) ---
@@ -428,14 +465,22 @@ class UserDetailView(generics.RetrieveAPIView):
 
 
 class AdminUserUpdateView(generics.UpdateAPIView):
-    """Admin-only: change a user's role or suspend/reactivate their account
-    (is_active). Deliberately no delete — hard-deleting a user would cascade
-    into their bookings/boxes/reviews, so suspension is the supported way to
-    disable an account."""
+    """Admin-only: edit a user's role/status plus core profile fields (see
+    AdminUserUpdateSerializer). Hard-deleting a user is handled separately
+    by AdminUserDeleteView/AdminUserDeletePreviewView below, behind an
+    explicit confirmation flow on the frontend given real FK-cascade risk."""
     queryset = User.objects.all()
     serializer_class = AdminUserUpdateSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ['patch']
+
+    # Fields AdminUserUpdateSerializer can actually change — tracked before/
+    # after so the audit log records exactly what an admin edit changed,
+    # not just "user was updated".
+    _TRACKED_FIELDS = [
+        'role', 'is_active', 'email', 'first_name', 'last_name',
+        'phone', 'business_name', 'location',
+    ]
 
     def patch(self, request, *args, **kwargs):
         target = self.get_object()
@@ -444,13 +489,142 @@ class AdminUserUpdateView(generics.UpdateAPIView):
                 {'detail': "You cannot change your own role or status."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        before = {field: getattr(target, field) for field in self._TRACKED_FIELDS}
         response = self.partial_update(request, *args, **kwargs)
+        target.refresh_from_db()
+        after = {field: getattr(target, field) for field in self._TRACKED_FIELDS}
+        changed = {
+            field: {'before': before[field], 'after': after[field]}
+            for field in self._TRACKED_FIELDS if before[field] != after[field]
+        }
         logger.info(
             "Admin %s updated user %s: role=%s is_active=%s",
             request.user.email, target.email,
             request.data.get('role', target.role), request.data.get('is_active', target.is_active),
         )
+        log_admin_action(
+            request.user, 'user.update', target=target,
+            target_repr=target.email, details={'changed': changed},
+        )
         return response
+
+
+class AdminCreateUserView(generics.CreateAPIView):
+    """Admin-only user creation. If no password is supplied, the account is
+    created with an unusable password and the new user is emailed a
+    password-setup link, reusing the exact PasswordResetToken +
+    send_email_task pattern request_password_reset (above) already uses —
+    this avoids an admin ever seeing/relaying a plaintext password. An
+    admin may still optionally set an explicit password (e.g. for seeding
+    demo accounts)."""
+    queryset = User.objects.all()
+    serializer_class = AdminCreateUserSerializer
+    permission_classes = [IsAdminUser]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        data = dict(serializer.validated_data)
+        password = data.pop('password', None) or None
+        data['username'] = data['email']
+        user = User.objects.create_user(password=password, **data)
+
+        if not password:
+            reset_token = PasswordResetToken.objects.create(
+                user=user,
+                expires_at=timezone.now() + timezone.timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES),
+            )
+            reset_link = f"{settings.FRONTEND_URL}/reset-password/{reset_token.token}"
+            send_email_task.delay(
+                user.email,
+                'Set up your BookMyBox password',
+                f"<p>Hi {user.first_name or user.email},</p>"
+                f"<p>An administrator created an account for you on BookMyBox. Click the link "
+                f"below to set your password. This link expires in {PASSWORD_RESET_TOKEN_TTL_MINUTES} "
+                f"minutes and can only be used once.</p>"
+                f'<p><a href="{reset_link}">{reset_link}</a></p>',
+            )
+
+        logger.info(
+            "Admin %s created user %s (role=%s, password_set=%s)",
+            request.user.email, user.email, user.role, bool(password),
+        )
+        log_admin_action(
+            request.user, 'user.create', target=user, target_repr=user.email,
+            details={'role': user.role, 'password_set': bool(password)},
+        )
+        return Response({
+            'success': True,
+            'user': UserSerializer(user).data,
+        }, status=status.HTTP_201_CREATED)
+
+
+def _admin_delete_preview_counts(target):
+    """Shared by the preview (GET) and the actual delete (DELETE, for its
+    log line) so the two can never drift out of sync."""
+    counts = {
+        'bookings_as_customer': Booking.objects.filter(user=target).count(),
+        'reviews': Review.objects.filter(user=target).count(),
+    }
+    if target.role == 'owner':
+        counts['boxes_owned'] = Box.objects.filter(owner=target).count()
+        counts['payout_records'] = Payout.objects.filter(owner=target).count()
+        counts['payout_total_amount'] = float(
+            Payout.objects.filter(owner=target).aggregate(t=Sum('amount'))['t'] or 0
+        )
+        counts['commission_rate_overrides'] = CommissionRate.objects.filter(owner=target).count()
+    return counts
+
+
+class AdminUserDeletePreviewView(APIView):
+    """Admin-only, read-only: counts of what a hard delete of this user
+    would touch, so the frontend confirmation modal can spell out the real
+    consequences (see boxes/models.py::Box.owner's SET_NULL — an owner's
+    boxes survive but go ownerless, they are NOT included as a 'thing that
+    gets deleted' here)."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, pk):
+        target = get_object_or_404(User, pk=pk)
+        if target.id == request.user.id:
+            return Response(
+                {'detail': "You cannot delete your own account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(_admin_delete_preview_counts(target))
+
+
+class AdminUserDeleteView(APIView):
+    """Admin-only real hard delete. Respects existing FK on_delete behavior
+    as-is (Booking/Review/Payout/CommissionRate CASCADE off User; Box.owner
+    SET_NULL) rather than changing it — see the plan doc for why. Self-delete
+    is blocked, same as AdminUserUpdateView's self-edit block."""
+    permission_classes = [IsAdminUser]
+
+    def delete(self, request, pk):
+        target = get_object_or_404(User, pk=pk)
+        if target.id == request.user.id:
+            return Response(
+                {'detail': "You cannot delete your own account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        counts = _admin_delete_preview_counts(target)
+        email, role, deleted_id = target.email, target.role, target.id
+        target.delete()
+        logger.info(
+            "Admin %s permanently deleted user %s (role=%s): %s",
+            request.user.email, email, role, counts,
+        )
+        # target.delete() clears target.pk, so target_type/target_id are
+        # passed explicitly rather than derived from the (now pk-less)
+        # instance — see log_admin_action's docstring.
+        log_admin_action(
+            request.user, 'user.delete',
+            target_type='User', target_id=deleted_id, target_repr=email,
+            details={'role': role, **counts},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['GET'])
@@ -761,3 +935,173 @@ def admin_dashboard_data(request):
             for event in recent_activity
         ],
     })
+
+
+# --- Owner verification (identity/business KYC) ---
+# Mirrors boxes/views.py's Box submit -> pending -> admin review pattern:
+# OwnerVerificationView is the owner-facing "OwnerBoxViewSet" half (get
+# current status, submit/resubmit), AdminOwnerVerificationViewSet is the
+# admin-facing "AdminBoxViewSet" half (list pending, approve, reject).
+class OwnerVerificationView(APIView):
+    """Owner-facing verification submission. GET returns (and lazily
+    creates, in 'not_submitted' state) the caller's own OwnerVerification —
+    never another owner's. POST submits/resubmits it, always landing in
+    'pending'; a resubmission after rejection clears the prior rejection
+    reason and review metadata. Blocked while a submission is already
+    pending or already approved, mirroring OwnerBoxViewSet's
+    changes_requested-only auto-resubmit guard.
+
+    is_verified is NEVER touched here — only
+    AdminOwnerVerificationViewSet.approve() below ever sets it True."""
+    permission_classes = [IsOwnerUser]
+
+    def get(self, request):
+        verification, _ = OwnerVerification.objects.get_or_create(user=request.user)
+        return Response(OwnerVerificationSerializer(verification, context={'request': request}).data)
+
+    def post(self, request):
+        verification, _ = OwnerVerification.objects.get_or_create(user=request.user)
+        if verification.verification_status == 'pending':
+            return Response(
+                {'detail': 'Your verification is already pending review.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if verification.verification_status == 'approved':
+            return Response(
+                {'detail': 'You are already verified.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = OwnerVerificationSerializer(
+            verification, data=request.data, partial=True, context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        has_document = serializer.validated_data.get('verification_document') or verification.verification_document
+        if not has_document:
+            return Response(
+                {'detail': 'Please upload a verification document (PAN card, GST certificate, or similar).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer.save(
+            verification_status='pending',
+            submitted_at=timezone.now(),
+            rejection_reason='',
+            reviewed_at=None,
+            reviewed_by=None,
+        )
+        return Response(
+            OwnerVerificationSerializer(verification, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminOwnerVerificationViewSet(viewsets.ViewSet):
+    """Admin-only review queue for owner identity/business verification —
+    same list_pending/approve/reject shape as boxes/views.py's
+    AdminBoxViewSet. approve() is the only code path (besides Google OAuth
+    signup — see google_auth.py) that ever sets User.is_verified True;
+    reject() explicitly leaves it False. Access is gated purely by
+    IsAdminUser (role == 'admin'), so an owner — including the owner whose
+    own verification is under review — can never call these."""
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
+
+    def list_pending(self, request):
+        pending = OwnerVerification.objects.filter(
+            verification_status='pending',
+        ).select_related('user', 'reviewed_by').order_by('submitted_at')
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(pending, request)
+        serializer = OwnerVerificationSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
+    def approve(self, request, pk=None):
+        verification = get_object_or_404(OwnerVerification, pk=pk)
+        verification.verification_status = 'approved'
+        verification.rejection_reason = ''
+        verification.reviewed_by = request.user
+        verification.reviewed_at = timezone.now()
+        verification.save(update_fields=['verification_status', 'rejection_reason', 'reviewed_by', 'reviewed_at'])
+
+        verification.user.is_verified = True
+        verification.user.save(update_fields=['is_verified'])
+
+        notify(
+            verification.user, 'Verification approved',
+            'Your owner verification has been approved — your profile now shows as verified.',
+            link='/owner-dashboard',
+        )
+        return Response(OwnerVerificationSerializer(verification, context={'request': request}).data)
+
+    def reject(self, request, pk=None):
+        reason = request.data.get('reason', '')
+        if not reason.strip():
+            return Response(
+                {'detail': 'Please provide a reason for rejection.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        verification = get_object_or_404(OwnerVerification, pk=pk)
+        verification.verification_status = 'rejected'
+        verification.rejection_reason = reason
+        verification.reviewed_by = request.user
+        verification.reviewed_at = timezone.now()
+        verification.save(update_fields=['verification_status', 'rejection_reason', 'reviewed_by', 'reviewed_at'])
+        notify(
+            verification.user, 'Verification rejected',
+            f'Your owner verification was rejected: {reason}',
+            link='/owner-dashboard',
+        )
+        return Response(OwnerVerificationSerializer(verification, context={'request': request}).data)
+
+
+# --- Owner payout details (bank/UPI destination for payouts) ---
+class OwnerPayoutDetailsView(APIView):
+    """Owner-facing view/edit of their own payout destination (bank account
+    or UPI) — see OwnerPayoutDetails' docstring for why this is a separate
+    model from owner_dashboard.Payout. GET lazily get_or_creates (mirroring
+    OwnerVerificationView.get above) an empty row rather than 404ing, since
+    "not filled in yet" is an expected, non-error state. PUT/PATCH update
+    it; both accept partial data since every field is individually optional
+    — the serializer's own validate() is what still enforces bank_account_
+    number/ifsc_code being filled together.
+
+    Deliberately never a gate: an owner never needs to hit this endpoint to
+    use the rest of their dashboard, list boxes, or take bookings."""
+    permission_classes = [IsOwnerUser]
+
+    def get(self, request):
+        details, _ = OwnerPayoutDetails.objects.get_or_create(owner=request.user)
+        return Response(OwnerPayoutDetailsSerializer(details).data)
+
+    def put(self, request):
+        return self._update(request, partial=False)
+
+    def patch(self, request):
+        return self._update(request, partial=True)
+
+    def _update(self, request, partial):
+        details, _ = OwnerPayoutDetails.objects.get_or_create(owner=request.user)
+        serializer = OwnerPayoutDetailsSerializer(details, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+# --- Admin action audit log (read-only) ---
+class AdminActionLogListView(generics.ListAPIView):
+    """Admin-only, read-only, newest-first history of admin actions with
+    real consequences (user edit/create/delete, box approve/reject, payout
+    record) — backs the Activity Log tab on AdminDashboard.jsx. Every row is
+    written by user/audit.py::log_admin_action(), called from the admin
+    views themselves alongside (not instead of) their existing logger.info()
+    lines."""
+    serializer_class = AdminActionLogSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['action', 'target_type']
+
+    def get_queryset(self):
+        return AdminActionLog.objects.select_related('actor').all()

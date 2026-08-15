@@ -116,15 +116,18 @@ export const BookingProvider = ({ children }) => {
         }
     }, [dispatch]); // Dependency: dispatch is stable
 
-    // Memoize cancelBooking
-    const cancelBooking = useCallback(async (bookingId) => {
+    // Memoize cancelBooking. `reason` is optional — omitted entirely from
+    // the POST body when not provided, so existing customer-cancel call
+    // sites that call this with just one arg are unaffected. Currently
+    // used by the box-owner cancel path on BookingConfirmation.jsx.
+    const cancelBooking = useCallback(async (bookingId, reason) => {
         dispatch({ type: 'SET_LOADING', payload: true });
         dispatch({ type: 'SET_ERROR', payload: null });
         try {
             // Cancellation has real business logic (2-hour cutoff, status
             // transition) that lives behind the `cancel` action — a raw
             // DELETE would hit the admin-only destroy endpoint instead.
-            const response = await api.post(`/bookings/${bookingId}/cancel/`);
+            const response = await api.post(`/bookings/${bookingId}/cancel/`, reason ? { reason } : undefined);
             dispatch({ type: 'UPDATE_BOOKING', payload: response.data });
             return { success: true };
         } catch (error) {
@@ -136,6 +139,23 @@ export const BookingProvider = ({ children }) => {
             dispatch({ type: 'SET_LOADING', payload: false });
         }
     }, [dispatch]); // Dependency: dispatch is stable
+
+    // Reschedules a Confirmed booking to a new date/start_time — box and
+    // duration stay fixed server-side (see bookings/services.py's
+    // reschedule_booking), so only those two fields are ever sent. Used by
+    // both the customer's own booking and a box owner rescheduling a
+    // booking on their box (BookingConfirmation.jsx gates which via
+    // canReschedule).
+    const rescheduleBooking = useCallback(async (bookingId, { date, startTime }) => {
+        try {
+            const response = await api.post(`/bookings/${bookingId}/reschedule/`, { date, start_time: startTime });
+            dispatch({ type: 'UPDATE_BOOKING', payload: response.data });
+            return { success: true, data: response.data };
+        } catch (error) {
+            const errorMessage = error.response?.data?.detail || error.message || 'Failed to reschedule booking.';
+            return { success: false, error: errorMessage };
+        }
+    }, [dispatch]);
 
     // reserveSlot/confirmReservation/releaseHold deliberately don't dispatch
     // SET_LOADING/SET_ERROR into the shared context state — they're used in
@@ -314,6 +334,7 @@ export const BookingProvider = ({ children }) => {
         createBooking,
         updateBooking,
         cancelBooking,
+        rescheduleBooking,
         reserveSlot,
         createRecurringBooking,
         confirmReservation,

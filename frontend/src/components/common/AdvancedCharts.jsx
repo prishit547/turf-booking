@@ -12,7 +12,7 @@ import {
   Filler,
   RadialLinearScale,
 } from 'chart.js';
-import { Bar, Doughnut, Line, PolarArea } from 'react-chartjs-2';
+import { Bar, Doughnut, Line } from 'react-chartjs-2';
 import { motion } from 'framer-motion';
 import { useChartTheme } from '../../utils/chartTheme';
 
@@ -299,7 +299,11 @@ export const BookingActivityChart = ({ data, loading = false }) => {
   );
 };
 
-// Peak Hours Polar Chart
+// Peak Booking Hours — bar chart. Was previously a PolarArea chart, which
+// got cluttered and hard to read once a box had bookings spread across
+// ~18 different hours (only 6 legend colors to go around, legend overflow).
+// A single-series bar chart along a chronological x-axis reads far more
+// clearly for "what % of bookings land in each hour" than wedges ever did.
 export const PeakHoursChart = ({ data, loading = false }) => {
   const theme = useChartTheme();
 
@@ -311,15 +315,24 @@ export const PeakHoursChart = ({ data, loading = false }) => {
     );
   }
 
+  const values = data?.values || [];
+  const max = Math.max(...(values.length ? values : [1]));
+
   const chartData = {
     labels: data?.labels || [],
     datasets: [
       {
         label: 'Booking Percentage',
-        data: data?.values || [],
-        backgroundColor: theme.series.map((c) => theme.hexToRgba(c, 0.7)),
-        borderColor: theme.series,
+        data: values,
+        backgroundColor: (ctx) => {
+          const value = ctx.parsed?.y ?? 0;
+          const opacity = max > 0 ? Math.max(0.35, value / max) : 0.7;
+          return theme.hexToRgba(theme.colors.primary, opacity);
+        },
+        borderColor: theme.colors.primary,
         borderWidth: 2,
+        borderRadius: 6,
+        borderSkipped: false,
       },
     ],
   };
@@ -329,19 +342,37 @@ export const PeakHoursChart = ({ data, loading = false }) => {
     maintainAspectRatio: false,
     plugins: {
       legend: {
-        position: 'bottom',
-        labels: {
-          padding: 15,
-          font: {
-            size: 11,
-          },
-          color: theme.text,
-        },
+        display: false,
       },
       tooltip: {
         ...theme.tooltip,
         callbacks: {
-          label: (context) => `${context.label}: ${context.parsed.toFixed(1)}%`,
+          label: (context) => `${context.label}: ${context.parsed.y.toFixed(1)}% of bookings`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        ticks: {
+          color: theme.text,
+          font: {
+            size: 11,
+          },
+        },
+      },
+      y: {
+        grid: {
+          color: theme.grid,
+        },
+        ticks: {
+          color: theme.text,
+          font: {
+            size: 12,
+          },
+          callback: (value) => `${value}%`,
         },
       },
     },
@@ -349,11 +380,11 @@ export const PeakHoursChart = ({ data, loading = false }) => {
 
   return (
     <motion.div
-      initial={{ opacity: 0, scale: 0.8 }}
-      animate={{ opacity: 1, scale: 1 }}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
       className="h-64"
     >
-      <PolarArea data={chartData} options={options} />
+      <Bar data={chartData} options={options} />
     </motion.div>
   );
 };

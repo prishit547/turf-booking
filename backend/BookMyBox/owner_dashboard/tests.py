@@ -8,7 +8,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from boxes.models import Box, CommissionRate
 from bookings.models import Booking
+from user.models import AdminActionLog, OwnerPayoutDetails
 from .models import Payout, PayoutSchedule
+from .serializers import PayoutSerializer
 from .services import compute_owner_earnings
 from .tasks import is_due_today, run_scheduled_payouts_task
 
@@ -278,3 +280,149 @@ class ScheduledPayoutsTests(APITestCase):
         processed = run_scheduled_payouts_task()
         self.assertEqual(processed, 0)
         self.assertEqual(Payout.objects.filter(owner=self.owner, source='scheduled').count(), 0)
+
+
+class PayoutPaymentMethodFieldsTests(APITestCase):
+    """payment_method/transaction_id — new optional fields on Payout (see
+    Payout.PAYMENT_METHOD_CHOICES). Confirms they serialize/deserialize
+    correctly and that omitting them entirely (the old-style call shape)
+    still works, so existing integrations (e.g. run_scheduled_payouts_task)
+    don't break."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='payout_owner@example.com', username='payout_owner@example.com',
+            password='testpass123', role='owner',
+        )
+        self.admin = User.objects.create_user(
+            email='payout_admin@example.com', username='payout_admin@example.com',
+            password='testpass123', role='admin',
+        )
+
+    def _auth(self, user):
+        token = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_payout_serializes_new_fields(self):
+        payout = Payout.objects.create(
+            owner=self.owner, amount=Decimal('500.00'),
+            payment_method='upi', transaction_id='UTR123456',
+        )
+        data = PayoutSerializer(payout).data
+        self.assertEqual(data['payment_method'], 'upi')
+        self.assertEqual(data['transaction_id'], 'UTR123456')
+
+    def test_admin_can_record_payout_with_payment_method_and_transaction_id(self):
+        self._auth(self.admin)
+        response = self.client.post('/api/owner_dashboard/payouts/', {
+            'owner': self.owner.id, 'amount': '250.00',
+            'payment_method': 'bank_transfer', 'transaction_id': 'REF-9001',
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        payout = Payout.objects.get(owner=self.owner)
+        self.assertEqual(payout.payment_method, 'bank_transfer')
+        self.assertEqual(payout.transaction_id, 'REF-9001')
+
+    def test_perform_create_still_works_when_new_fields_omitted(self):
+        """Backward compatibility: old-style payout-recording calls (no
+        payment_method/transaction_id in the payload) must not break, since
+        both fields are blank=True, default=''."""
+        self._auth(self.admin)
+        response = self.client.post('/api/owner_dashboard/payouts/', {
+            'owner': self.owner.id, 'amount': '100.00',
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        payout = Payout.objects.get(owner=self.owner)
+        self.assertEqual(payout.payment_method, '')
+        self.assertEqual(payout.transaction_id, '')
+
+
+class PayoutAuditLogTests(APITestCase):
+    """AdminActionLog row for PayoutViewSet.perform_create — see
+    owner_dashboard/views.py and user/audit.py::log_admin_action()."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email='payout_audit_owner@example.com', username='payout_audit_owner@example.com',
+            password='testpass123', role='owner',
+        )
+        self.admin = User.objects.create_user(
+            email='payout_audit_admin@example.com', username='payout_audit_admin@example.com',
+            password='testpass123', role='admin',
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'Bearer {RefreshToken.for_user(self.admin).access_token}'
+        )
+
+    def test_recording_a_payout_writes_audit_log_row(self):
+        response = self.client.post('/api/owner_dashboard/payouts/', {
+            'owner': self.owner.id, 'amount': '750.00', 'note': 'August settlement',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        payout = Payout.objects.get(owner=self.owner)
+
+        log = AdminActionLog.objects.filter(action='payout.record', target_id=str(payout.id)).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.admin)
+        self.assertEqual(log.target_type, 'Payout')
+        self.assertEqual(log.details['owner'], self.owner.email)
+        self.assertEqual(log.details['amount'], '750.00')
+
+
+class PayoutBalancePayoutDetailsTests(APITestCase):
+    """payout_details embedded in PayoutViewSet.balance's per-owner rows —
+    see owner_dashboard/views.py's _balance_for_owner. This is how the
+    admin Record Payout modal (AdminDashboard.jsx) learns where an owner's
+    money should go before recording a payout. Read-only from this side —
+    only the owner can edit their own (see user.tests.OwnerPayoutDetailsTests)."""
+
+    def setUp(self):
+        self.owner_with_details = User.objects.create_user(
+            email='balance_owner_with_details@example.com', username='balance_owner_with_details@example.com',
+            password='testpass123', role='owner',
+        )
+        OwnerPayoutDetails.objects.create(
+            owner=self.owner_with_details, upi_id='details-owner@upi', account_holder_name='Details Owner',
+        )
+        self.owner_without_details = User.objects.create_user(
+            email='balance_owner_without_details@example.com', username='balance_owner_without_details@example.com',
+            password='testpass123', role='owner',
+        )
+        self.admin = User.objects.create_user(
+            email='balance_admin@example.com', username='balance_admin@example.com',
+            password='testpass123', role='admin',
+        )
+
+    def _auth(self, user):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {RefreshToken.for_user(user).access_token}')
+
+    def test_admin_balance_list_surfaces_payout_details_per_owner(self):
+        self._auth(self.admin)
+        response = self.client.get('/api/owner_dashboard/payouts/balance/')
+        self.assertEqual(response.status_code, 200)
+        rows = {row['owner_id']: row for row in response.data}
+
+        with_details = rows[self.owner_with_details.id]
+        self.assertIsNotNone(with_details['payout_details'])
+        self.assertEqual(with_details['payout_details']['upi_id'], 'details-owner@upi')
+
+        without_details = rows[self.owner_without_details.id]
+        self.assertIsNone(without_details['payout_details'])
+
+    def test_viewing_admin_balance_does_not_lazily_create_a_row(self):
+        """Unlike the owner's own GET (which lazily creates), the admin
+        balance view is read-only and must never create rows just because
+        an admin looked at the list."""
+        self._auth(self.admin)
+        self.client.get('/api/owner_dashboard/payouts/balance/')
+        self.assertFalse(OwnerPayoutDetails.objects.filter(owner=self.owner_without_details).exists())
+
+    def test_non_admin_cannot_reach_balance_for_other_owners(self):
+        self._auth(self.owner_without_details)
+        response = self.client.get('/api/owner_dashboard/payouts/balance/')
+        self.assertEqual(response.status_code, 200)
+        # Owner-role callers get only their own row (a dict, not a list) —
+        # never another owner's payout_details.
+        self.assertIsInstance(response.data, dict)
+        self.assertEqual(response.data['owner_id'], self.owner_without_details.id)
+        self.assertIsNone(response.data['payout_details'])

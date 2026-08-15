@@ -67,6 +67,7 @@ const BOOKING_STATUS_TONE = {
   Confirmed: 'success',
   Completed: 'primary',
   Cancelled: 'danger',
+  'No-show': 'warning',
 };
 
 const UserDashboard = () => {

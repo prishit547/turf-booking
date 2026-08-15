@@ -41,8 +41,35 @@ urlpatterns = [
     
     # User management (Admin only)
     path('users/', views.UserListView.as_view(), name='user_list'),
+    path('users/create/', views.AdminCreateUserView.as_view(), name='admin_create_user'),
     path('users/<int:pk>/', views.UserDetailView.as_view(), name='user_detail'),
     path('users/<int:pk>/admin-update/', views.AdminUserUpdateView.as_view(), name='admin_user_update'),
+    path('users/<int:pk>/delete-preview/', views.AdminUserDeletePreviewView.as_view(), name='admin_user_delete_preview'),
+    path('users/<int:pk>/delete/', views.AdminUserDeleteView.as_view(), name='admin_user_delete'),
+
+    # Owner verification (KYC): owner-facing submit/status + admin review queue
+    path('owner/verification/', views.OwnerVerificationView.as_view(), name='owner_verification'),
+    path(
+        'admin/verifications/pending/',
+        views.AdminOwnerVerificationViewSet.as_view({'get': 'list_pending'}),
+        name='admin_verifications_pending',
+    ),
+    path(
+        'admin/verifications/<int:pk>/approve/',
+        views.AdminOwnerVerificationViewSet.as_view({'post': 'approve'}),
+        name='admin_verification_approve',
+    ),
+    path(
+        'admin/verifications/<int:pk>/reject/',
+        views.AdminOwnerVerificationViewSet.as_view({'post': 'reject'}),
+        name='admin_verification_reject',
+    ),
+
+    # Owner payout details (bank/UPI destination for payouts)
+    path('owner/payout-details/', views.OwnerPayoutDetailsView.as_view(), name='owner_payout_details'),
+
+    # Admin action audit log
+    path('admin/action-log/', views.AdminActionLogListView.as_view(), name='admin_action_log'),
 
     # Notifications
     path('notifications/', NotificationListView.as_view(), name='notification_list'),

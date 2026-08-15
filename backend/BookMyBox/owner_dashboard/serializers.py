@@ -11,7 +11,7 @@ class PayoutSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Payout
-        fields = ['id', 'owner', 'owner_email', 'amount', 'note', 'source', 'created_at']
+        fields = ['id', 'owner', 'owner_email', 'amount', 'note', 'source', 'payment_method', 'transaction_id', 'created_at']
         read_only_fields = ['owner_email', 'source', 'created_at']
         extra_kwargs = {'owner': {'write_only': True, 'required': True}}
 

@@ -24,10 +24,15 @@ const ForgotPassword = () => {
     try {
       await api.post('/user/password-reset/', { email });
       setSent(true);
-    } catch {
+    } catch (err) {
       // The backend always returns success (to avoid leaking which emails
-      // are registered) — a network/server error is the only real failure case.
-      setError('Something went wrong. Please try again.');
+      // are registered) — a throttled or network/server error is the only
+      // real failure case.
+      if (err.response?.status === 429) {
+        setError('Too many attempts. Please wait a moment and try again.');
+      } else {
+        setError('Something went wrong. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

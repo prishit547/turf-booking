@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter, SimpleRouter
 from .views import (
     PublicBoxViewSet, OwnerBoxViewSet, AdminBoxViewSet, AdminCommissionRateViewSet,
-    AdminReviewViewSet, BlockedDateViewSet, PricingRuleViewSet,
+    AdminPlatformCommissionView, AdminReviewViewSet, BlockedDateViewSet, PricingRuleViewSet,
 )
 
 # Router for the public-facing API (listing, searching boxes)
@@ -47,4 +47,5 @@ urlpatterns = [
     path('admin/<int:pk>/approve/', AdminBoxViewSet.as_view({'post': 'approve'}), name='admin-approve-box'),
     path('admin/<int:pk>/reject/', AdminBoxViewSet.as_view({'post': 'reject'}), name='admin-reject-box'),
     path('admin/<int:pk>/request-changes/', AdminBoxViewSet.as_view({'post': 'request_changes'}), name='admin-request-changes-box'),
+    path('admin/commission-default/', AdminPlatformCommissionView.as_view(), name='admin-commission-default'),
 ]

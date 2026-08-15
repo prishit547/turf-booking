@@ -135,3 +135,77 @@ class BookingAPITests(APITestCase):
             format='json'
         )
         self.assertEqual(response.status_code, 405)
+
+
+class OwnerBookingAccessTests(APITestCase):
+    """A box owner can retrieve/cancel a booking made *on their box* via the
+    customer-facing BookingViewSet (not just OwnerBookingViewSet's own
+    cancel action) — powers the Owner Bookings row -> /booking/:id detail
+    view. This widening must stay scoped to retrieve/cancel only: the
+    list endpoint must NOT silently merge "bookings I made as a customer"
+    with "bookings on my box" — see get_queryset()'s action check."""
+
+    def setUp(self):
+        self.customer = User.objects.create_user(
+            email='player2@example.com', username='player2@example.com', password='testpass123',
+            role='user', phone='1234567892', location='Mumbai',
+        )
+        self.owner = User.objects.create_user(
+            email='owner2@example.com', username='owner2@example.com', password='testpass123',
+            role='owner', phone='1234567893', location='Mumbai', business_name='Owner Sports',
+        )
+        self.box = Box.objects.create(
+            name='Owner Cricket Box', sport='Cricket', sports=['Cricket'], location='Mumbai',
+            price=500, capacity=20, owner=self.owner, status='approved',
+            latitude=19.0760, longitude=72.8777,
+        )
+        self.booking = Booking.objects.create(
+            user=self.customer, box=self.box, date='2030-01-20',
+            start_time='10:00', end_time='12:00', duration=2, total_amount=1000,
+        )
+        # A booking the owner made for themself elsewhere, as a customer on
+        # someone else's box — must never leak into the owner-on-their-box
+        # widening below.
+        self.other_owner = User.objects.create_user(
+            email='otherowner@example.com', username='otherowner@example.com', password='testpass123',
+            role='owner', phone='1234567894', location='Mumbai', business_name='Other Sports',
+        )
+        self.other_box = Box.objects.create(
+            name='Other Box', sport='Football', sports=['Football'], location='Mumbai',
+            price=300, capacity=10, owner=self.other_owner, status='approved',
+        )
+        self.owner_own_booking = Booking.objects.create(
+            user=self.owner, box=self.other_box, date='2030-01-21',
+            start_time='09:00', end_time='10:00', duration=1, total_amount=300,
+        )
+        refresh = RefreshToken.for_user(self.owner)
+        self.owner_token = str(refresh.access_token)
+
+    def _auth_as_owner(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.owner_token}')
+
+    def test_owner_can_retrieve_booking_on_their_box(self):
+        self._auth_as_owner()
+        response = self.client.get(f'/api/bookings/{self.booking.id}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['id'], self.booking.id)
+        self.assertEqual(response.data['box_owner_id'], self.owner.id)
+
+    def test_owner_can_cancel_booking_on_their_box(self):
+        self._auth_as_owner()
+        response = self.client.post(f'/api/bookings/{self.booking.id}/cancel/')
+        self.assertEqual(response.status_code, 200)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.booking_status, 'Cancelled')
+
+    def test_owner_list_does_not_include_bookings_on_their_box(self):
+        self._auth_as_owner()
+        response = self.client.get('/api/bookings/')
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get('results', response.data)
+        returned_ids = {row['id'] for row in results}
+        # Their own personal booking (as a customer elsewhere) shows up...
+        self.assertIn(self.owner_own_booking.id, returned_ids)
+        # ...but a booking made by someone else on their own box does not —
+        # widening `list` here would be a real data-mixing bug, not just noise.
+        self.assertNotIn(self.booking.id, returned_ids)

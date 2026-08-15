@@ -364,7 +364,10 @@ const Checkout = () => {
                                 )}
                             </div>
                             <p className="text-xs text-muted-foreground mt-3 text-center">
-                                Free cancellation up to 2 hours before booking time
+                                Free cancellation up to 2 hours before booking time —{' '}
+                                <Link to="/cancellation-policy" target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80 underline underline-offset-2">
+                                    see our policy
+                                </Link>
                             </p>
                         </Card>
                     </div>

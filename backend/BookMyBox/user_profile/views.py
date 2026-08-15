@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404
 from .models import UserProfile
 from .serializers import CompleteProfileSerializer, ProfileUpdateSerializer
 
@@ -60,13 +61,23 @@ class UserProfileViewSet(viewsets.ViewSet):
         return self.get_my_profile(request)
 
     def retrieve(self, request, pk=None):
-        """Maps to get_my_profile with permission check"""
-        if str(pk) != str(request.user.id):
-            return Response(
-                {"detail": "You can only view your own profile."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        return self.get_my_profile(request)
+        """Own profile → same as get_my_profile. An admin may also fetch
+        any other user's profile (powers AdminDashboard's user-edit modal,
+        which needs UserProfile fields the Users-tab list rows don't
+        carry) — everyone else is still limited to their own profile."""
+        if str(pk) == str(request.user.id):
+            return self.get_my_profile(request)
+
+        if getattr(request.user, 'role', None) == 'admin':
+            target = get_object_or_404(User, pk=pk)
+            UserProfile.objects.get_or_create(user=target)
+            serializer = CompleteProfileSerializer(target)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(
+            {"detail": "You can only view your own profile."},
+            status=status.HTTP_403_FORBIDDEN
+        )
 
     def update(self, request, pk=None):
         """Maps to update_my_profile with permission check"""

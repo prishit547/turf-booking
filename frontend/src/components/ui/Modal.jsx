@@ -16,9 +16,19 @@ const SIZES = {
 export function Modal({ isOpen, onClose, title, children, footer, size = 'md', closeOnOverlayClick = true }) {
     const panelRef = useRef(null);
 
+    // Separate from the key-listener effect below: this one must only run
+    // when the modal actually opens, not on every parent re-render. Callers
+    // almost always pass `onClose` as a fresh inline arrow function, so an
+    // effect keyed on `[isOpen, onClose]` would re-fire (and re-steal focus
+    // from whatever the user just clicked into) on every keystroke of any
+    // input inside the modal.
     useEffect(() => {
         if (!isOpen) return undefined;
         panelRef.current?.focus();
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return undefined;
         const onKeyDown = (e) => {
             if (e.key === 'Escape') onClose?.();
         };

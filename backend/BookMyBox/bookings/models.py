@@ -20,6 +20,7 @@ class Booking(models.Model):
         ('Confirmed', 'Confirmed'),
         ('Cancelled', 'Cancelled'),
         ('Completed', 'Completed'),
+        ('No-show', 'No-show'),
     ]
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='bookings')
@@ -90,6 +91,22 @@ class Booking(models.Model):
     wallet_amount_used = models.DecimalField(
         max_digits=10, decimal_places=2, default=0,
         help_text="Portion of total_amount paid via wallet balance at checkout. Does not reduce total_amount — owner revenue/commission is still computed off the full price.",
+    )
+
+    rescheduled_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set the first (and only — see bookings/services.py::reschedule_booking, one reschedule per booking) "
+                   "time this booking's date/start_time is changed. Presence of a value is what gates the frontend's "
+                   "Reschedule action from being offered again.",
+    )
+    original_date = models.DateField(
+        null=True, blank=True,
+        help_text="The booking's date before its one allowed reschedule — null until rescheduled. Only ever set once, "
+                   "so a booking's true original slot survives even though only one reschedule is allowed in total.",
+    )
+    original_start_time = models.CharField(
+        max_length=5, blank=True, default='',
+        help_text="Companion to original_date — the booking's start_time before its one allowed reschedule.",
     )
 
     class Meta:

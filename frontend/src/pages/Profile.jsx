@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'react-toastify';
-import { User, Mail, Phone, MapPin, Calendar, Camera, Edit2, Save, X, Info, Dumbbell } from 'lucide-react';
-import { useAuth, MEDIA_BASE_URL } from '../api.jsx' // Correct path to your api.jsx
+import { User, Mail, Phone, MapPin, Calendar, Camera, Edit2, Save, X, Info, Dumbbell, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import { useAuth, MEDIA_BASE_URL, api } from '../api.jsx' // Correct path to your api.jsx
 import { formatLocalDate } from '../utils/date'
 import { Button, Card, Badge, Input, Loader } from '../components/ui';
 
@@ -38,7 +39,8 @@ function ProfileField({ label, icon, isEditing, value, children }) {
 }
 
 const Profile = () => {
-  const { user, fetchUserProfile, updateProfile, generalError } = useAuth();
+  const { user, fetchUserProfile, updateProfile, generalError, logout } = useAuth();
+  const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -61,6 +63,20 @@ const Profile = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef(null);
+
+  // Change-password — deliberately independent of the profile-edit form
+  // above (its own inputs, its own submit), since it hits a different
+  // endpoint and, on success, has a much bigger consequence: the backend
+  // now blacklists every outstanding refresh token for this user on a
+  // successful change (see user/serializers.py::PasswordChangeSerializer),
+  // so this session's own tokens stop working the instant the request
+  // succeeds. There's no attempt to keep the current session alive —
+  // logout() + redirect to /login is the deliberate, simpler behavior.
+  const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '', confirm_new_password: '' });
+  const [passwordErrors, setPasswordErrors] = useState({});
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [showPasswordFields, setShowPasswordFields] = useState(false);
+  const [revealPasswords, setRevealPasswords] = useState(false);
 
   const sports = ['Cricket', 'Football', 'Tennis', 'Badminton', 'Basketball', 'Pickleball', 'Volleyball', 'Table Tennis'];
 
@@ -147,6 +163,52 @@ const Profile = () => {
       toast.success('Profile photo updated!');
     } else {
       toast.error(result.error || 'Failed to update your photo.');
+    }
+  };
+
+  const handlePasswordFieldChange = (e) => {
+    const { name, value } = e.target;
+    setPasswordForm(prev => ({ ...prev, [name]: value }));
+    if (passwordErrors[name]) setPasswordErrors(prev => ({ ...prev, [name]: undefined }));
+    if (passwordErrors.general) setPasswordErrors(prev => ({ ...prev, general: undefined }));
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (passwordForm.new_password.length < 6) {
+      setPasswordErrors({ new_password: 'Password must be at least 6 characters' });
+      return;
+    }
+    if (passwordForm.new_password !== passwordForm.confirm_new_password) {
+      setPasswordErrors({ confirm_new_password: 'Passwords do not match' });
+      return;
+    }
+
+    setPasswordLoading(true);
+    setPasswordErrors({});
+    try {
+      await api.post('/user/change-password/', passwordForm);
+      // The backend just blacklisted every refresh token issued to this
+      // user, including the one backing this very session — there is
+      // nothing left to keep alive here. Clear local auth state and send
+      // the user back to /login to sign in fresh.
+      logout();
+      toast.success('Your password was changed. Please sign in again.');
+      navigate('/login');
+    } catch (error) {
+      const data = error.response?.data;
+      if (error.response?.status === 429) {
+        setPasswordErrors({ general: 'Too many attempts. Please wait a moment and try again.' });
+      } else if (data?.errors) {
+        const flattened = Object.fromEntries(
+          Object.entries(data.errors).map(([field, msgs]) => [field, Array.isArray(msgs) ? msgs.join(' ') : String(msgs)])
+        );
+        setPasswordErrors(flattened);
+      } else {
+        setPasswordErrors({ general: 'Failed to change password. Please try again.' });
+      }
+    } finally {
+      setPasswordLoading(false);
     }
   };
 
@@ -563,6 +625,103 @@ const Profile = () => {
                     {saveLoading ? 'Saving...' : 'Save Changes'}
                   </Button>
                 </div>
+              )}
+            </Card>
+
+            {/* Change password — independent of the edit-profile form above,
+                see handleChangePassword's comment for why a success here
+                ends the session. */}
+            <Card padding="lg" className="mt-6">
+              <button
+                type="button"
+                onClick={() => setShowPasswordFields(prev => !prev)}
+                className="w-full flex items-center justify-between gap-3 text-left"
+              >
+                <span className="flex items-center gap-3">
+                  <span className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center shrink-0">
+                    <ShieldCheck size={20} />
+                  </span>
+                  <span>
+                    <h3 className="font-display text-xl sm:text-2xl text-foreground">Change Password</h3>
+                    <p className="text-sm text-muted-foreground mt-1">Update the password used to sign in</p>
+                  </span>
+                </span>
+                <span className="text-sm font-medium text-primary shrink-0">
+                  {showPasswordFields ? 'Cancel' : 'Change'}
+                </span>
+              </button>
+
+              {showPasswordFields && (
+                <motion.form
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  onSubmit={handleChangePassword}
+                  className="mt-6 pt-6 border-t border-border space-y-5"
+                >
+                  {passwordErrors.general && (
+                    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-danger/30 bg-danger/10">
+                      <Info size={18} className="shrink-0 text-danger" />
+                      <p className="text-sm font-medium text-danger">{passwordErrors.general}</p>
+                    </div>
+                  )}
+
+                  <Input
+                    label="Current password"
+                    name="current_password"
+                    type={revealPasswords ? 'text' : 'password'}
+                    value={passwordForm.current_password}
+                    onChange={handlePasswordFieldChange}
+                    leadingIcon={<Lock size={18} />}
+                    error={passwordErrors.current_password?.[0] || passwordErrors.current_password}
+                    disabled={passwordLoading}
+                    autoComplete="current-password"
+                  />
+
+                  <Input
+                    label="New password"
+                    name="new_password"
+                    type={revealPasswords ? 'text' : 'password'}
+                    value={passwordForm.new_password}
+                    onChange={handlePasswordFieldChange}
+                    leadingIcon={<Lock size={18} />}
+                    trailingIcon={
+                      <button
+                        type="button"
+                        onClick={() => setRevealPasswords(prev => !prev)}
+                        disabled={passwordLoading}
+                        className="pointer-events-auto text-muted-foreground hover:text-foreground"
+                      >
+                        {revealPasswords ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    }
+                    error={passwordErrors.new_password?.[0] || passwordErrors.new_password}
+                    placeholder="At least 6 characters"
+                    disabled={passwordLoading}
+                    autoComplete="new-password"
+                  />
+
+                  <Input
+                    label="Confirm new password"
+                    name="confirm_new_password"
+                    type={revealPasswords ? 'text' : 'password'}
+                    value={passwordForm.confirm_new_password}
+                    onChange={handlePasswordFieldChange}
+                    leadingIcon={<Lock size={18} />}
+                    error={passwordErrors.confirm_new_password?.[0] || passwordErrors.confirm_new_password}
+                    disabled={passwordLoading}
+                    autoComplete="new-password"
+                  />
+
+                  <p className="text-sm text-muted-foreground">
+                    Changing your password will sign you out of all devices — you&apos;ll need to sign in again.
+                  </p>
+
+                  <div className="flex justify-end">
+                    <Button type="submit" loading={passwordLoading} icon={<ShieldCheck size={18} />}>
+                      {passwordLoading ? 'Updating…' : 'Update Password'}
+                    </Button>
+                  </div>
+                </motion.form>
               )}
             </Card>
           </div>

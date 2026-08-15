@@ -15,6 +15,12 @@ class Payout(models.Model):
         ('manual', 'Manual'),
         ('scheduled', 'Scheduled'),
     ]
+    PAYMENT_METHOD_CHOICES = [
+        ('bank_transfer', 'Bank transfer'),
+        ('upi', 'UPI'),
+        ('cash', 'Cash'),
+        ('other', 'Other'),
+    ]
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payouts')
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     note = models.TextField(blank=True, default='')
@@ -22,6 +28,8 @@ class Payout(models.Model):
         max_length=10, choices=SOURCE_CHOICES, default='manual',
         help_text="'scheduled' rows are auto-created by run_scheduled_payouts_task (owner_dashboard/tasks.py).",
     )
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, blank=True, default='')
+    transaction_id = models.CharField(max_length=100, blank=True, default='')
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='payouts_recorded',

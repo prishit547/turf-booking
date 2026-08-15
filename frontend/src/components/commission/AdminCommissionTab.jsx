@@ -2,7 +2,71 @@ import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'react-toastify';
 import { Plus, Download } from 'lucide-react';
 import { api } from '../../api.jsx';
-import { Button, Card, Input, Select, Modal, Loader } from '../ui';
+import { Button, Card, Badge, Input, Select, Modal, Loader } from '../ui';
+
+function PlatformDefaultRateCard() {
+  const [rate, setRate] = useState('');
+  const [meta, setMeta] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/boxes/admin/commission-default/');
+      setRate(String(res.data.default_rate));
+      setMeta(res.data);
+    } catch {
+      toast.error('Failed to load platform default commission rate');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async () => {
+    if (rate === '' || Number(rate) < 0 || Number(rate) > 100) {
+      toast.error('Enter a rate between 0 and 100');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api.patch('/boxes/admin/commission-default/', { default_rate: rate });
+      setRate(String(res.data.default_rate));
+      setMeta(res.data);
+      toast.success('Platform default commission rate updated');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save platform default rate');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <h4 className="text-base font-display font-semibold text-foreground">Platform default commission rate</h4>
+      <p className="text-sm text-muted-foreground mt-1">
+        Applied to any owner/sport combination that has no override below.
+        {meta?.updated_at ? ` Last updated ${new Date(meta.updated_at).toLocaleDateString()}.` : ''}
+      </p>
+      <div className="flex items-end gap-3 mt-4">
+        <div className="w-40">
+          <Input
+            label="Rate (%)"
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            disabled={loading}
+          />
+        </div>
+        <Button onClick={handleSave} loading={saving} disabled={loading}>Save</Button>
+      </div>
+    </Card>
+  );
+}
 
 function RateConfigSection() {
   const [owners, setOwners] = useState([]);
@@ -43,6 +107,22 @@ function RateConfigSection() {
     return Array.from(sports);
   }, [boxes, form.owner]);
 
+  // Purely a display-layer grouping over the already-fetched `rates` array —
+  // finds the latest effective_from per (owner, sport) pair so that row can
+  // be badged "Current" in the table below. No new fetch, no edit-in-place;
+  // the underlying create-only/versioned-row design is untouched.
+  const currentRateIds = useMemo(() => {
+    const latestByGroup = new Map();
+    rates.forEach((r) => {
+      const key = `${r.owner}::${r.sport}`;
+      const existing = latestByGroup.get(key);
+      if (!existing || r.effective_from > existing.effective_from) {
+        latestByGroup.set(key, r);
+      }
+    });
+    return new Set(Array.from(latestByGroup.values()).map((r) => r.id));
+  }, [rates]);
+
   const handleCreate = async () => {
     setSaving(true);
     try {
@@ -62,6 +142,8 @@ function RateConfigSection() {
 
   return (
     <div className="space-y-6">
+      <PlatformDefaultRateCard />
+
       <div className="flex items-center justify-between gap-4">
         <h3 className="text-xl font-display font-semibold text-foreground">Commission rate overrides</h3>
         <Button onClick={() => setShowModal(true)} icon={<Plus size={16} />}>New override</Button>
@@ -79,7 +161,12 @@ function RateConfigSection() {
                 <tr key={r.id} className="hover:bg-elevated/60">
                   <td className="py-3 px-4 text-foreground">{r.owner_email}</td>
                   <td className="py-3 px-4 text-muted-foreground">{r.sport}</td>
-                  <td className="py-3 px-4 text-foreground">{r.rate}%</td>
+                  <td className="py-3 px-4 text-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      {r.rate}%
+                      {currentRateIds.has(r.id) && <Badge tone="success">Current</Badge>}
+                    </span>
+                  </td>
                   <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{r.effective_from}</td>
                   <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{new Date(r.created_at).toLocaleDateString()}</td>
                 </tr>

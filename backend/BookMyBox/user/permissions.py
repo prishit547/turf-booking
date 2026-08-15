@@ -65,10 +65,19 @@ class IsOwnerOrAdmin(permissions.BasePermission):
 
 class IsVerifiedUser(permissions.BasePermission):
     """
-    Custom permission to only allow verified users.
+    Custom permission to only allow verified users. `is_verified` is the
+    single source of truth checked here — as of the OwnerVerification
+    workflow (user/models.py), it only ever flips True via Google OAuth
+    signup (google_auth.py) or an explicit admin approval of a submitted
+    owner verification (user/views.py's AdminOwnerVerificationViewSet.approve).
+    It is never set True automatically just by submitting a verification.
+
+    NOTE: not currently applied to any endpoint — kept correct/consistent
+    with the new verification model as a minor cleanup, but wiring it onto
+    a real endpoint is out of scope for this round.
     """
     def has_permission(self, request, view):
-        return (request.user and request.user.is_authenticated and 
+        return (request.user and request.user.is_authenticated and
                 hasattr(request.user, 'is_verified') and request.user.is_verified)
 
 class IsOwnerOrAdminOrReadOnly(permissions.BasePermission):

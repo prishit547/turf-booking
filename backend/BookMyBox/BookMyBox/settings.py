@@ -113,6 +113,7 @@ INSTALLED_APPS = [
     'user_dashboard',
     'chatbot',
     'rewards',
+    'contact',
 ]
 
 MIDDLEWARE = [
@@ -263,8 +264,19 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,  # Increased to show all boxes without pagination issues
 
-    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend']
+    'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
 
+    # Rates consumed by rest_framework.throttling.ScopedRateThrottle, applied
+    # per-view via `throttle_classes = [ScopedRateThrottle]` + `throttle_scope`
+    # (see user/views.py's login/password-reset/register views) rather than
+    # a blanket DEFAULT_THROTTLE_CLASSES — AnonRateThrottle/UserRateThrottle
+    # would throttle the whole API by IP/user, which is too coarse for
+    # "protect these specific auth endpoints from brute-force/abuse".
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '5/min',
+        'password_reset': '3/min',
+        'signup': '10/hour',
+    },
 }
 
 # JWT Configuration
@@ -365,6 +377,11 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', 'onboarding@resend.dev')
 # (password reset, booking invites) — never derived from request.get_host()
 # since those emails are sent from a Celery worker with no request context.
 FRONTEND_URL = env('FRONTEND_URL', 'http://localhost:5173')
+
+# Inbox that contact-form submissions (contact app) are forwarded to.
+# Defaults to the support address already shown to users in the app footer
+# (frontend/src/components/common/Footer.jsx).
+SUPPORT_EMAIL = env('SUPPORT_EMAIL', 'support@bookmybox.com')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

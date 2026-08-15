@@ -1,10 +1,14 @@
 # boxes/views.py
+from decimal import Decimal
+
 from rest_framework import mixins, viewsets, status
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters
+from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 from django.core.files.storage import default_storage
@@ -16,12 +20,15 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 
 from bookings.models import Booking
-from .models import Box, Review, BlockedDate, CommissionRate, PricingRule
+from bookings.services import cancel_booking, CancellationError
+from .models import Box, Review, BlockedDate, CommissionRate, PlatformCommissionSetting, PricingRule
 from .serializers import (
     BoxSerializer, ReviewSerializer, ReviewOwnerResponseSerializer, OwnerBoxSerializer,
-    AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, CommissionRateSerializer, PricingRuleSerializer,
+    AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, CommissionRateSerializer,
+    PlatformCommissionSettingSerializer, PricingRuleSerializer,
 )
 from .filters import BoxFilter
+from user.audit import log_admin_action
 from user.notifications import notify
 from user.permissions import IsAdminUser, IsAdminOrOwner, IsOwnerUser
 from BookMyBox.pagination import StandardResultsPagination
@@ -78,7 +85,7 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
     coordinates are high-cardinality enough that caching it would mostly
     just consume cache space without ever getting a hit.
     """
-    queryset = Box.objects.filter(status='approved').order_by('id')
+    queryset = Box.objects.filter(status='approved', owner__is_active=True).order_by('id')
     serializer_class = BoxSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, MinLengthSearchFilter, drf_filters.OrderingFilter]
@@ -97,7 +104,7 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         stress test measured as the dominant cost of listing 100 boxes
         (~925ms p50, vs ~220ms to retrieve a single box).
         """
-        return Box.objects.filter(status='approved').order_by('id').prefetch_related('reviews', 'blocked_dates', 'pricing_rules')
+        return Box.objects.filter(status='approved', owner__is_active=True).order_by('id').prefetch_related('reviews', 'blocked_dates', 'pricing_rules')
 
     # --- ADDED THE TWO MISSING ACTIONS BELOW ---
 
@@ -137,7 +144,7 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         """Distinct city/location strings across approved boxes, for the
         Home hero search's city dropdown."""
         locations = (
-            Box.objects.filter(status='approved')
+            Box.objects.filter(status='approved', owner__is_active=True)
             .exclude(location='')
             .order_by('location')
             .values_list('location', flat=True)
@@ -152,8 +159,8 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
         replaces hardcoded "500+ facilities" style copy that never moved."""
         User = get_user_model()
         return Response({
-            'facilities': Box.objects.filter(status='approved').count(),
-            'cities': Box.objects.filter(status='approved').exclude(location='')
+            'facilities': Box.objects.filter(status='approved', owner__is_active=True).count(),
+            'cities': Box.objects.filter(status='approved', owner__is_active=True).exclude(location='')
                 .values('location').distinct().count(),
             'users': User.objects.filter(role='user').count(),
             'bookings_completed': Booking.objects.filter(booking_status='Completed').count(),
@@ -324,6 +331,7 @@ class AdminBoxViewSet(viewsets.ViewSet):
         box.rejection_reason = ''
         box.save(update_fields=['status', 'rejection_reason'])
         notify(box.owner, 'Your box was approved', f'{box.name} is now live and bookable.', link=f'/boxes/{box.id}')
+        log_admin_action(request.user, 'box.approve', target=box, target_repr=box.name)
         return Response(AdminBoxSerializer(box, context={'request': request}).data)
 
     def reject(self, request, pk=None):
@@ -339,6 +347,7 @@ class AdminBoxViewSet(viewsets.ViewSet):
             box.owner, 'Your box was rejected',
             f'{box.name} was rejected: {reason}' if reason else f'{box.name} was rejected.',
         )
+        log_admin_action(request.user, 'box.reject', target=box, target_repr=box.name, details={'reason': reason})
         return Response(AdminBoxSerializer(box, context={'request': request}).data)
 
     def request_changes(self, request, pk=None):
@@ -362,6 +371,9 @@ class AdminBoxViewSet(viewsets.ViewSet):
             box.owner, 'Changes requested on your box',
             f'{box.name} needs changes before it can be approved: {reason}',
             link='/owner-dashboard',
+        )
+        log_admin_action(
+            request.user, 'box.request_changes', target=box, target_repr=box.name, details={'reason': reason},
         )
         return Response(AdminBoxSerializer(box, context={'request': request}).data)
 
@@ -408,11 +420,81 @@ class BlockedDateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.
 
     def create(self, request, *args, **kwargs):
         box_id = request.data.get('box')
+        date_value = request.data.get('date')
         if not Box.objects.filter(pk=box_id, owner=request.user).exists():
             return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
-        if BlockedDate.objects.filter(box_id=box_id, date=request.data.get('date')).exists():
+        if BlockedDate.objects.filter(box_id=box_id, date=date_value).exists():
             return Response({'detail': 'This date is already blocked.'}, status=status.HTTP_400_BAD_REQUEST)
-        return super().create(request, *args, **kwargs)
+
+        # A block is a whole-day closure — if paid, Confirmed bookings
+        # already exist for this box+date, blocking silently would leave
+        # customers unrefunded and showing up to a closed venue. Reject by
+        # default and make the owner explicitly opt into the cascade via
+        # force=true, rather than auto-cancelling behind their back.
+        conflicting_bookings = list(
+            Booking.objects.filter(box_id=box_id, date=date_value, booking_status='Confirmed')
+            .select_related('user')
+            .order_by('start_time')
+        )
+        force = str(request.data.get('force', '')).lower() in ('true', '1', 'yes')
+
+        if conflicting_bookings and not force:
+            count = len(conflicting_bookings)
+            return Response({
+                'detail': (
+                    f"This date has {count} confirmed booking{'s' if count != 1 else ''}. "
+                    "Cancelling them will refund the affected customers."
+                ),
+                'conflicting_bookings': [
+                    {
+                        'id': b.id,
+                        # Matches OwnerDashboard.jsx's Bookings tab display rule: a
+                        # walk-in/manual booking's `user` is the owner themselves
+                        # (see OwnerBookingViewSet.book()), so the real customer's
+                        # name lives in customer_name, not user.full_name.
+                        'customer_name': (
+                            (b.customer_name or 'Walk-in customer') if b.booking_source == 'owner_manual'
+                            else (b.user.full_name or b.user.email)
+                        ),
+                        'start_time': b.start_time,
+                    }
+                    for b in conflicting_bookings
+                ],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # All-or-nothing: either every conflicting booking gets cancelled
+        # (with its refund/notification) and the block is created, or none
+        # of it happens — an owner should never end up with some customers
+        # refunded and others left holding a booking for a now-closed venue.
+        try:
+            with transaction.atomic():
+                cancelled_count = 0
+                for booking in conflicting_bookings:
+                    # cancel_booking itself raises CancellationError if a
+                    # booking can't be cancelled (e.g. within the 2-hour
+                    # notice window) — letting that propagate out of this
+                    # `with` block rolls back any bookings already
+                    # cancelled earlier in the loop, so we never end up
+                    # half-cancelled.
+                    cancel_booking(
+                        booking, cancelled_by=request.user,
+                        reason='Venue closed by owner for this date.',
+                    )
+                    cancelled_count += 1
+                response = super().create(request, *args, **kwargs)
+        except CancellationError as e:
+            return Response(
+                {'detail': f"Could not block this date: {e.detail}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if cancelled_count:
+            response.data['cancelled_bookings_count'] = cancelled_count
+            response.data['detail'] = (
+                f"Date blocked. {cancelled_count} confirmed booking{'s' if cancelled_count != 1 else ''} "
+                "cancelled and refunded."
+            )
+        return response
 
 
 class PricingRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
@@ -456,3 +538,33 @@ class AdminCommissionRateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin,
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+
+class AdminPlatformCommissionView(APIView):
+    """Platform-wide default commission rate — the admin-editable
+    replacement for the env-var-only DEFAULT_COMMISSION_RATE, read by
+    boxes/pricing.py's resolve_commission_rate() as the ultimate fallback
+    when no per-owner/sport CommissionRate override applies. Same
+    GET/PATCH singleton shape as rewards.AdminScratchCardAutoGrantView."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        row = PlatformCommissionSetting.objects.first()
+        if row:
+            return Response(PlatformCommissionSettingSerializer(row).data)
+        return Response({
+            'default_rate': float(settings.DEFAULT_COMMISSION_RATE) * 100,
+            'updated_at': None,
+            'updated_by': None,
+        })
+
+    def patch(self, request):
+        setting, _ = PlatformCommissionSetting.objects.get_or_create(
+            pk=1, defaults={'default_rate': Decimal(str(settings.DEFAULT_COMMISSION_RATE)) * 100},
+        )
+        new_rate = request.data.get('default_rate')
+        if new_rate is not None:
+            setting.default_rate = new_rate
+        setting.updated_by = request.user
+        setting.save()
+        return Response(PlatformCommissionSettingSerializer(setting).data)

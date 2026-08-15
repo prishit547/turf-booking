@@ -35,6 +35,18 @@ class CancellationError(Exception):
         super().__init__(detail)
 
 
+class RescheduleError(Exception):
+    """Raised for any expected reschedule failure (not Confirmed, already
+    rescheduled once, too close to start time, new slot unavailable) so the
+    view can turn it into an HTTP response without reimplementing these
+    checks — mirrors CancellationError's shape exactly."""
+
+    def __init__(self, detail, status_code=400):
+        self.detail = detail
+        self.status_code = status_code
+        super().__init__(detail)
+
+
 class BookingWriteError(Exception):
     """Raised by create_booking_row for any expected failure (box missing,
     not approved, overlap conflict) so every write path (create, confirm,
@@ -136,6 +148,109 @@ def _notify_and_clear_waitlist(booking):
             link=f'/boxes/{booking.box_id}',
         )
     entries.delete()
+
+
+def reschedule_booking(booking, *, rescheduled_by, new_date, new_start_time_str):
+    """Reschedule `booking` to a new date/start_time, on behalf of
+    `rescheduled_by` — either the customer or the box owner (see
+    BookingViewSet.get_queryset()'s widened retrieve/cancel/reschedule
+    grant). Duration and box stay fixed (so total_amount never needs to
+    change) — only date/start_time (and the correspondingly-shifted
+    end_time) move. Enforces: only a Confirmed booking can be rescheduled;
+    the same 2-hour notice cutoff cancel_booking() enforces, checked
+    against the booking's *current* start time; only one reschedule ever,
+    to keep abuse/complexity bounded; and the new slot must pass the same
+    box-hours/blocked-date/overlap checks a fresh booking would, under a
+    box row lock (mirroring create_booking_row's own locking) so a
+    concurrent booking on the new slot can't race this. Does not check
+    permissions — callers decide who is allowed to invoke this for a given
+    booking."""
+    from .models import Booking
+
+    if booking.booking_status != 'Confirmed':
+        raise RescheduleError('Only confirmed bookings can be rescheduled.')
+
+    if booking.rescheduled_at is not None:
+        raise RescheduleError(
+            'This booking has already been rescheduled once. Please contact the venue, or cancel and create a new booking.'
+        )
+
+    booking_dt = datetime.combine(booking.date, time.fromisoformat(booking.start_time))
+    if settings.USE_TZ:
+        booking_dt = timezone.make_aware(booking_dt)
+    if timezone.now() > booking_dt - timedelta(hours=2):
+        raise RescheduleError('Rescheduling is not allowed within 2 hours of the booking time.')
+
+    if new_date < timezone.now().date():
+        raise RescheduleError('Cannot reschedule to a slot in the past.')
+
+    try:
+        end_time_str = compute_end_time_str(new_date, new_start_time_str, booking.duration)
+    except ValidationError as e:
+        reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+        raise RescheduleError(str(reason))
+
+    with transaction.atomic():
+        # Lock the box row, same as create_booking_row — a fresh booking
+        # landing on the new slot at the same moment must not be able to
+        # slip past this check.
+        box = Box.objects.select_for_update().get(pk=booking.box_id)
+
+        if box.blocked_dates.filter(date=new_date).exists():
+            raise RescheduleError(f"This facility is closed on {new_date}.")
+
+        if new_start_time_str < box.opening_time or end_time_str > box.closing_time:
+            raise RescheduleError(
+                f"This facility is only bookable between {box.opening_time} and {box.closing_time}."
+            )
+
+        conflicting = Booking.objects.filter(
+            box=box, date=new_date, booking_status__in=['Confirmed', 'Completed'],
+        ).exclude(pk=booking.pk)
+        if any(existing.overlaps(new_date, new_start_time_str, end_time_str) for existing in conflicting):
+            raise RescheduleError('This time slot overlaps with an existing booking.', status.HTTP_409_CONFLICT)
+
+        old_date, old_start_time = booking.date, booking.start_time
+
+        # Only ever set on the FIRST reschedule (guarded by the
+        # rescheduled_at is not None check above, this branch always fires
+        # here since reschedule is one-shot) — kept as an explicit guard
+        # anyway so the true original slot is never overwritten if this
+        # function's one-reschedule invariant is ever relaxed later.
+        if booking.original_date is None:
+            booking.original_date = booking.date
+            booking.original_start_time = booking.start_time
+
+        booking.date = new_date
+        booking.start_time = new_start_time_str
+        booking.end_time = end_time_str
+        booking.rescheduled_at = timezone.now()
+        booking.save()
+
+    # Notify whichever party didn't do the rescheduling — mirrors
+    # cancel_booking's own notify-the-other-party logic exactly.
+    customer_rescheduled_own_booking = rescheduled_by is not None and rescheduled_by.id == booking.user_id
+    if customer_rescheduled_own_booking:
+        notify(
+            booking.box.owner,
+            'Booking rescheduled by customer',
+            f"{booking.user.full_name or booking.user.email} moved their booking for {booking.box.name} "
+            f"from {old_date} at {old_start_time} to {booking.date} at {booking.start_time}.",
+        )
+    else:
+        notify(
+            booking.user,
+            'Your booking was rescheduled',
+            f"Your booking for {booking.box.name} was moved from {old_date} at {old_start_time} "
+            f"to {booking.date} at {booking.start_time}.",
+        )
+
+    logger.info(
+        "Booking #%s rescheduled by user #%s (box=%s %s %s -> %s %s)",
+        booking.id, rescheduled_by.id if rescheduled_by else None, booking.box_id,
+        old_date, old_start_time, booking.date, booking.start_time,
+    )
+    return booking
 
 
 def parse_time(time_str):
@@ -287,6 +402,16 @@ def create_booking_row(user, box_id, booking_date, start_time_str, duration_hour
 
         if box.status != 'approved':
             raise BookingWriteError("This facility is not available for booking yet.", status.HTTP_400_BAD_REQUEST)
+
+        # Defense-in-depth against a suspended owner: the public box listing
+        # already excludes boxes owned by an inactive owner (see
+        # PublicBoxViewSet), but this re-checks it here too in case a stale
+        # cached listing slips through or a client calls the booking API
+        # directly. An owner with no active account (including a box left
+        # ownerless by a hard-deleted owner, see AdminUserDeleteView) can't
+        # be a live venue to book.
+        if not box.owner_id or not box.owner.is_active:
+            raise BookingWriteError("This venue is temporarily unavailable for booking.", status.HTTP_400_BAD_REQUEST)
 
         if box.blocked_dates.filter(date=booking_date).exists():
             raise BookingWriteError(f"This facility is closed on {booking_date}.", status.HTTP_400_BAD_REQUEST)

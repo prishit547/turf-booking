@@ -4,6 +4,7 @@ import { MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
 import { useBox } from '../../context/BoxContext';
 import { MEDIA_BASE_URL } from '../../api';
 import { Modal, Button, Input } from '../ui';
+import LocationPickerMap from '../maps/LocationPickerMap';
 
 const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = null }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -372,28 +373,13 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
 
         {currentStep === 3 && (
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-            <Input
-              label="Location *"
-              value={formData.location}
-              onChange={(e) => handleChange('location', e.target.value)}
-              error={errors.location}
-              placeholder="e.g., Near Iscon Temple, SG Highway, Ahmedabad"
-            />
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label="Latitude"
-                type="number"
-                value={formData.latitude}
-                onChange={(e) => handleChange('latitude', e.target.value)}
-                placeholder="e.g., 23.0225"
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">Location *</label>
+              <LocationPickerMap
+                value={{ location: formData.location, latitude: formData.latitude, longitude: formData.longitude }}
+                onChange={(next) => setFormData(prev => ({ ...prev, ...next }))}
               />
-              <Input
-                label="Longitude"
-                type="number"
-                value={formData.longitude}
-                onChange={(e) => handleChange('longitude', e.target.value)}
-                placeholder="e.g., 72.5714"
-              />
+              {errors.location && <p className="text-sm text-danger">{errors.location}</p>}
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-3">Amenities *</label>

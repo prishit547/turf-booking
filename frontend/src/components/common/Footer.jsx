@@ -83,8 +83,15 @@ const Footer = () => {
           </ul>
         </div>
       </div>
-      <div className="border-t border-border px-4 py-5 text-center text-xs text-muted-foreground">
-        © {currentYear} BookMyBox. Play more, plan less.
+      <div className="border-t border-border px-4 py-5 text-xs text-muted-foreground">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-3 sm:flex-row sm:justify-between">
+          <span>© {currentYear} BookMyBox. Play more, plan less.</span>
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <Link to="/terms" className="hover:text-primary">Terms of Service</Link>
+            <Link to="/privacy" className="hover:text-primary">Privacy Policy</Link>
+            <Link to="/cancellation-policy" className="hover:text-primary">Cancellation Policy</Link>
+          </div>
+        </div>
       </div>
     </footer>
   )

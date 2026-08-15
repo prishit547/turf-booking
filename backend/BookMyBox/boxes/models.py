@@ -1,5 +1,7 @@
 # boxes/models.py
 
+from decimal import Decimal
+
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -148,6 +150,26 @@ class CommissionRate(models.Model):
 
     def __str__(self):
         return f"{self.owner.email} / {self.sport}: {self.rate}% from {self.effective_from}"
+
+
+class PlatformCommissionSetting(models.Model):
+    """Singleton: the platform-wide default commission percent, editable by
+    admins — see boxes/pricing.py::resolve_commission_rate(). Falls back to
+    settings.DEFAULT_COMMISSION_RATE if no row exists yet, same pattern as
+    rewards.ScratchCardAutoGrantSetting."""
+    default_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Percent, 0-100.")
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"Platform default commission: {self.default_rate}%"
+
+    @classmethod
+    def get_rate_fraction(cls):
+        row = cls.objects.first()
+        if row:
+            return row.default_rate / Decimal('100')
+        return Decimal(str(settings.DEFAULT_COMMISSION_RATE))
 
 
 class UserFavoriteBox(models.Model):

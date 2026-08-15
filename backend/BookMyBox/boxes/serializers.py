@@ -1,7 +1,15 @@
 # boxes/serializers.py
 
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
-from .models import Box, Review, BlockedDate, CommissionRate, PricingRule
+from .models import Box, Review, BlockedDate, CommissionRate, PlatformCommissionSetting, PricingRule
+
+
+class PlatformCommissionSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlatformCommissionSetting
+        fields = ['default_rate', 'updated_at', 'updated_by']
+        read_only_fields = ['updated_at', 'updated_by']
 
 
 class BlockedDateSerializer(serializers.ModelSerializer):
@@ -185,12 +193,28 @@ class AdminBoxSerializer(OwnerBoxSerializer):
     exposed to the public).
     """
     owner = serializers.SerializerMethodField()
+    # Surfaces the owner's identity/business verification state (see
+    # user.OwnerVerification) next to a box in the approval queue, so an
+    # admin reviewing a new listing can factor it into their decision.
+    # Deliberately informational only — approving/rejecting a box never
+    # checks this, since verification is a separate, optional, soft signal
+    # (see OwnerVerification's docstring for why box approval doesn't
+    # hard-gate on it).
+    owner_verification_status = serializers.SerializerMethodField()
 
     class Meta(OwnerBoxSerializer.Meta):
-        fields = OwnerBoxSerializer.Meta.fields + ['owner', 'submitted_at']
+        fields = OwnerBoxSerializer.Meta.fields + ['owner', 'submitted_at', 'owner_verification_status']
 
     def get_owner(self, obj):
         return obj.owner.email if obj.owner else None
+
+    def get_owner_verification_status(self, obj):
+        if not obj.owner:
+            return 'not_submitted'
+        try:
+            return obj.owner.owner_verification.verification_status
+        except ObjectDoesNotExist:
+            return 'not_submitted'
 
 
 class AdminReviewSerializer(serializers.ModelSerializer):

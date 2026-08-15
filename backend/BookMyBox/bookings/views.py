@@ -56,6 +56,15 @@ class BookingViewSet(viewsets.ModelViewSet):
         own_or_participant = Q(user=self.request.user) | Q(
             invites__invited_user=self.request.user, invites__status='accepted',
         )
+        # A box owner can retrieve/cancel a booking made *on their box* too
+        # (powers the Owner Bookings row -> /booking/:id detail view), but
+        # this widening deliberately stays scoped to retrieve/cancel only —
+        # NOT list. Widening list would silently merge "bookings I made as
+        # a customer" with "bookings on my box" for any owner who also
+        # books elsewhere as a customer, which would be a real correctness
+        # bug, not just noise.
+        if self.action in ('retrieve', 'cancel', 'reschedule'):
+            own_or_participant |= Q(box__owner=self.request.user)
         return self.queryset.filter(own_or_participant).distinct().prefetch_related('invites')
 
     def create(self, request, *args, **kwargs):
@@ -332,12 +341,51 @@ class BookingViewSet(viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         booking = self.get_object()
 
-        if booking.user != request.user and request.user.role != 'admin':
+        if (
+            booking.user != request.user
+            and request.user.role != 'admin'
+            and booking.box.owner_id != request.user.id
+        ):
             return Response({'detail': 'You do not have permission to cancel this booking.'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
             cancel_booking(booking, cancelled_by=request.user, reason=request.data.get('reason'))
         except CancellationError as e:
+            return Response({'detail': e.detail}, status=e.status_code)
+
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def reschedule(self, request, pk=None):
+        """Move a Confirmed booking to a new date/start_time — box and
+        duration stay fixed, so total_amount never changes. Same permission
+        shape as `cancel` above (the booking's own customer, an admin, or
+        the box's owner), and same get_object() scoping widened for this
+        action in get_queryset()."""
+        booking = self.get_object()
+
+        if (
+            booking.user != request.user
+            and request.user.role != 'admin'
+            and booking.box.owner_id != request.user.id
+        ):
+            return Response({'detail': 'You do not have permission to reschedule this booking.'}, status=status.HTTP_403_FORBIDDEN)
+
+        date_str = request.data.get('date')
+        start_time_str = request.data.get('start_time') or request.data.get('startTime')
+        if not date_str or not start_time_str:
+            return Response({'detail': 'date and start_time are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            new_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            services.reschedule_booking(
+                booking, rescheduled_by=request.user, new_date=new_date, new_start_time_str=start_time_str,
+            )
+        except services.RescheduleError as e:
             return Response({'detail': e.detail}, status=e.status_code)
 
         serializer = self.get_serializer(booking)

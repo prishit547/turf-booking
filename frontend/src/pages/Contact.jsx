@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Phone, MapPin, Clock, Send, MessageCircle, Sparkles, ArrowRight, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
-import emailjs from '@emailjs/browser';
+import { api } from '../api';
 import { animations, useScrollAnimation } from '../utils/animations';
 import { Button, Card, Input, Select, Badge } from '../components/ui';
 
@@ -104,19 +104,15 @@ const Contact = () => {
     setIsSubmitting(true);
     setSubmitMessage(''); // Clear previous messages before new attempt
 
-    // EmailJS Service ID, Template ID, and Public Key from environment variables
-    const serviceID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
-    const templateID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
-    const publicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
-
-    if (!serviceID || !templateID || !publicKey) {
-      setSubmitMessage('Contact form is not configured. Please try again later.');
-      setIsSubmitting(false);
-      return;
-    }
-
     try {
-      await emailjs.sendForm(serviceID, templateID, e.target, publicKey);
+      await api.post('/contact/', {
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        subject: formData.subject,
+        message: formData.message,
+        inquiry_type: formData.type,
+      });
       setSubmitMessage('Message sent successfully! We\'ll get back to you soon.');
       // Clear form data on successful submission
       setFormData({
@@ -129,7 +125,7 @@ const Contact = () => {
       });
       setErrors({}); // Clear all validation errors on success
     } catch (error) {
-      console.error('EmailJS error:', error);
+      console.error('Contact form submit error:', error.response?.data || error.message);
       setSubmitMessage('Failed to send message. Please try again later.');
     } finally {
       setIsSubmitting(false);

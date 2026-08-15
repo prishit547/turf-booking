@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus, Gift } from 'lucide-react'
+import { Users, Calendar, DollarSign, TrendingUp, Search, Edit, Eye, Shield, ShieldCheck, AlertTriangle, CheckCircle, X, Clock, BarChart3, FileText, Star, Trash2, Wallet, Ticket, Plus, Gift, UserPlus, XCircle, History } from 'lucide-react'
 import { Line, Doughnut, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -23,11 +23,23 @@ import { useChartTheme } from '../utils/chartTheme'
 import { useDebounce } from '../hooks/useDebounce'
 import AdminRewardsTab from '../components/rewards/AdminRewardsTab'
 import AdminCommissionTab from '../components/commission/AdminCommissionTab'
+import AdminVerificationTab, { OwnerVerificationBadge } from '../components/verification/AdminVerificationTab'
+import AdminActivityLogTab from '../components/admin/AdminActivityLogTab'
 
 const USERS_PAGE_SIZE = 20
 const BOOKINGS_PAGE_SIZE = 20
 const REVIEWS_PAGE_SIZE = 20
 const PAYOUTS_PAGE_SIZE = 20
+
+// Matches Payout.PAYMENT_METHOD_CHOICES (owner_dashboard/models.py). Rows
+// recorded before this field existed have payment_method === '' and fall
+// back to '—' wherever this map is consulted.
+const PAYMENT_METHOD_LABELS = {
+  bank_transfer: 'Bank transfer',
+  upi: 'UPI',
+  cash: 'Cash',
+  other: 'Other',
+}
 
 ChartJS.register(
   CategoryScale,
@@ -50,6 +62,7 @@ const ChartEmptyState = ({ label = 'No data yet' }) => (
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'approvals', label: 'Box Approvals', icon: CheckCircle },
+  { id: 'verifications', label: 'Verifications', icon: ShieldCheck },
   { id: 'users', label: 'Users', icon: Users },
   { id: 'bookings', label: 'Bookings', icon: Calendar },
   { id: 'reviews', label: 'Reviews', icon: Star },
@@ -59,12 +72,21 @@ const TABS = [
   { id: 'commission', label: 'Commission', icon: DollarSign },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'reports', label: 'Reports', icon: FileText },
+  { id: 'activity-log', label: 'Activity Log', icon: History },
 ]
 
 const ROLE_TONE = { Owner: 'secondary', Admin: 'danger', User: 'primary' }
 const USER_STATUS_TONE = { Active: 'success', Inactive: 'danger', Suspended: 'danger' }
-const BOOKING_STATUS_TONE = { Confirmed: 'success', Completed: 'primary', Cancelled: 'danger' }
+const BOOKING_STATUS_TONE = { Confirmed: 'success', Completed: 'primary', Cancelled: 'danger', 'No-show': 'warning' }
 const ACTIVITY_TONE = { approval: 'warning', user: 'primary', booking: 'success' }
+
+// Shared shape for both the Edit User and New User modals — keeps the two
+// forms' fields (and handlers) in lockstep. New-user adds role + password.
+const EMPTY_USER_FORM = {
+  first_name: '', last_name: '', email: '', phone: '', business_name: '', location: '',
+  address: '', date_of_birth: '', bio: '',
+}
+const EMPTY_NEW_USER_FORM = { ...EMPTY_USER_FORM, role: 'user', password: '' }
 
 const initial = (value) => (value || '?').charAt(0).toUpperCase()
 
@@ -132,7 +154,31 @@ const AdminDashboard = () => {
   const [editingUser, setEditingUser] = useState(null)
   const [editRole, setEditRole] = useState('user')
   const [editActive, setEditActive] = useState(true)
+  const [editForm, setEditForm] = useState(EMPTY_USER_FORM)
+  const [loadingEditProfile, setLoadingEditProfile] = useState(false)
   const [savingUser, setSavingUser] = useState(false)
+
+  // New user creation — same field set as the edit modal, plus role/password.
+  const [showUserCreateModal, setShowUserCreateModal] = useState(false)
+  const [newUserForm, setNewUserForm] = useState(EMPTY_NEW_USER_FORM)
+  const [creatingUser, setCreatingUser] = useState(false)
+
+  // Delete user — a preview fetch (counts of what a hard delete touches)
+  // gates a type-the-email-to-confirm modal.
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deletePreview, setDeletePreview] = useState(null)
+  const [loadingDeletePreview, setLoadingDeletePreview] = useState(false)
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('')
+  const [deletingUser, setDeletingUser] = useState(false)
+
+  // Bookings tab: row-click detail modal, rendered straight from the
+  // already-fetched row (AdminBookingSerializer already carries every
+  // field the modal needs — no extra network call). Cancel reuses the
+  // same /bookings/<id>/cancel/ endpoint the customer/owner flows use.
+  const [selectedBookingDetail, setSelectedBookingDetail] = useState(null)
+  const [showBookingCancelPrompt, setShowBookingCancelPrompt] = useState(false)
+  const [bookingCancelReason, setBookingCancelReason] = useState('')
+  const [cancellingBooking, setCancellingBooking] = useState(false)
 
   // Reviews tab: paginated moderation list against /boxes/admin/reviews/.
   const [reviewSearch, setReviewSearch] = useState('')
@@ -148,6 +194,9 @@ const AdminDashboard = () => {
   const [payoutTarget, setPayoutTarget] = useState(null)
   const [payoutAmount, setPayoutAmount] = useState('')
   const [payoutNote, setPayoutNote] = useState('')
+  const [payoutPaymentMethod, setPayoutPaymentMethod] = useState('bank_transfer')
+  const [payoutTransactionId, setPayoutTransactionId] = useState('')
+  const [payoutFormError, setPayoutFormError] = useState('')
   const [recordingPayout, setRecordingPayout] = useState(false)
 
   // Payout schedules — one per owner, admin-configurable cadence for
@@ -354,20 +403,30 @@ const AdminDashboard = () => {
 
   const openRecordPayoutModal = (owner) => {
     setPayoutTarget(owner)
-    setPayoutAmount('')
+    setPayoutAmount(String(owner.balance_due))
     setPayoutNote('')
+    setPayoutPaymentMethod('bank_transfer')
+    setPayoutTransactionId('')
+    setPayoutFormError('')
   }
 
   const handleRecordPayout = async () => {
-    if (!payoutTarget || !payoutAmount || Number(payoutAmount) <= 0) return
+    if (!payoutTarget) return
+    if (!payoutAmount || Number(payoutAmount) <= 0) {
+      setPayoutFormError('Enter an amount greater than ₹0')
+      return
+    }
+    setPayoutFormError('')
     setRecordingPayout(true)
     try {
       await api.post('/owner_dashboard/payouts/', {
         owner: payoutTarget.owner_id, amount: payoutAmount, note: payoutNote,
+        payment_method: payoutPaymentMethod, transaction_id: payoutTransactionId,
       })
       toast.success('Payout recorded')
       setPayoutTarget(null)
       fetchPayoutsBalance()
+      fetchPayoutHistory()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to record payout')
     } finally {
@@ -427,26 +486,183 @@ const AdminDashboard = () => {
     setShowUserViewModal(true)
   }
 
-  const openEditUserModal = (u) => {
+  // Opens instantly with what the Users-tab row already has, then fills in
+  // the UserProfile-only fields (address/date_of_birth/bio) once the fresh
+  // fetch resolves — those aren't on UserSerializer's list-row shape.
+  const openEditUserModal = async (u) => {
     setEditingUser(u)
     setEditRole(u.role)
     setEditActive(u.is_active)
+    setEditForm({
+      first_name: u.first_name || '', last_name: u.last_name || '', email: u.email || '',
+      phone: u.phone || '', business_name: u.business_name || '', location: u.location || '',
+      address: '', date_of_birth: '', bio: '',
+    })
     setShowUserEditModal(true)
+    setLoadingEditProfile(true)
+    try {
+      const response = await api.get(`/user_profile/${u.id}/`)
+      setEditForm((f) => ({
+        ...f,
+        address: response.data.address || '',
+        date_of_birth: response.data.date_of_birth || '',
+        bio: response.data.bio || '',
+      }))
+    } catch (err) {
+      console.error('Error fetching user profile:', err)
+      toast.error("Couldn't load this user's extended profile fields — role/status/basic info are still editable")
+    } finally {
+      setLoadingEditProfile(false)
+    }
   }
 
   const handleSaveUser = async () => {
     if (!editingUser) return
     setSavingUser(true)
     try {
-      await api.patch(`/user/users/${editingUser.id}/admin-update/`, { role: editRole, is_active: editActive })
+      await api.patch(`/user/users/${editingUser.id}/admin-update/`, {
+        role: editRole,
+        is_active: editActive,
+        first_name: editForm.first_name,
+        last_name: editForm.last_name,
+        email: editForm.email,
+        phone: editForm.phone,
+        business_name: editForm.business_name,
+        location: editForm.location,
+        address: editForm.address,
+        date_of_birth: editForm.date_of_birth || null,
+        bio: editForm.bio,
+      })
       toast.success('User updated')
       setShowUserEditModal(false)
       setEditingUser(null)
       fetchUsers()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to update user')
+      const errors = err.response?.data
+      const message = errors?.detail
+        || (errors && typeof errors === 'object' ? Object.values(errors).flat().join(' ') : null)
+        || 'Failed to update user'
+      toast.error(message)
     } finally {
       setSavingUser(false)
+    }
+  }
+
+  const openCreateUserModal = () => {
+    setNewUserForm(EMPTY_NEW_USER_FORM)
+    setShowUserCreateModal(true)
+  }
+
+  const handleCreateUser = async () => {
+    if (!newUserForm.email.trim() || !newUserForm.first_name.trim()) {
+      toast.error('Email and first name are required.')
+      return
+    }
+    setCreatingUser(true)
+    try {
+      await api.post('/user/users/create/', {
+        email: newUserForm.email.trim(),
+        first_name: newUserForm.first_name.trim(),
+        last_name: newUserForm.last_name.trim(),
+        phone: newUserForm.phone,
+        role: newUserForm.role,
+        business_name: newUserForm.business_name,
+        location: newUserForm.location,
+        password: newUserForm.password || '',
+      })
+      toast.success(
+        newUserForm.password
+          ? 'User created'
+          : "User created — they've been emailed a link to set their own password"
+      )
+      setShowUserCreateModal(false)
+      fetchUsers()
+    } catch (err) {
+      const errors = err.response?.data
+      const message = errors?.detail
+        || (errors && typeof errors === 'object' ? Object.values(errors).flat().join(' ') : null)
+        || 'Failed to create user'
+      toast.error(message)
+    } finally {
+      setCreatingUser(false)
+    }
+  }
+
+  // Delete preview fetch gates the confirmation modal — the counts it
+  // returns are what the modal's copy is built from, so the two can never
+  // drift out of sync with the real cascade behavior.
+  const openDeleteUserModal = async (u) => {
+    setDeleteTarget(u)
+    setDeletePreview(null)
+    setDeleteConfirmEmail('')
+    setLoadingDeletePreview(true)
+    try {
+      const response = await api.get(`/user/users/${u.id}/delete-preview/`)
+      setDeletePreview(response.data)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load delete preview')
+      setDeleteTarget(null)
+    } finally {
+      setLoadingDeletePreview(false)
+    }
+  }
+
+  const closeDeleteUserModal = () => {
+    setDeleteTarget(null)
+    setDeletePreview(null)
+    setDeleteConfirmEmail('')
+  }
+
+  const deleteConfirmMatches = !!deleteTarget
+    && deleteConfirmEmail.trim().toLowerCase() === deleteTarget.email.toLowerCase()
+
+  const handleConfirmDeleteUser = async () => {
+    if (!deleteTarget || !deleteConfirmMatches) return
+    setDeletingUser(true)
+    try {
+      await api.delete(`/user/users/${deleteTarget.id}/delete/`)
+      toast.success('User permanently deleted')
+      closeDeleteUserModal()
+      fetchUsers()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete user')
+    } finally {
+      setDeletingUser(false)
+    }
+  }
+
+  const openBookingCancelPrompt = () => {
+    setBookingCancelReason('')
+    setShowBookingCancelPrompt(true)
+  }
+
+  // Patches the row in bookingsResult (and the open detail modal) in place
+  // instead of a full re-fetch — same philosophy as the coupon/review
+  // handlers above.
+  const handleConfirmCancelBooking = async () => {
+    if (!selectedBookingDetail || !bookingCancelReason.trim()) return
+    setCancellingBooking(true)
+    try {
+      const response = await api.post(`/bookings/${selectedBookingDetail.id}/cancel/`, {
+        reason: bookingCancelReason.trim(),
+      })
+      const updated = response.data
+      const patch = {
+        booking_status: updated.booking_status,
+        payment_status: updated.payment_status,
+        cancellation_reason: updated.cancellation_reason,
+      }
+      setBookingsResult((prev) => ({
+        ...prev,
+        results: prev.results.map((b) => (b.id === selectedBookingDetail.id ? { ...b, ...patch } : b)),
+      }))
+      setSelectedBookingDetail((prev) => (prev ? { ...prev, ...patch } : prev))
+      toast.success('Booking cancelled — the refund has been processed')
+      setShowBookingCancelPrompt(false)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to cancel booking')
+    } finally {
+      setCancellingBooking(false)
     }
   }
 
@@ -932,7 +1148,10 @@ const AdminDashboard = () => {
                       <div className="p-6 flex flex-col flex-1">
                         <div className="mb-4">
                           <h4 className="font-display font-semibold text-lg text-foreground">{box.name}</h4>
-                          <p className="text-sm text-muted-foreground">by {box.owner}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-sm text-muted-foreground">by {box.owner}</p>
+                            <OwnerVerificationBadge status={box.owner_verification_status} />
+                          </div>
                         </div>
 
                         <div className="space-y-3 mb-5 text-sm">
@@ -996,6 +1215,8 @@ const AdminDashboard = () => {
             </div>
           )}
 
+          {activeTab === 'verifications' && <AdminVerificationTab />}
+
           {/* Users */}
           {activeTab === 'users' && (
             <div className="space-y-6">
@@ -1016,6 +1237,9 @@ const AdminDashboard = () => {
                     <option value="owner">Owner</option>
                     <option value="admin">Admin</option>
                   </Select>
+                  <Button icon={<UserPlus size={16} />} onClick={openCreateUserModal}>
+                    New user
+                  </Button>
                 </div>
               </div>
 
@@ -1072,11 +1296,20 @@ const AdminDashboard = () => {
                                 <button
                                   onClick={() => openEditUserModal(u)}
                                   disabled={isSelf}
-                                  title={isSelf ? "You can't edit your own role/status" : 'Edit role/status'}
-                                  aria-label="Edit role and status"
+                                  title={isSelf ? "You can't edit your own account" : 'Edit user'}
+                                  aria-label="Edit user"
                                   className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                 >
                                   <Edit size={16} />
+                                </button>
+                                <button
+                                  onClick={() => openDeleteUserModal(u)}
+                                  disabled={isSelf}
+                                  title={isSelf ? "You can't delete your own account" : 'Delete user permanently'}
+                                  aria-label="Delete user"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                                >
+                                  <Trash2 size={16} />
                                 </button>
                               </div>
                             </td>
@@ -1115,6 +1348,7 @@ const AdminDashboard = () => {
                     <option value="Confirmed">Confirmed</option>
                     <option value="Completed">Completed</option>
                     <option value="Cancelled">Cancelled</option>
+                    <option value="No-show">No-show</option>
                   </Select>
                   <input
                     type="date"
@@ -1156,7 +1390,11 @@ const AdminDashboard = () => {
                           </td>
                         </tr>
                       ) : bookingsResult.results.map((booking) => (
-                        <tr key={booking.id} className="hover:bg-elevated/60 transition-colors">
+                        <tr
+                          key={booking.id}
+                          onClick={() => setSelectedBookingDetail(booking)}
+                          className="hover:bg-elevated/60 transition-colors cursor-pointer"
+                        >
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
@@ -1340,16 +1578,16 @@ const AdminDashboard = () => {
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
-                        {['Owner', 'Amount', 'Source', 'Note', 'Date'].map((h) => (
+                        {['Owner', 'Amount', 'Source', 'Payment method', 'Transaction ID', 'Note', 'Date'].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {payoutHistoryLoading ? (
-                        <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">Loading history...</td></tr>
+                        <tr><td colSpan={7} className="text-center py-10 text-muted-foreground">Loading history...</td></tr>
                       ) : payoutHistory.results.length === 0 ? (
-                        <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td></tr>
+                        <tr><td colSpan={7} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td></tr>
                       ) : payoutHistory.results.map((payout) => (
                         <tr key={payout.id} className="hover:bg-elevated/60 transition-colors">
                           <td className="py-3 px-4 text-foreground whitespace-nowrap">{payout.owner_email}</td>
@@ -1359,6 +1597,8 @@ const AdminDashboard = () => {
                               {payout.source === 'scheduled' ? 'Scheduled' : 'Manual'}
                             </Badge>
                           </td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{PAYMENT_METHOD_LABELS[payout.payment_method] || '—'}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{payout.transaction_id || '—'}</td>
                           <td className="py-3 px-4 text-muted-foreground">{payout.note || '—'}</td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{new Date(payout.created_at).toLocaleDateString()}</td>
                         </tr>
@@ -1594,6 +1834,8 @@ const AdminDashboard = () => {
               </div>
             </div>
           )}
+
+          {activeTab === 'activity-log' && <AdminActivityLogTab />}
         </div>
       </div>
 
@@ -1701,12 +1943,14 @@ const AdminDashboard = () => {
         )}
       </Modal>
 
-      {/* Edit User Modal — role + suspend/reactivate. */}
+      {/* Edit User Modal — role/status plus core User + UserProfile fields
+          in one place. The profile-only fields (address/DOB/bio) populate
+          asynchronously after openEditUserModal's extra fetch resolves. */}
       <Modal
         isOpen={showUserEditModal}
         onClose={() => { setShowUserEditModal(false); setEditingUser(null) }}
         title="Edit user"
-        size="sm"
+        size="lg"
         footer={(
           <>
             <Button variant="outline" onClick={() => { setShowUserEditModal(false); setEditingUser(null) }}>Cancel</Button>
@@ -1718,20 +1962,328 @@ const AdminDashboard = () => {
           <div className="space-y-4">
             <p className="text-muted-foreground text-sm">
               Editing <span className="font-medium text-foreground">{editingUser.full_name || editingUser.email}</span>
+              {loadingEditProfile && ' — loading full profile...'}
             </p>
-            <Select label="Role" value={editRole} onChange={(e) => setEditRole(e.target.value)}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Select label="Role" value={editRole} onChange={(e) => setEditRole(e.target.value)}>
+                <option value="user">User</option>
+                <option value="owner">Owner</option>
+                <option value="admin">Admin</option>
+              </Select>
+              <Select
+                label="Status"
+                value={editActive ? 'active' : 'suspended'}
+                onChange={(e) => setEditActive(e.target.value === 'active')}
+              >
+                <option value="active">Active</option>
+                <option value="suspended">Suspended (cannot log in)</option>
+              </Select>
+              <Input
+                label="First name"
+                value={editForm.first_name}
+                onChange={(e) => setEditForm((f) => ({ ...f, first_name: e.target.value }))}
+              />
+              <Input
+                label="Last name"
+                value={editForm.last_name}
+                onChange={(e) => setEditForm((f) => ({ ...f, last_name: e.target.value }))}
+              />
+              <Input
+                label="Email"
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+              />
+              <Input
+                label="Phone"
+                value={editForm.phone}
+                onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+              />
+              <Input
+                label="Business name"
+                value={editForm.business_name}
+                onChange={(e) => setEditForm((f) => ({ ...f, business_name: e.target.value }))}
+                placeholder="Owners only"
+              />
+              <Input
+                label="Location"
+                value={editForm.location}
+                onChange={(e) => setEditForm((f) => ({ ...f, location: e.target.value }))}
+              />
+              <Input
+                label="Date of birth"
+                type="date"
+                value={editForm.date_of_birth || ''}
+                onChange={(e) => setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))}
+              />
+              <Input
+                label="Address"
+                value={editForm.address}
+                onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="edit-user-bio" className="block text-sm font-medium text-foreground">Bio</label>
+              <textarea
+                id="edit-user-bio"
+                value={editForm.bio}
+                onChange={(e) => setEditForm((f) => ({ ...f, bio: e.target.value }))}
+                rows={2}
+                className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* New User Modal — same field set as Edit, plus role + an optional
+          password (blank => a password-setup email is queued instead). */}
+      <Modal
+        isOpen={showUserCreateModal}
+        onClose={() => setShowUserCreateModal(false)}
+        title="New user"
+        size="lg"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setShowUserCreateModal(false)}>Cancel</Button>
+            <Button
+              onClick={handleCreateUser}
+              loading={creatingUser}
+              disabled={!newUserForm.email.trim() || !newUserForm.first_name.trim()}
+            >
+              Create user
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="First name"
+              value={newUserForm.first_name}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, first_name: e.target.value }))}
+            />
+            <Input
+              label="Last name"
+              value={newUserForm.last_name}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, last_name: e.target.value }))}
+            />
+            <Input
+              label="Email"
+              type="email"
+              value={newUserForm.email}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, email: e.target.value }))}
+            />
+            <Input
+              label="Phone"
+              value={newUserForm.phone}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, phone: e.target.value }))}
+            />
+            <Select
+              label="Role"
+              value={newUserForm.role}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, role: e.target.value }))}
+            >
               <option value="user">User</option>
               <option value="owner">Owner</option>
               <option value="admin">Admin</option>
             </Select>
-            <Select
-              label="Status"
-              value={editActive ? 'active' : 'suspended'}
-              onChange={(e) => setEditActive(e.target.value === 'active')}
+            <Input
+              label="Business name"
+              value={newUserForm.business_name}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, business_name: e.target.value }))}
+              placeholder="Required for owners"
+            />
+            <Input
+              label="Location"
+              value={newUserForm.location}
+              onChange={(e) => setNewUserForm((f) => ({ ...f, location: e.target.value }))}
+            />
+          </div>
+          <Input
+            label="Password (optional)"
+            type="password"
+            value={newUserForm.password}
+            onChange={(e) => setNewUserForm((f) => ({ ...f, password: e.target.value }))}
+            hint="Leave blank to email the user a password-setup link (recommended)."
+          />
+        </div>
+      </Modal>
+
+      {/* Delete User Modal — real hard delete. The counts below come
+          straight from AdminUserDeletePreviewView, matching the actual
+          verified FK on_delete behavior: bookings/reviews/payouts/
+          commission-overrides CASCADE (permanently erased), but an owner's
+          boxes are SET_NULL (they survive, ownerless, still live/bookable —
+          NOT deleted, said explicitly so this isn't misread as "safe"). */}
+      <Modal
+        isOpen={!!deleteTarget}
+        onClose={closeDeleteUserModal}
+        title="Delete user permanently"
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={closeDeleteUserModal}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmDeleteUser}
+              loading={deletingUser}
+              disabled={!deleteConfirmMatches || loadingDeletePreview}
             >
-              <option value="active">Active</option>
-              <option value="suspended">Suspended (cannot log in)</option>
-            </Select>
+              Delete permanently
+            </Button>
+          </>
+        )}
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            <p className="text-foreground">
+              This permanently deletes{' '}
+              <span className="font-semibold">{deleteTarget.full_name || deleteTarget.email}</span> ({deleteTarget.email}).
+              This action cannot be undone.
+            </p>
+
+            {loadingDeletePreview ? (
+              <p className="text-muted-foreground text-sm">Checking what this affects...</p>
+            ) : deletePreview && (
+              <ul className="space-y-2 text-sm rounded-lg border border-border p-4 bg-elevated">
+                {deletePreview.bookings_as_customer > 0 && (
+                  <li className="text-foreground">
+                    <span className="font-medium">{deletePreview.bookings_as_customer}</span> booking{deletePreview.bookings_as_customer === 1 ? '' : 's'} will be <span className="text-danger font-medium">permanently deleted</span>.
+                  </li>
+                )}
+                {deletePreview.reviews > 0 && (
+                  <li className="text-foreground">
+                    <span className="font-medium">{deletePreview.reviews}</span> review{deletePreview.reviews === 1 ? '' : 's'} will be <span className="text-danger font-medium">permanently deleted</span>.
+                  </li>
+                )}
+                {deleteTarget.role === 'owner' && (
+                  <>
+                    {deletePreview.boxes_owned > 0 && (
+                      <li className="text-warning">
+                        <span className="font-medium">{deletePreview.boxes_owned}</span> box{deletePreview.boxes_owned === 1 ? '' : 'es'} will <span className="font-medium">remain live and bookable but become ownerless</span> — nobody will be able to manage {deletePreview.boxes_owned === 1 ? 'it' : 'them'}. They are not deleted.
+                      </li>
+                    )}
+                    {deletePreview.payout_records > 0 && (
+                      <li className="text-danger font-medium">
+                        {deletePreview.payout_records} payout record{deletePreview.payout_records === 1 ? '' : 's'} (₹{deletePreview.payout_total_amount.toLocaleString()} total) will be permanently erased — this is historical financial data.
+                      </li>
+                    )}
+                    {deletePreview.commission_rate_overrides > 0 && (
+                      <li className="text-foreground">
+                        <span className="font-medium">{deletePreview.commission_rate_overrides}</span> commission-rate override{deletePreview.commission_rate_overrides === 1 ? '' : 's'} will be erased — future bookings on their boxes will fall back to the platform default rate.
+                      </li>
+                    )}
+                  </>
+                )}
+                {deletePreview.bookings_as_customer === 0 && deletePreview.reviews === 0
+                  && !deletePreview.boxes_owned && !deletePreview.payout_records && !deletePreview.commission_rate_overrides && (
+                  <li className="text-muted-foreground">No related bookings, reviews, boxes, or payout records were found for this account.</li>
+                )}
+              </ul>
+            )}
+
+            <div className="space-y-1.5">
+              <label htmlFor="delete-confirm-email" className="block text-sm font-medium text-foreground">
+                Type <span className="font-mono text-danger">{deleteTarget.email}</span> to confirm
+              </label>
+              <Input
+                id="delete-confirm-email"
+                value={deleteConfirmEmail}
+                onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+                placeholder={deleteTarget.email}
+                autoComplete="off"
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Booking Detail Modal — renders straight from the already-fetched
+          row (AdminBookingSerializer carries every field this needs), no
+          extra network call. */}
+      <Modal
+        isOpen={!!selectedBookingDetail}
+        onClose={() => setSelectedBookingDetail(null)}
+        title="Booking details"
+        size="md"
+        footer={selectedBookingDetail?.booking_status === 'Confirmed' ? (
+          <>
+            <Button variant="outline" onClick={() => setSelectedBookingDetail(null)}>Close</Button>
+            <Button variant="danger" icon={<XCircle size={16} />} onClick={openBookingCancelPrompt}>
+              Cancel &amp; refund
+            </Button>
+          </>
+        ) : (
+          <Button variant="outline" onClick={() => setSelectedBookingDetail(null)}>Close</Button>
+        )}
+      >
+        {selectedBookingDetail && (
+          <dl className="space-y-3 text-sm">
+            {[
+              ['Customer', selectedBookingDetail.booking_source === 'owner_manual'
+                ? (selectedBookingDetail.customer_name || 'Walk-in')
+                : selectedBookingDetail.user_name],
+              ['Email', selectedBookingDetail.user_email || '—'],
+              ['Phone', selectedBookingDetail.customer_phone_display || selectedBookingDetail.customer_phone || '—'],
+              ['Box', selectedBookingDetail.box_name],
+              ['Owner', selectedBookingDetail.owner_email || '—'],
+              ['Date', selectedBookingDetail.date],
+              ['Time', `${selectedBookingDetail.start_time} – ${selectedBookingDetail.end_time}`],
+              ['Amount', `₹${selectedBookingDetail.total_amount}`],
+              ['Commission', `₹${selectedBookingDetail.commission}`],
+              ['Booking status', selectedBookingDetail.booking_status],
+              ['Payment status', selectedBookingDetail.payment_status],
+              ['Source', selectedBookingDetail.booking_source === 'owner_manual' ? 'Owner (walk-in/manual)' : 'Online'],
+              ['Booked at', formatDate(selectedBookingDetail.created_at)],
+              ...(selectedBookingDetail.cancellation_reason
+                ? [['Cancellation reason', selectedBookingDetail.cancellation_reason]]
+                : []),
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between items-start gap-4">
+                <dt className="text-muted-foreground shrink-0">{label}</dt>
+                <dd className="font-medium text-foreground text-right">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </Modal>
+
+      {/* Cancel-booking reason prompt, opened from the detail modal above. */}
+      <Modal
+        isOpen={showBookingCancelPrompt}
+        onClose={() => { setShowBookingCancelPrompt(false); setBookingCancelReason(''); }}
+        title="Cancel this booking"
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => { setShowBookingCancelPrompt(false); setBookingCancelReason(''); }}>Back</Button>
+            <Button variant="danger" onClick={handleConfirmCancelBooking} loading={cancellingBooking} disabled={!bookingCancelReason.trim()}>
+              Cancel booking
+            </Button>
+          </>
+        )}
+      >
+        {selectedBookingDetail && (
+          <div className="space-y-4">
+            <p className="text-muted-foreground">
+              Cancel this booking for{' '}
+              <span className="font-semibold text-foreground">{selectedBookingDetail.box_name}</span> on{' '}
+              {selectedBookingDetail.date} at {selectedBookingDetail.start_time}? The customer will be refunded and notified.
+            </p>
+            <div className="space-y-1.5">
+              <label htmlFor="admin-booking-cancel-reason" className="block text-sm font-medium text-foreground">
+                Reason (required — shown to the customer)
+              </label>
+              <textarea
+                id="admin-booking-cancel-reason"
+                value={bookingCancelReason}
+                onChange={(e) => setBookingCancelReason(e.target.value)}
+                rows={3}
+                className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+                placeholder="e.g. Facility closed for maintenance"
+              />
+            </div>
           </div>
         )}
       </Modal>
@@ -1767,7 +2319,7 @@ const AdminDashboard = () => {
         footer={(
           <>
             <Button variant="outline" onClick={() => setPayoutTarget(null)}>Cancel</Button>
-            <Button onClick={handleRecordPayout} loading={recordingPayout} disabled={!payoutAmount || Number(payoutAmount) <= 0}>
+            <Button onClick={handleRecordPayout} loading={recordingPayout}>
               Record payout
             </Button>
           </>
@@ -1779,14 +2331,66 @@ const AdminDashboard = () => {
               Recording a payout to <span className="font-medium text-foreground">{payoutTarget.owner_name}</span>.
               Current balance due: <span className="font-medium text-foreground">₹{payoutTarget.balance_due.toLocaleString()}</span>.
             </p>
+
+            {/* Read-only — only the owner edits their own payout details (Owner Dashboard's
+                Payouts tab). Shown here so the admin knows where the money should actually
+                go before recording it; absence never blocks recording the payout. */}
+            <div className="p-3 rounded-lg bg-elevated border border-border space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payout destination on file</p>
+              {payoutTarget.payout_details && (payoutTarget.payout_details.upi_id || payoutTarget.payout_details.bank_account_number) ? (
+                <div className="text-sm space-y-0.5">
+                  {payoutTarget.payout_details.account_holder_name && (
+                    <p className="text-foreground font-medium">{payoutTarget.payout_details.account_holder_name}</p>
+                  )}
+                  {payoutTarget.payout_details.bank_account_number && payoutTarget.payout_details.ifsc_code && (
+                    <p className="text-muted-foreground">
+                      Bank: {payoutTarget.payout_details.bank_account_number} · IFSC {payoutTarget.payout_details.ifsc_code}
+                    </p>
+                  )}
+                  {payoutTarget.payout_details.upi_id && (
+                    <p className="text-muted-foreground">UPI: {payoutTarget.payout_details.upi_id}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+                  <AlertTriangle size={14} className="text-warning shrink-0" />
+                  No payout details on file for this owner yet.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <Input
+                label="Amount (₹)"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={payoutAmount}
+                onChange={(e) => { setPayoutAmount(e.target.value); if (payoutFormError) setPayoutFormError('') }}
+                placeholder={String(payoutTarget.balance_due)}
+              />
+              {payoutFormError && <p className="text-sm text-danger mt-1.5">{payoutFormError}</p>}
+              {!payoutFormError && payoutAmount && Number(payoutAmount) > payoutTarget.balance_due && (
+                <p className="text-sm text-warning mt-1.5">
+                  This exceeds the current balance due (₹{payoutTarget.balance_due.toLocaleString()}) — recording it anyway as an overpayment correction.
+                </p>
+              )}
+            </div>
+            <Select
+              label="Payment method"
+              value={payoutPaymentMethod}
+              onChange={(e) => setPayoutPaymentMethod(e.target.value)}
+            >
+              <option value="bank_transfer">Bank transfer</option>
+              <option value="upi">UPI</option>
+              <option value="cash">Cash</option>
+              <option value="other">Other</option>
+            </Select>
             <Input
-              label="Amount (₹)"
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={payoutAmount}
-              onChange={(e) => setPayoutAmount(e.target.value)}
-              placeholder={String(payoutTarget.balance_due)}
+              label="Transaction ID (optional)"
+              value={payoutTransactionId}
+              onChange={(e) => setPayoutTransactionId(e.target.value)}
+              placeholder="e.g. UTR/reference number"
             />
             <div className="space-y-1.5">
               <label htmlFor="payout-note" className="block text-sm font-medium text-foreground">Note (optional)</label>

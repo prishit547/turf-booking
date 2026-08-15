@@ -2,7 +2,7 @@
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User
+from .models import OwnerPayoutDetails, OwnerVerification, User
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
@@ -58,3 +58,25 @@ class UserAdmin(BaseUserAdmin):
         updated = queryset.update(is_active=False)
         self.message_user(request, f'{updated} users were successfully deactivated.')
     deactivate_users.short_description = "Deactivate selected users"
+
+
+@admin.register(OwnerVerification)
+class OwnerVerificationAdmin(admin.ModelAdmin):
+    """Read-mostly visibility into the OwnerVerification queue from this
+    Jazzmin panel — the real day-to-day review workflow is the in-app
+    admin dashboard's Verifications tab (see user/views.py's
+    AdminOwnerVerificationViewSet), not this panel."""
+    list_display = ['user', 'verification_status', 'pan_number', 'gst_number', 'submitted_at', 'reviewed_at', 'reviewed_by']
+    list_filter = ['verification_status']
+    search_fields = ['user__email', 'user__first_name', 'user__last_name', 'pan_number', 'gst_number']
+    readonly_fields = ['submitted_at', 'reviewed_at', 'created_at', 'updated_at']
+
+
+@admin.register(OwnerPayoutDetails)
+class OwnerPayoutDetailsAdmin(admin.ModelAdmin):
+    """Read-mostly visibility into where an owner's payouts should go — the
+    day-to-day usage is the admin dashboard's Record Payout modal (see
+    owner_dashboard/views.py's PayoutViewSet), not this panel."""
+    list_display = ['owner', 'account_holder_name', 'bank_account_number', 'ifsc_code', 'upi_id', 'updated_at']
+    search_fields = ['owner__email', 'owner__first_name', 'owner__last_name', 'account_holder_name', 'upi_id']
+    readonly_fields = ['updated_at']

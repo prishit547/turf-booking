@@ -41,7 +41,9 @@ const ResetPassword = () => {
       navigate('/login');
     } catch (error) {
       const data = error.response?.data;
-      if (data?.errors) {
+      if (error.response?.status === 429) {
+        setErrors({ general: 'Too many attempts. Please wait a moment and try again.' });
+      } else if (data?.errors) {
         // DRF field errors come back as {field: [messages]} — flatten to strings.
         const flattened = Object.fromEntries(
           Object.entries(data.errors).map(([field, msgs]) => [field, Array.isArray(msgs) ? msgs.join(' ') : String(msgs)])

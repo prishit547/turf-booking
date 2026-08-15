@@ -238,7 +238,12 @@ export const AuthProvider = ({ children }) => {
       console.error('Login error:', error.response?.data || error.message);
       const errorData = error.response?.data;
       let errorMessage = 'An unexpected error occurred during login.';
-      if (errorData?.detail) {
+      if (error.response?.status === 429) {
+        // Backend's ScopedRateThrottle ('login' scope) returns a technical
+        // DRF message here ("Request was throttled. Expected available in
+        // N seconds.") — swap it for something a user can actually act on.
+        errorMessage = 'Too many login attempts. Please wait a moment and try again.';
+      } else if (errorData?.detail) {
         errorMessage = errorData.detail;
       } else if (errorData?.non_field_errors) {
         errorMessage = errorData.non_field_errors[0];
@@ -246,7 +251,7 @@ export const AuthProvider = ({ children }) => {
       setGeneralError(errorMessage);
       return { success: false, error: errorMessage, errors: errorData };
     }
-  }; 
+  };
 
   // Signup Function
   const signup = async (userData) => {
@@ -269,11 +274,16 @@ export const AuthProvider = ({ children }) => {
       console.error('Signup error:', err.response?.data || err.message);
       const errorData = err.response?.data;
       let errorMessage = 'An unexpected error occurred during signup.';
+      if (err.response?.status === 429) {
+        errorMessage = 'Too many signup attempts. Please wait a moment and try again.';
+        setGeneralError(errorMessage);
+        return { success: false, error: errorMessage, errors: errorData };
+      }
       if (errorData) {
         if (errorData.detail) errorMessage = errorData.detail;
         else if (errorData.email) errorMessage = "An account with this email already exists.";
         else if (errorData.non_field_errors) errorMessage = errorData.non_field_errors.join(', ');
-        
+
         setGeneralError(errorMessage);
         return { success: false, error: errorMessage, errors: errorData };
       }

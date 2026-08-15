@@ -1,8 +1,9 @@
 # owner_dashboard/views.py
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
+from django.conf import settings
 from django.db import models
 from django.db.models import Avg, Count, DecimalField, FloatField, Q, Sum
 from django.db.models.functions import Coalesce, TruncMonth
@@ -21,9 +22,11 @@ from bookings.models import Booking
 from bookings.serializers import OwnerBookingSerializer
 from bookings.services import BookingWriteError, CancellationError, cancel_booking, create_booking_row, validate_booking_request
 from boxes.models import Box
-from user.models import User
+from user.audit import log_admin_action
+from user.models import OwnerPayoutDetails, User
 from user.notifications import notify
 from user.permissions import IsAdminOrOwner, IsOwnerUser
+from user.serializers import OwnerPayoutDetailsSerializer
 from BookMyBox.pagination import StandardResultsPagination
 from .models import Payout, PayoutSchedule
 from .serializers import OwnerDashboardStatsSerializer, PayoutScheduleSerializer, PayoutSerializer
@@ -352,6 +355,47 @@ class OwnerBookingViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response(self.get_serializer(booking).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=["post"], url_path="mark-no-show")
+    def mark_no_show(self, request, pk=None):
+        """Owner marks a customer who never turned up. Deliberately distinct
+        from `cancel` above: no refund (see bookings/services.py's
+        cancel_booking -> _refund_booking, never called here), and no
+        reward-granting (never calls rewards.services.on_booking_completed —
+        the customer didn't show, they don't earn cashback/scratch/spin for
+        it). Only legal on a Confirmed booking whose start time has already
+        passed — can't pre-emptively no-show a future booking. Once marked,
+        the hourly mark_completed_bookings_task naturally skips this row
+        going forward since it only ever touches booking_status='Confirmed'
+        rows."""
+        booking = self.get_object()  # already scoped to the owner's own boxes via get_queryset()
+
+        if booking.booking_status != "Confirmed":
+            return Response(
+                {"detail": "Only confirmed bookings can be marked as a no-show."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        booking_dt = datetime.combine(booking.date, time.fromisoformat(booking.start_time))
+        if settings.USE_TZ:
+            booking_dt = timezone.make_aware(booking_dt)
+        if timezone.now() < booking_dt:
+            return Response(
+                {"detail": "This booking hasn't started yet — you can only mark a no-show once its start time has passed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        booking.booking_status = "No-show"
+        booking.save(update_fields=["booking_status"])
+
+        notify(
+            booking.user,
+            "Marked as a no-show",
+            f"Your booking for {booking.box.name} on {booking.date} at {booking.start_time} was marked as a "
+            "no-show since it wasn't used. No refund applies for a missed booking.",
+        )
+
+        return Response(self.get_serializer(booking).data)
+
 
 class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):
     """Manual payout ledger: admin records payouts made to owners outside
@@ -375,6 +419,13 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
             f"A payout of ₹{payout.amount} was recorded for your account."
             + (f" Note: {payout.note}" if payout.note else ""),
         )
+        log_admin_action(
+            self.request.user, 'payout.record', target=payout,
+            details={
+                'owner': payout.owner.email, 'amount': str(payout.amount),
+                'payment_method': payout.payment_method, 'note': payout.note,
+            },
+        )
 
     def _balance_for_owner(self, owner):
         earnings = compute_owner_earnings(owner)
@@ -382,6 +433,15 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
         paid = Payout.objects.filter(owner=owner).aggregate(
             total=Coalesce(Sum("amount"), 0.0, output_field=DecimalField())
         )["total"]
+        # Surfaced so the admin Record Payout UI can show where the money
+        # should actually go, right where it's about to be recorded (see
+        # OwnerPayoutDetails' docstring). Read-only here — a plain lookup,
+        # not get_or_create, so simply loading the balance list never
+        # creates rows for owners who haven't touched the feature.
+        try:
+            payout_details = OwnerPayoutDetailsSerializer(owner.payout_details).data
+        except OwnerPayoutDetails.DoesNotExist:
+            payout_details = None
         return {
             "owner_id": owner.id,
             "owner_email": owner.email,
@@ -391,6 +451,7 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
             "net_revenue": round(net, 2),
             "total_paid": round(float(paid), 2),
             "balance_due": round(net - float(paid), 2),
+            "payout_details": payout_details,
             "by_sport": [
                 {
                     "sport": row["sport"],

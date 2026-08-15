@@ -29,6 +29,9 @@ const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const Profile = lazy(() => import('./pages/Profile'));
 const About = lazy(() => import('./pages/About'));
 const Contact = lazy(() => import('./pages/Contact'));
+const Terms = lazy(() => import('./pages/Terms'));
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const CancellationPolicy = lazy(() => import('./pages/CancellationPolicy'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 const RouteFallback = () => (
@@ -103,6 +106,9 @@ function App() {
             <Route path="/boxes/:id" element={<BoxDetails />} />
             <Route path="/about" element={<About />} />
             <Route path="/contact" element={<Contact />} />
+            <Route path="/terms" element={<Terms />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
+            <Route path="/cancellation-policy" element={<CancellationPolicy />} />
 
             <Route path="/profile" element={
               <ProtectedRoute>

@@ -209,6 +209,17 @@ const Signup = () => {
           {loading ? 'Creating account…' : 'Create account'}
         </MagneticButton>
 
+        <p className="text-center text-xs text-muted-foreground">
+          By creating an account, you agree to our{' '}
+          <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:text-primary/80 underline underline-offset-2">
+            Terms of Service
+          </Link>{' '}
+          and{' '}
+          <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:text-primary/80 underline underline-offset-2">
+            Privacy Policy
+          </Link>.
+        </p>
+
         <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
           <span className="h-px flex-1 bg-border" /> or continue with <span className="h-px flex-1 bg-border" />
         </div>

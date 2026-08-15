@@ -1,6 +1,7 @@
 // OwnerDashboard.jsx
 
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import {
@@ -8,13 +9,15 @@ import {
 } from 'chart.js';
 import {
   Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3,
-  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift,
+  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift, ShieldCheck, UserX,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 import AddBoxForm from '../components/boxes/AddBoxForm';
 import ViewBoxModal from '../components/boxes/ViewBoxModal';
 import OwnerRewardsTab from '../components/rewards/OwnerRewardsTab';
+import OwnerVerificationTab from '../components/verification/OwnerVerificationTab';
+import OwnerPayoutDetailsCard from '../components/payouts/OwnerPayoutDetailsCard';
 import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
 import { Button, Card, Badge, Loader, StatTile, Input, Select, Modal, Pagination } from '../components/ui';
@@ -24,6 +27,16 @@ import { useDebounce } from '../hooks/useDebounce';
 
 const BOOKINGS_PAGE_SIZE = 20
 const PAYOUTS_PAGE_SIZE = 20
+
+// Matches Payout.PAYMENT_METHOD_CHOICES (owner_dashboard/models.py). Rows
+// recorded before this field existed have payment_method === '' and fall
+// back to '—' wherever this map is consulted.
+const PAYMENT_METHOD_LABELS = {
+  bank_transfer: 'Bank transfer',
+  upi: 'UPI',
+  cash: 'Cash',
+  other: 'Other',
+}
 
 // ChartJS Registration
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, BarElement, Filler);
@@ -39,6 +52,7 @@ const TABS = [
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'payouts', label: 'Payouts', icon: Wallet },
   { id: 'rewards', label: 'Rewards', icon: Gift },
+  { id: 'verification', label: 'Verification', icon: ShieldCheck },
 ];
 
 const BOX_STATUS_TONE = {
@@ -59,6 +73,7 @@ function Placeholder({ text, icon: Icon = AlertCircle }) {
 }
 
 const OwnerDashboard = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
   const [showAddBoxModal, setShowAddBoxModal] = useState(false);
   const [showEditBoxModal, setShowEditBoxModal] = useState(false);
@@ -82,6 +97,8 @@ const OwnerDashboard = () => {
   const [cancellingBooking, setCancellingBooking] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [noShowBooking, setNoShowBooking] = useState(null);
+  const [markingNoShow, setMarkingNoShow] = useState(false);
 
   const [boxToDelete, setBoxToDelete] = useState(null);
   const [deletingBox, setDeletingBox] = useState(false);
@@ -94,6 +111,12 @@ const OwnerDashboard = () => {
   const [newBlockedDate, setNewBlockedDate] = useState('');
   const [newBlockedReason, setNewBlockedReason] = useState('');
   const [addingBlockedDate, setAddingBlockedDate] = useState(false);
+  // Set when a plain block attempt is rejected because the date already has
+  // Confirmed bookings on it — holds the { detail, conflicting_bookings }
+  // payload so the owner can see exactly what would be cancelled before
+  // opting into force=true.
+  const [blockConflict, setBlockConflict] = useState(null);
+  const [forcingBlockedDate, setForcingBlockedDate] = useState(false);
 
   // Pricing-rules modal: peak/off-peak price overrides per box, opened from
   // a box card's "Manage pricing" button. Same shape as the blocked-dates
@@ -249,6 +272,21 @@ const OwnerDashboard = () => {
     }
   };
 
+  const handleConfirmNoShow = async () => {
+    if (!noShowBooking) return;
+    setMarkingNoShow(true);
+    try {
+      await api.post(`/owner_dashboard/bookings/${noShowBooking.id}/mark-no-show/`);
+      toast.success('Booking marked as a no-show — no refund applies.');
+      setNoShowBooking(null);
+      fetchBookings();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to mark as no-show');
+    } finally {
+      setMarkingNoShow(false);
+    }
+  };
+
   const openAddBookingModal = () => {
     setAddBookingForm({
       boxId: all_owner_boxes.find((b) => b.status === 'approved')?.id || '',
@@ -308,6 +346,7 @@ const OwnerDashboard = () => {
     setBlockedDatesBox(box);
     setNewBlockedDate('');
     setNewBlockedReason('');
+    setBlockConflict(null);
     setBlockedDatesLoading(true);
     try {
       const response = await api.get('/boxes/blocked-dates/', { params: { box: box.id } });
@@ -323,6 +362,7 @@ const OwnerDashboard = () => {
   const closeBlockedDatesModal = () => {
     setBlockedDatesBox(null);
     setBlockedDates([]);
+    setBlockConflict(null);
   };
 
   const handleAddBlockedDate = async () => {
@@ -330,6 +370,7 @@ const OwnerDashboard = () => {
       toast.error('Please pick a date to block.');
       return;
     }
+    setBlockConflict(null);
     setAddingBlockedDate(true);
     try {
       const response = await api.post('/boxes/blocked-dates/', {
@@ -338,11 +379,38 @@ const OwnerDashboard = () => {
       setBlockedDates((prev) => [...prev, response.data].sort((a, b) => a.date.localeCompare(b.date)));
       setNewBlockedDate('');
       setNewBlockedReason('');
-      toast.success('Date blocked.');
+      toast.success(response.data.detail || 'Date blocked.');
+    } catch (err) {
+      const data = err.response?.data;
+      // A 400 carrying conflicting_bookings means there are Confirmed
+      // bookings on this date — surface them instead of a bare toast so the
+      // owner can make an informed force=true decision.
+      if (err.response?.status === 400 && data?.conflicting_bookings?.length) {
+        setBlockConflict(data);
+      } else {
+        toast.error(data?.detail || 'Failed to block this date.');
+      }
+    } finally {
+      setAddingBlockedDate(false);
+    }
+  };
+
+  const handleForceBlockedDate = async () => {
+    if (!blockedDatesBox || !newBlockedDate) return;
+    setForcingBlockedDate(true);
+    try {
+      const response = await api.post('/boxes/blocked-dates/', {
+        box: blockedDatesBox.id, date: newBlockedDate, reason: newBlockedReason.trim(), force: true,
+      });
+      setBlockedDates((prev) => [...prev, response.data].sort((a, b) => a.date.localeCompare(b.date)));
+      setNewBlockedDate('');
+      setNewBlockedReason('');
+      setBlockConflict(null);
+      toast.success(response.data.detail || 'Date blocked.');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to block this date.');
     } finally {
-      setAddingBlockedDate(false);
+      setForcingBlockedDate(false);
     }
   };
 
@@ -771,6 +839,7 @@ const OwnerDashboard = () => {
                     <option value="Confirmed">Confirmed</option>
                     <option value="Completed">Completed</option>
                     <option value="Cancelled">Cancelled</option>
+                    <option value="No-show">No-show</option>
                   </Select>
                   <Button onClick={openAddBookingModal} icon={<Plus size={16} />}>
                     Add booking
@@ -807,8 +876,16 @@ const OwnerDashboard = () => {
                         const bookingDateTime = new Date(`${booking.date}T${booking.start_time}:00`);
                         const canCancel = booking.booking_status === 'Confirmed'
                           && bookingDateTime.getTime() - Date.now() > 2 * 60 * 60 * 1000;
+                        // Mirrors mark_no_show's own server-side rule — only
+                        // once the slot's actual start time has passed.
+                        const canMarkNoShow = booking.booking_status === 'Confirmed'
+                          && bookingDateTime.getTime() <= Date.now();
                         return (
-                          <tr key={booking.id} className="hover:bg-elevated/60 transition-colors">
+                          <tr
+                            key={booking.id}
+                            onClick={() => navigate(`/booking/${booking.id}`)}
+                            className="hover:bg-elevated/60 transition-colors cursor-pointer"
+                          >
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
@@ -818,13 +895,20 @@ const OwnerDashboard = () => {
                                   <span className="text-foreground whitespace-nowrap block">
                                     {booking.booking_source === 'owner_manual' ? (booking.customer_name || 'Walk-in') : booking.user_name}
                                   </span>
-                                  {booking.booking_source === 'owner_manual' && (
+                                  {booking.booking_source === 'owner_manual' ? (
                                     <div className="flex items-center gap-1.5">
                                       <Badge tone="secondary" size="sm">Walk-in</Badge>
                                       {booking.customer_phone && (
                                         <span className="text-xs text-muted-foreground">{booking.customer_phone}</span>
                                       )}
                                     </div>
+                                  ) : (
+                                    // customer_phone_display falls back to the customer's
+                                    // profile phone when this online booking never had
+                                    // one recorded directly — see OwnerBookingSerializer.
+                                    booking.customer_phone_display && (
+                                      <span className="text-xs text-muted-foreground whitespace-nowrap">{booking.customer_phone_display}</span>
+                                    )
                                   )}
                                 </div>
                               </div>
@@ -835,16 +919,38 @@ const OwnerDashboard = () => {
                             </td>
                             <td className="py-3 px-4 font-medium text-foreground tabular-nums">₹{booking.total_amount}</td>
                             <td className="py-3 px-4">
-                              <Badge tone={booking.booking_status === 'Cancelled' ? 'danger' : booking.booking_status === 'Completed' ? 'primary' : 'success'}>
+                              <Badge tone={
+                                booking.booking_status === 'Cancelled' ? 'danger'
+                                  : booking.booking_status === 'Completed' ? 'primary'
+                                  : booking.booking_status === 'No-show' ? 'warning'
+                                  : 'success'
+                              }>
                                 {booking.booking_status}
                               </Badge>
                             </td>
                             <td className="py-3 px-4">
-                              {canCancel && (
-                                <Button variant="outline" size="sm" icon={<XCircle size={14} />} onClick={() => openCancelModal(booking)}>
-                                  Cancel
-                                </Button>
-                              )}
+                              <div className="flex items-center gap-2">
+                                {canCancel && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    icon={<XCircle size={14} />}
+                                    onClick={(e) => { e.stopPropagation(); openCancelModal(booking); }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                )}
+                                {canMarkNoShow && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    icon={<UserX size={14} />}
+                                    onClick={(e) => { e.stopPropagation(); setNoShowBooking(booking); }}
+                                  >
+                                    Mark no-show
+                                  </Button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -968,6 +1074,8 @@ const OwnerDashboard = () => {
                 )}
               </div>
 
+              <OwnerPayoutDetailsCard />
+
               {payoutBalanceLoading ? (
                 <div className="py-8 flex justify-center"><Loader text="Loading balance..." /></div>
               ) : !payoutBalance ? (
@@ -982,6 +1090,9 @@ const OwnerDashboard = () => {
                     <StatTile tone="success" icon={<CheckCircle size={22} />} value={`₹${payoutBalance.total_paid.toLocaleString()}`} label="Already paid out" />
                     <StatTile tone={payoutBalance.balance_due > 0 ? 'warning' : 'neutral'} icon={<Wallet size={22} />} value={`₹${payoutBalance.balance_due.toLocaleString()}`} label="Balance due to you" />
                   </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Balance due is computed live from your completed bookings — it isn&apos;t a stored balance, and doesn&apos;t mean a payout has been logged yet. Payout history below shows what&apos;s actually been recorded as paid.
+                  </p>
 
                   {payoutBalance.by_sport?.length > 0 && (
                     <Card padding="none" className="overflow-hidden">
@@ -1024,7 +1135,7 @@ const OwnerDashboard = () => {
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
-                        {['Amount', 'Source', 'Note', 'Date'].map((h) => (
+                        {['Amount', 'Source', 'Payment method', 'Transaction ID', 'Note', 'Date'].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -1032,11 +1143,11 @@ const OwnerDashboard = () => {
                     <tbody className="divide-y divide-border">
                       {payoutsLoading ? (
                         <tr>
-                          <td colSpan={4} className="text-center py-10 text-muted-foreground">Loading history...</td>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">Loading history...</td>
                         </tr>
                       ) : payoutsResult.results.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td>
+                          <td colSpan={6} className="text-center py-10 text-muted-foreground">No payouts recorded yet</td>
                         </tr>
                       ) : payoutsResult.results.map((payout) => (
                         <tr key={payout.id} className="hover:bg-elevated/60 transition-colors">
@@ -1046,6 +1157,8 @@ const OwnerDashboard = () => {
                               {payout.source === 'scheduled' ? 'Scheduled' : 'Manual'}
                             </Badge>
                           </td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{PAYMENT_METHOD_LABELS[payout.payment_method] || '—'}</td>
+                          <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{payout.transaction_id || '—'}</td>
                           <td className="py-3 px-4 text-muted-foreground">{payout.note || '—'}</td>
                           <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">{new Date(payout.created_at).toLocaleDateString()}</td>
                         </tr>
@@ -1065,6 +1178,8 @@ const OwnerDashboard = () => {
 
           {/* Rewards Tab */}
           {activeTab === 'rewards' && <OwnerRewardsTab ownerBoxes={all_owner_boxes} />}
+
+          {activeTab === 'verification' && <OwnerVerificationTab />}
         </div>
       </div>
 
@@ -1127,12 +1242,56 @@ const OwnerDashboard = () => {
       >
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-2">
-            <Input type="date" value={newBlockedDate} onChange={(e) => setNewBlockedDate(e.target.value)} className="flex-1" />
-            <Input placeholder="Reason (optional)" value={newBlockedReason} onChange={(e) => setNewBlockedReason(e.target.value)} className="flex-1" />
+            <Input
+              type="date"
+              value={newBlockedDate}
+              onChange={(e) => { setNewBlockedDate(e.target.value); setBlockConflict(null); }}
+              className="flex-1"
+            />
+            <Input
+              placeholder="Reason (optional)"
+              value={newBlockedReason}
+              onChange={(e) => { setNewBlockedReason(e.target.value); setBlockConflict(null); }}
+              className="flex-1"
+            />
             <Button onClick={handleAddBlockedDate} loading={addingBlockedDate} icon={<Plus size={16} />}>
               Block
             </Button>
           </div>
+
+          {/* Shown when the plain block above was rejected because this
+              date already has Confirmed bookings on it — names exactly who
+              would be cancelled/refunded so forcing it through is a
+              deliberate, informed decision, not a silent side effect. */}
+          {blockConflict && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 space-y-3">
+              <div className="flex gap-2">
+                <AlertCircle size={18} className="text-warning shrink-0 mt-0.5" />
+                <p className="text-sm text-foreground">{blockConflict.detail}</p>
+              </div>
+              <ul className="space-y-1.5 max-h-40 overflow-y-auto">
+                {blockConflict.conflicting_bookings.map((b) => (
+                  <li key={b.id} className="text-sm text-muted-foreground flex justify-between gap-3 bg-elevated rounded-md px-2.5 py-1.5">
+                    <span className="text-foreground font-medium">{b.customer_name}</span>
+                    <span>{b.start_time}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
+                  variant="danger"
+                  onClick={handleForceBlockedDate}
+                  loading={forcingBlockedDate}
+                  fullWidth
+                >
+                  Cancel these bookings and block this date anyway
+                </Button>
+                <Button variant="outline" onClick={() => setBlockConflict(null)} disabled={forcingBlockedDate}>
+                  Back
+                </Button>
+              </div>
+            </div>
+          )}
 
           {blockedDatesLoading ? (
             <Loader text="Loading blocked dates..." />
@@ -1287,6 +1446,35 @@ const OwnerDashboard = () => {
               />
             </div>
           </div>
+        )}
+      </Modal>
+
+      {/* Mark No-show Modal — deliberately no reason field (unlike cancel):
+          this doesn't notify-and-negotiate, it's a factual record that the
+          customer never showed. No refund happens either way — see
+          mark_no_show's docstring on OwnerBookingViewSet. */}
+      <Modal
+        isOpen={!!noShowBooking}
+        onClose={() => setNoShowBooking(null)}
+        title="Mark as no-show"
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setNoShowBooking(null)}>Back</Button>
+            <Button variant="danger" onClick={handleConfirmNoShow} loading={markingNoShow}>
+              Mark no-show
+            </Button>
+          </>
+        )}
+      >
+        {noShowBooking && (
+          <p className="text-muted-foreground">
+            Mark <span className="font-semibold text-foreground">
+              {noShowBooking.booking_source === 'owner_manual' ? (noShowBooking.customer_name || 'Walk-in') : noShowBooking.user_name}
+            </span>&apos;s booking for <span className="font-semibold text-foreground">{noShowBooking.box_name}</span> on{' '}
+            {noShowBooking.date} at {noShowBooking.start_time} as a no-show? This confirms the slot went unused —
+            no refund is issued, since this is different from a cancellation.
+          </p>
         )}
       </Modal>
 
