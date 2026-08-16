@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { Smartphone, CreditCard, Wallet, Ticket, ShieldCheck, ShieldAlert } from 'lucide-react';
@@ -14,6 +14,82 @@ const PAYMENT_METHODS = [
     { id: 'card', label: 'Card', Icon: CreditCard },
     { id: 'wallet', label: 'Wallet', Icon: Wallet },
 ];
+
+/**
+ * Owns the live hold/queue WebSocket (useSlotReservation) entirely,
+ * including its once-a-second countdown tick. That tick is state internal
+ * to whichever component calls the hook — if Checkout called the hook
+ * directly, its per-second setSecondsRemaining would re-render the *whole*
+ * checkout page (every Card, Input, and the payment/coupon/wallet sections)
+ * once a second for as long as the hold lasts, none of which has anything
+ * to do with the countdown. Isolating the hook here means only this small
+ * status card re-renders every second; Checkout itself only re-renders when
+ * the reservation status actually changes (held/queued/promoted/lost —
+ * rare, event-driven), via onStatusChange.
+ */
+function ReservationStatusCard({ draft, accessToken, userId, navigate, onStatusChange }) {
+    const liveReservation = useSlotReservation({
+        boxId: draft?.boxId,
+        date: draft?.date,
+        startTime: draft?.timeSlot,
+        duration: draft?.duration,
+        holdToken: draft?.holdToken,
+        accessToken,
+        currentUserId: userId,
+        enabled: Boolean(draft),
+        initialStatus: draft?.initialStatus,
+        initialPosition: draft?.initialPosition,
+        initialExpiresAt: draft?.initialExpiresAt,
+    });
+
+    useEffect(() => {
+        onStatusChange(liveReservation.status);
+    }, [liveReservation.status, onStatusChange]);
+
+    useEffect(() => {
+        if (liveReservation.status === 'lost') {
+            toast.error('This slot was just booked by someone else.');
+            navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
+        } else if (liveReservation.status === 'owner_reserved') {
+            toast.error(liveReservation.message || 'This slot has been reserved by the turf owner. Please select another slot.');
+            navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
+        }
+    }, [liveReservation.status, liveReservation.message, navigate, draft?.boxId]);
+
+    const wasQueuedRef = useRef(false);
+    useEffect(() => {
+        if (liveReservation.status === 'queued') {
+            wasQueuedRef.current = true;
+        } else if (liveReservation.status === 'held' && wasQueuedRef.current) {
+            wasQueuedRef.current = false;
+            toast.info("It's your turn! Please confirm your booking.");
+        }
+    }, [liveReservation.status]);
+
+    if (liveReservation.status === 'queued') {
+        return (
+            <Card className="text-center bg-warning/10 border-warning/30">
+                <p className="text-warning font-medium">Someone else is currently confirming this slot.</p>
+                <p className="text-warning/80 text-sm mt-1">
+                    You&rsquo;re #{liveReservation.position} in the queue — we&rsquo;ll notify you the moment it&rsquo;s your turn.
+                </p>
+            </Card>
+        );
+    }
+
+    return (
+        <Card className="text-center bg-primary/10 border-primary/30">
+            <p className="text-primary font-medium">
+                {liveReservation.secondsRemaining != null
+                    ? `Confirm within ${Math.floor(liveReservation.secondsRemaining / 60)}:${String(liveReservation.secondsRemaining % 60).padStart(2, '0')}`
+                    : 'This slot is held for you'}
+            </p>
+            <p className="text-primary/80 text-sm mt-1">
+                If you don&rsquo;t confirm in time, it&rsquo;s released to the next person waiting.
+            </p>
+        </Card>
+    );
+}
 
 /**
  * Real order-review + confirm step. Re-opens the same live hold/queue
@@ -43,6 +119,14 @@ const Checkout = () => {
     const [leaving, setLeaving] = useState(false);
     const [walletBalance, setWalletBalance] = useState(0);
     const [useWallet, setUseWallet] = useState(false);
+    // Only the coarse status (held/queued/promoted/lost/...) lives here —
+    // it changes rarely (WS events), unlike the once-a-second countdown
+    // tick, which stays fully inside ReservationStatusCard below so it
+    // doesn't force this whole page to re-render every second.
+    const [reservationStatus, setReservationStatus] = useState(draft?.initialStatus || 'idle');
+    const handleReservationStatusChange = useCallback((status) => {
+        setReservationStatus(status);
+    }, []);
     // Resolved via /bookings/price-preview/ — draft.pricePerHour is the
     // box's flat rate handed off from BoxDetails, but a PricingRule can
     // override it for this exact date/time (see boxes/pricing.py's
@@ -54,30 +138,6 @@ const Checkout = () => {
         phone: user?.phone || '',
         email: user?.email || '',
     });
-
-    const liveReservation = useSlotReservation({
-        boxId: draft?.boxId,
-        date: draft?.date,
-        startTime: draft?.timeSlot,
-        duration: draft?.duration,
-        holdToken: draft?.holdToken,
-        accessToken,
-        currentUserId: user?.id,
-        enabled: Boolean(draft),
-        initialStatus: draft?.initialStatus,
-        initialPosition: draft?.initialPosition,
-        initialExpiresAt: draft?.initialExpiresAt,
-    });
-
-    useEffect(() => {
-        if (liveReservation.status === 'lost') {
-            toast.error('This slot was just booked by someone else.');
-            navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
-        } else if (liveReservation.status === 'owner_reserved') {
-            toast.error(liveReservation.message || 'This slot has been reserved by the turf owner. Please select another slot.');
-            navigate(draft?.boxId ? `/boxes/${draft.boxId}` : '/boxes');
-        }
-    }, [liveReservation.status, liveReservation.message, navigate, draft?.boxId]);
 
     useEffect(() => {
         if (!draft) return undefined;
@@ -102,16 +162,6 @@ const Checkout = () => {
         }).catch(() => {});
         return () => { cancelled = true; };
     }, []);
-
-    const wasQueuedRef = useRef(false);
-    useEffect(() => {
-        if (liveReservation.status === 'queued') {
-            wasQueuedRef.current = true;
-        } else if (liveReservation.status === 'held' && wasQueuedRef.current) {
-            wasQueuedRef.current = false;
-            toast.info("It's your turn! Please confirm your booking.");
-        }
-    }, [liveReservation.status]);
 
     if (!draft) {
         return (
@@ -154,7 +204,7 @@ const Checkout = () => {
     const total = appliedCoupon ? Number(appliedCoupon.final_amount) : grossTotal;
     const walletDeduction = useWallet ? Math.min(walletBalance, total) : 0;
     const amountDue = total - walletDeduction;
-    const isQueued = liveReservation.status === 'queued';
+    const isQueued = reservationStatus === 'queued';
 
     const handleApplyCoupon = async () => {
         if (!couponCode.trim()) return;
@@ -229,25 +279,13 @@ const Checkout = () => {
 
                 <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8">
                     <div className="space-y-6">
-                        {isQueued ? (
-                            <Card className="text-center bg-warning/10 border-warning/30">
-                                <p className="text-warning font-medium">Someone else is currently confirming this slot.</p>
-                                <p className="text-warning/80 text-sm mt-1">
-                                    You&rsquo;re #{liveReservation.position} in the queue — we&rsquo;ll notify you the moment it&rsquo;s your turn.
-                                </p>
-                            </Card>
-                        ) : (
-                            <Card className="text-center bg-primary/10 border-primary/30">
-                                <p className="text-primary font-medium">
-                                    {liveReservation.secondsRemaining != null
-                                        ? `Confirm within ${Math.floor(liveReservation.secondsRemaining / 60)}:${String(liveReservation.secondsRemaining % 60).padStart(2, '0')}`
-                                        : 'This slot is held for you'}
-                                </p>
-                                <p className="text-primary/80 text-sm mt-1">
-                                    If you don&rsquo;t confirm in time, it&rsquo;s released to the next person waiting.
-                                </p>
-                            </Card>
-                        )}
+                        <ReservationStatusCard
+                            draft={draft}
+                            accessToken={accessToken}
+                            userId={user?.id}
+                            navigate={navigate}
+                            onStatusChange={handleReservationStatusChange}
+                        />
 
                         <Card>
                             <h3 className="font-display font-semibold text-foreground mb-4">Your details</h3>

@@ -8,7 +8,6 @@ import { useDebounce } from '../hooks/useDebounce';
 import { Input, VenueCardSkeleton } from '../components/ui';
 import { BoxCard } from '../components/boxes/BoxCard';
 import { FilterPanel, defaultFilters } from '../components/boxes/FilterPanel';
-import Chatbot from '../components/common/Chatbot';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
 
 const LOCATIONS = ['Ahmedabad', 'Kolkata', 'Goa', 'Jaipur', 'Lucknow', 'Bhopal', 'Indore', 'Chandigarh', 'Hyderabad', 'Chennai', 'Bengaluru', 'Pune', 'Delhi', 'Mumbai'];
@@ -258,8 +257,6 @@ const BoxListings = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
-
-            <Chatbot />
         </div>
     );
 };

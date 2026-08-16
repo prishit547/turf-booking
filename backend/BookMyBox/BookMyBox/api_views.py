@@ -38,7 +38,6 @@ def health_check(request):
             'user': '/api/user/',
             'boxes': '/api/boxes/',
             'bookings': '/api/bookings/',
-            'chatbot': '/api/chatbot/',
             'dashboard': '/api/dashboard/',
             'owner_dashboard': '/api/owner_dashboard/'
         }
@@ -75,9 +74,6 @@ def api_info(request):
                 'user': 'GET /api/dashboard/',
                 'favorites': 'GET /api/dashboard/favorites/',
                 'owner': 'GET /api/owner_dashboard/'
-            },
-            'AI Assistant': {
-                'chat': 'POST /api/chatbot/'
             }
         }
     })

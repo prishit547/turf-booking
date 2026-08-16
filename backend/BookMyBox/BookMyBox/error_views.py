@@ -19,7 +19,6 @@ def custom_404_view(request, exception=None):
                 '/api/user/ - User authentication',
                 '/api/boxes/ - Sports box listings', 
                 '/api/bookings/ - Booking management',
-                '/api/chatbot/ - AI chatbot service',
                 '/api/dashboard/ - User dashboard',
                 '/api/owner_dashboard/ - Owner dashboard'
             ],

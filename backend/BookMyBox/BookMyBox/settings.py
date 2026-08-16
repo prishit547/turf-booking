@@ -111,7 +111,6 @@ INSTALLED_APPS = [
     'bookings',
     'owner_dashboard',
     'user_dashboard',
-    'chatbot',
     'rewards',
     'contact',
 ]
@@ -368,9 +367,6 @@ AUTH_USER_MODEL = 'user.User'
 
 # Google OAuth Client ID used to verify ID tokens from the frontend
 GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', '')
-
-# Google Gemini API key for the chatbot
-GEMINI_API_KEY = env('GEMINI_API_KEY', '')
 
 # Resend (transactional email) — used for password-reset and booking-invite
 # emails (see BookMyBox/emailing.py). Left blank in dev: send_email() logs

@@ -49,19 +49,19 @@ const features = [
 
 const team = [
   {
-    name: 'Rochan shah',
+    name: 'Rochan Shah',
     role: 'Founder & CEO',
     image: teamRochan,
     bio: 'Tech enthusiast with expertise in building scalable platforms.'
   },
   {
-    name: 'khush shah',
+    name: 'Khush Shah',
     role: 'CTO',
     image: teamKhush,
-    bio: 'passionate about sports and technology.'
+    bio: 'Passionate about sports and technology.'
   },
   {
-    name: 'pushya shah',
+    name: 'Pushya Shah',
     role: 'Head of Operations',
     image: teamPushya,
     bio: 'Sports facility management expert with 10+ years experience.'

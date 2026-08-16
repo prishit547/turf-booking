@@ -5,7 +5,6 @@ import { Helmet } from 'react-helmet-async'
 import { ArrowRight, CalendarDays, MapPin, Search, Sparkles, Ticket, Zap } from 'lucide-react'
 import { useBox } from '../context/BoxContext'
 import { Loader, Select } from '../components/ui'
-import Chatbot from '../components/common/Chatbot'
 import { Reveal, WordReveal } from '../components/motion/Reveal'
 import { MagneticButton } from '../components/motion/MagneticButton'
 import { BoxCard } from '../components/boxes/BoxCard'
@@ -292,8 +291,6 @@ const Home = () => {
           </div>
         </Reveal>
       </section>
-
-      <Chatbot />
     </div>
   )
 }

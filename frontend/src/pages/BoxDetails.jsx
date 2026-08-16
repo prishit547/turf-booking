@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, ArrowLeft, Heart, Check, Map as MapIcon, X, ShieldAlert, LayoutDashboard } from 'lucide-react';
 import { useBooking } from '../context/BookingContext';
 import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown } from '../components/ui';
-import Chatbot from '../components/common/Chatbot';
 import AddReviewForm from '../components/common/AddReviewForm';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
 
@@ -797,8 +796,6 @@ const BoxDetails = () => {
                     </div>
                 )}
             </Modal>
-
-            <Chatbot raised={Boolean(selectedTimeSlot)} />
         </div>
     );
 };
