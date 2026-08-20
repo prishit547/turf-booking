@@ -172,6 +172,21 @@ class ScratchCardAutoGrantSetting(models.Model):
         return row.enabled if row else True
 
 
+class SpinWheelAutoGrantSetting(models.Model):
+    """Singleton platform-wide master switch for whether completing a
+    booking auto-grants a spin entitlement at all, and whether the spin
+    endpoint can be used (see services.py::on_booking_completed and
+    services.py::spin_wheel). Mirrors ScratchCardAutoGrantSetting above."""
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    @classmethod
+    def is_enabled(cls):
+        row = cls.objects.first()
+        return row.enabled if row else True
+
+
 class OwnerScratchCardSetting(models.Model):
     """Per-owner override: lets an individual box owner opt their own
     boxes' completed bookings out of auto-granting scratch cards, even

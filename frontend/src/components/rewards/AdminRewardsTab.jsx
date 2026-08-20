@@ -449,6 +449,13 @@ function SpinWheelSection() {
         <h3 className="text-xl font-display font-semibold text-foreground">Spin wheel segments</h3>
         <Button onClick={() => setShowModal(true)} icon={<Plus size={16} />}>New segment</Button>
       </div>
+
+      <AutoGrantToggle
+        endpoint="/rewards/admin/spin-wheel/auto-grant/"
+        title="Spin wheel enabled"
+        description="Master switch — off means no new spins are granted for completed bookings, and customers can't spin even if they have spins queued up."
+      />
+
       <Card padding="none" className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

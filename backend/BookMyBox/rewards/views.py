@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -18,7 +18,7 @@ from user.audit import log_admin_action
 from user.permissions import IsAdminUser, IsOwnerUser
 from .models import (
     CashbackRule, OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting,
-    ScratchCardConfig, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction,
+    ScratchCardConfig, SpinEntitlement, SpinWheelAutoGrantSetting, SpinWheelSegment, Wallet, WalletTransaction,
 )
 from .serializers import (
     CashbackRuleSerializer, RedeemCodeSerializer, ScratchCardConfigSerializer,
@@ -93,6 +93,26 @@ class AdminCashbackRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, v
         )
 
 
+class ActiveCashbackRuleView(APIView):
+    """Read-only, public — powers the "earn up to ₹X cashback" promo shown
+    while a customer is browsing/booking a box. AllowAny (not IsAuthenticated)
+    since the promo is meant to attract a booking, including from a visitor
+    who hasn't logged in yet; it only exposes the current rate/cap, nothing
+    account-specific."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        rule = CashbackRule.objects.filter(active=True).order_by('-created_at').first()
+        if not rule:
+            return Response({'active': False})
+        return Response({
+            'active': True,
+            'percent': rule.percent,
+            'max_cashback': rule.max_cashback,
+            'min_booking_amount': rule.min_booking_amount,
+        })
+
+
 class ScratchCardViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     """A user's own scratch cards. Reveal is a dedicated action, not a
     PATCH, since it's a one-way state transition with a side effect
@@ -152,7 +172,11 @@ class SpinWheelView(APIView):
     def get(self, request):
         available = SpinEntitlement.objects.filter(user=request.user, used=False).count()
         segments = SpinWheelSegmentSerializer(SpinWheelSegment.objects.filter(active=True), many=True).data
-        return Response({'available': available, 'segments': segments})
+        return Response({
+            'available': available,
+            'segments': segments,
+            'enabled': SpinWheelAutoGrantSetting.is_enabled(),
+        })
 
     def post(self, request):
         try:
@@ -268,6 +292,27 @@ class AdminScratchCardAutoGrantView(APIView):
         setting.save()
         log_admin_action(
             request.user, 'scratch_card_auto_grant.toggle',
+            details={'enabled': setting.enabled},
+        )
+        return Response({'enabled': setting.enabled})
+
+
+class AdminSpinWheelAutoGrantView(APIView):
+    """Platform-wide master switch — see SpinWheelAutoGrantSetting's
+    docstring. Off means no new spin entitlements are granted on booking
+    completion, and the spin endpoint itself refuses to spin."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response({'enabled': SpinWheelAutoGrantSetting.is_enabled()})
+
+    def patch(self, request):
+        setting, _ = SpinWheelAutoGrantSetting.objects.get_or_create(pk=1)
+        setting.enabled = bool(request.data.get('enabled', setting.enabled))
+        setting.updated_by = request.user
+        setting.save()
+        log_admin_action(
+            request.user, 'spin_wheel_auto_grant.toggle',
             details={'enabled': setting.enabled},
         )
         return Response({'enabled': setting.enabled})

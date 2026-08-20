@@ -7,9 +7,12 @@ import { useBooking } from '../context/BookingContext';
 import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown } from '../components/ui';
 import AddReviewForm from '../components/common/AddReviewForm';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
+import { CashbackMarquee } from '../components/rewards/CashbackMarquee';
 
 import { api, useAuth } from '../api.jsx'
 import { formatLocalDate } from '../utils/date'
+import { getGoogleMapsUrl } from '../utils/googleMaps'
+import googleMapsIcon from '../assets/google_maps_icon.svg'
 import { toast } from 'react-toastify';
 
 const amenityIcons = {
@@ -172,6 +175,15 @@ const BoxDetails = () => {
                 if (fetchedBox && (fetchedBox.rating === undefined || fetchedBox.rating === null)) {
                     fetchedBox.rating = 0;
                 }
+                // Unlike BoxContext's box list, this box comes straight from
+                // the raw API response, so it needs the same lat/lng ->
+                // coordinates normalization here for the embedded map below
+                // to have anything to plot.
+                if (fetchedBox) {
+                    fetchedBox.coordinates = (fetchedBox.latitude && fetchedBox.longitude)
+                        ? [parseFloat(fetchedBox.latitude), parseFloat(fetchedBox.longitude)]
+                        : null;
+                }
                 setBox(fetchedBox);
             } catch (err) {
                 console.error('Error fetching box details:', err);
@@ -288,6 +300,11 @@ const BoxDetails = () => {
                     }
                     if (fetchedBox && (fetchedBox.rating === undefined || fetchedBox.rating === null)) {
                         fetchedBox.rating = 0;
+                    }
+                    if (fetchedBox) {
+                        fetchedBox.coordinates = (fetchedBox.latitude && fetchedBox.longitude)
+                            ? [parseFloat(fetchedBox.latitude), parseFloat(fetchedBox.longitude)]
+                            : null;
                     }
                     setBox(fetchedBox);
                 } catch (err) {
@@ -425,6 +442,9 @@ const BoxDetails = () => {
         );
     }
 
+    const googleMapsUrl = getGoogleMapsUrl({
+        googleMapsUrl: box.google_maps_url, latitude: box.latitude, longitude: box.longitude, location: box.location,
+    });
     const images = box.images?.length ? box.images : [box.image];
     const metaDescription = (box.description || `Book ${box.name} in ${box.location} by the hour on BoxNplay.`).slice(0, 160);
     const pageUrl = `${window.location.origin}/boxes/${box.id}`;
@@ -550,6 +570,8 @@ const BoxDetails = () => {
                             </div>
                         ) : (
                             <>
+                                <CashbackMarquee amount={box.price} className="mt-4" />
+
                                 <div className="mt-4">
                                     <DateStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} />
                                 </div>
@@ -710,6 +732,18 @@ const BoxDetails = () => {
                             <MapIcon className="h-5 w-5 text-primary" />
                             View {box.location} on map
                         </button>
+
+                        {googleMapsUrl && (
+                            <a
+                                href={googleMapsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition hover:border-primary/60 hover:bg-primary/15"
+                            >
+                                <img src={googleMapsIcon} alt="" className="h-4 w-4" />
+                                Open in Google Maps
+                            </a>
+                        )}
                     </aside>
                 </div>
             </div>

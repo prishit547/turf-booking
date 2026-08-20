@@ -83,6 +83,11 @@ class Box(models.Model):
     rules = models.JSONField(default=list, blank=True)
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    # Optional owner/admin-supplied Google Maps link, preferred over the
+    # lat/lng- or location-text-derived URL the frontend builds itself
+    # (see frontend/src/utils/googleMaps.js) — lets a listing point at an
+    # exact, human-picked map entry instead of a geocoded approximation.
+    google_maps_url = models.URLField(blank=True, default='')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -5,6 +5,7 @@ import { Smartphone, CreditCard, Wallet, Ticket, ShieldCheck, ShieldAlert } from
 import { toast } from 'react-toastify';
 import { Card, Button, Input } from '../components/ui';
 import { MagneticButton } from '../components/motion/MagneticButton';
+import { CashbackMarquee } from '../components/rewards/CashbackMarquee';
 import { useBooking } from '../context/BookingContext';
 import { useSlotReservation } from '../hooks/useSlotReservation';
 import { useAuth, api } from '../api.jsx';
@@ -273,9 +274,11 @@ const Checkout = () => {
                 <meta name="robots" content="noindex, nofollow" />
             </Helmet>
             <div className="max-w-5xl mx-auto">
-                <h1 className="font-display font-black uppercase tracking-tight text-3xl sm:text-4xl text-foreground mb-8">
+                <h1 className="font-display font-black uppercase tracking-tight text-3xl sm:text-4xl text-foreground mb-4">
                     Checkout
                 </h1>
+
+                <CashbackMarquee amount={total} className="mb-8" />
 
                 <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8">
                     <div className="space-y-6">

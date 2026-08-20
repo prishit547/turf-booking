@@ -15,7 +15,8 @@ from rest_framework.exceptions import ValidationError
 from user.notifications import notify
 from .models import (
     CashbackRule, OwnerScratchCardSetting, RedeemCode, ScratchCard, ScratchCardAutoGrantSetting,
-    ScratchCardConfig, SpinAttempt, SpinEntitlement, SpinWheelSegment, Wallet, WalletTransaction,
+    ScratchCardConfig, SpinAttempt, SpinEntitlement, SpinWheelAutoGrantSetting, SpinWheelSegment,
+    Wallet, WalletTransaction,
 )
 
 
@@ -114,6 +115,8 @@ def spin_wheel(user):
     completed booking) and picks a weighted-random SpinWheelSegment
     server-side, so the frontend wheel is told exactly where to land rather
     than deciding the outcome itself."""
+    if not SpinWheelAutoGrantSetting.is_enabled():
+        raise ValidationError("The spin wheel is temporarily unavailable.")
     entitlement = SpinEntitlement.objects.filter(user=user, used=False).order_by('created_at').first()
     if entitlement is None:
         raise ValidationError("You don't have a spin available.")
@@ -163,4 +166,5 @@ def on_booking_completed(booking):
     apply_cashback(booking)
     if ScratchCardAutoGrantSetting.is_enabled() and OwnerScratchCardSetting.is_enabled_for(booking.box.owner):
         grant_scratch_card(booking.user, booking=booking)
-    grant_spin_entitlement(booking.user, booking=booking)
+    if SpinWheelAutoGrantSetting.is_enabled():
+        grant_spin_entitlement(booking.user, booking=booking)

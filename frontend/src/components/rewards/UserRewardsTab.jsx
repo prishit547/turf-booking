@@ -53,7 +53,7 @@ export default function UserRewardsTab() {
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [scratchCards, setScratchCards] = useState([]);
-  const [spinInfo, setSpinInfo] = useState({ available: 0, segments: [] });
+  const [spinInfo, setSpinInfo] = useState({ available: 0, segments: [], enabled: true });
   const [loading, setLoading] = useState(true);
   const [revealingId, setRevealingId] = useState(null);
   const [spinning, setSpinning] = useState(false);
@@ -182,7 +182,9 @@ export default function UserRewardsTab() {
           <Sparkles size={18} className="text-primary" /> Spin the Wheel
         </h3>
         <Card padding="lg" className="flex flex-col items-center gap-4">
-          {spinInfo.segments.length === 0 ? (
+          {!spinInfo.enabled ? (
+            <p className="text-sm text-muted-foreground">Spin wheel is temporarily unavailable — check back soon!</p>
+          ) : spinInfo.segments.length === 0 ? (
             <p className="text-sm text-muted-foreground">The spin wheel isn&apos;t set up yet — check back soon.</p>
           ) : (
             <>

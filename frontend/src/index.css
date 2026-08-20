@@ -142,6 +142,22 @@
   }
 }
 
+/* Continuous horizontal scroll for the cashback promo ticker — the track
+   holds the message twice back-to-back and slides exactly -50%, so the
+   loop point is seamless regardless of message length. */
+.marquee-track {
+  animation: bmb-marquee 16s linear infinite;
+}
+
+@keyframes bmb-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
 ::selection {
   background: rgba(209, 251, 0, 0.35);
 }

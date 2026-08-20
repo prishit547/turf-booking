@@ -132,7 +132,7 @@ class BoxSerializer(serializers.ModelSerializer):
             'id', 'name', 'sport', 'sports', 'location', 'price', 'rating',
             'capacity', 'opening_time', 'closing_time', 'image', 'images',
             'amenities', 'description', 'full_description', 'rules',
-            'latitude', 'longitude', 'reviews', 'status', 'rejection_reason', 'blocked_dates',
+            'latitude', 'longitude', 'google_maps_url', 'reviews', 'status', 'rejection_reason', 'blocked_dates',
             'pricing_rules', 'min_price', 'owner_id',
         ]
         read_only_fields = ['status', 'rejection_reason']
@@ -193,7 +193,7 @@ class OwnerBoxSerializer(serializers.ModelSerializer):
             'id', 'owner', 'name', 'sport', 'sports', 'location', 'price',
             'capacity', 'opening_time', 'closing_time', 'image', 'images',
             'amenities', 'description', 'full_description', 'rules',
-            'latitude', 'longitude', 'status', 'rejection_reason'
+            'latitude', 'longitude', 'google_maps_url', 'status', 'rejection_reason'
         ]
         # 'owner' is read-only here — perform_create() below always sets it
         # from request.user; exposing it writable would let a PATCH reassign

@@ -23,7 +23,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
     contactInfo: '',
     full_description: '',
     latitude: '',
-    longitude: ''
+    longitude: '',
+    google_maps_url: ''
   });
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -49,7 +50,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         contactInfo: boxData.contact_info || '',
         full_description: boxData.full_description || '',
         latitude: boxData.latitude || '',
-        longitude: boxData.longitude || ''
+        longitude: boxData.longitude || '',
+        google_maps_url: boxData.google_maps_url || ''
       });
     } else if (!editMode) {
       // Reset form for add mode
@@ -68,7 +70,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         contactInfo: '',
         full_description: '',
         latitude: '',
-        longitude: ''
+        longitude: '',
+        google_maps_url: ''
       });
     }
   }, [editMode, boxData, isOpen]);
@@ -177,7 +180,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         setTimeout(() => {
           onSuccess?.();
           onClose();
-          setFormData({ name: '', sports: [], location: '', price: '', capacity: '', opening_time: '06:00', closing_time: '23:00', description: '', amenities: [], images: [], rules: '', contactInfo: '', full_description: '', latitude: '', longitude: '' });
+          setFormData({ name: '', sports: [], location: '', price: '', capacity: '', opening_time: '06:00', closing_time: '23:00', description: '', amenities: [], images: [], rules: '', contactInfo: '', full_description: '', latitude: '', longitude: '', google_maps_url: '' });
           setCurrentStep(1);
           setSubmitted(false);
         }, 2000);
@@ -381,6 +384,14 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
               />
               {errors.location && <p className="text-sm text-danger">{errors.location}</p>}
             </div>
+            <Input
+              label="Google Maps link (optional)"
+              type="url"
+              placeholder="https://maps.app.goo.gl/..."
+              value={formData.google_maps_url}
+              onChange={(e) => handleChange('google_maps_url', e.target.value)}
+              hint="Paste a link from Google Maps for this exact spot. Leave blank and we'll build one from the location you picked above."
+            />
             <div>
               <label className="block text-sm font-medium text-foreground mb-3">Amenities *</label>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -472,6 +483,7 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
               <div><strong>Location:</strong> {formData.location}</div>
               <div><strong>Latitude:</strong> {formData.latitude}</div>
               <div><strong>Longitude:</strong> {formData.longitude}</div>
+              <div><strong>Google Maps link:</strong> {formData.google_maps_url || '(auto-generated from location)'}</div>
               <div><strong>Amenities:</strong> {formData.amenities.join(', ')}</div>
               <div><strong>Rules:</strong> {formData.rules}</div>
               <div><strong>Contact Info:</strong> {formData.contactInfo}</div>

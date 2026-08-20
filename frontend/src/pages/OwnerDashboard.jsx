@@ -4,10 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Line, Bar, Doughnut } from 'react-chartjs-2';
-import {
-  Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, BarElement, Filler,
-} from 'chart.js';
 import {
   Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3,
   AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift, ShieldCheck, UserX,
@@ -25,7 +21,6 @@ import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
 import { Button, Card, Badge, Loader, StatTile, Input, Select, Modal, Pagination } from '../components/ui';
 import { PeakHoursChart } from '../components/common/AdvancedCharts';
-import { useChartTheme } from '../utils/chartTheme';
 import { useDebounce } from '../hooks/useDebounce';
 
 const BOOKINGS_PAGE_SIZE = 20
@@ -40,9 +35,6 @@ const PAYMENT_METHOD_LABELS = {
   cash: 'Cash',
   other: 'Other',
 }
-
-// ChartJS Registration
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, BarElement, Filler);
 
 const FALLBACK_BOX_IMAGE = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=300&h=200&q=80';
 
@@ -151,7 +143,6 @@ const OwnerDashboard = () => {
 
   const { user } = useAuth();
   const { refreshAll, deleteBox } = useBox();
-  const chartTheme = useChartTheme();
   const debouncedBookingSearch = useDebounce(bookingSearch, 300);
 
   // Fetch all dashboard data
@@ -503,11 +494,6 @@ const OwnerDashboard = () => {
     active_boxes_count = 0,
     pending_boxes_count = 0,
     avg_rating = '0.0',
-    revenue_chart_labels = [],
-    revenue_chart_data = [],
-    bookings_chart_labels = [],
-    bookings_chart_data = [],
-    sports_distribution = {},
     recent_bookings = [],
     all_owner_boxes = []
   } = dashboardData || {};
@@ -519,62 +505,6 @@ const OwnerDashboard = () => {
     { key: 'active', tone: 'secondary', icon: <CheckCircle size={22} />, value: active_boxes_count, label: 'Active Boxes' },
     { key: 'rating', tone: 'warning', icon: <Star size={22} />, value: `${avg_rating} / 5`, label: 'Avg Rating' },
   ];
-
-  // Chart data & options — colors come from the live theme (Chart.js renders
-  // to canvas, so it can't inherit Tailwind CSS classes).
-  const revenueData = {
-    labels: revenue_chart_labels,
-    datasets: [{
-      label: 'Revenue (₹)',
-      data: revenue_chart_data,
-      borderColor: chartTheme.colors.primary,
-      backgroundColor: chartTheme.hexToRgba(chartTheme.colors.primary, 0.1),
-      pointBackgroundColor: chartTheme.colors.primary,
-      tension: 0.4,
-      fill: true
-    }],
-  };
-
-  const bookingsData = {
-    labels: bookings_chart_labels,
-    datasets: [{
-      label: 'Bookings',
-      data: bookings_chart_data,
-      backgroundColor: chartTheme.hexToRgba(chartTheme.colors.success, 0.8),
-      borderRadius: 4
-    }],
-  };
-
-  const sportsData = {
-    labels: Object.keys(sports_distribution),
-    datasets: [{
-      data: Object.values(sports_distribution),
-      backgroundColor: Object.keys(sports_distribution).map(
-        (_, i) => chartTheme.series[i % chartTheme.series.length]
-      ),
-      borderWidth: 0
-    }],
-  };
-
-  const chartOptions = {
-    responsive: true,
-    plugins: {
-      legend: { position: 'top', labels: { color: chartTheme.text } },
-      tooltip: chartTheme.tooltip,
-    },
-    scales: {
-      x: { grid: { display: false }, ticks: { color: chartTheme.text } },
-      y: { beginAtZero: true, grid: { color: chartTheme.grid }, ticks: { color: chartTheme.text } },
-    },
-  };
-
-  const doughnutOptions = {
-    responsive: true,
-    plugins: {
-      legend: { position: 'bottom', labels: { color: chartTheme.text } },
-      tooltip: chartTheme.tooltip,
-    },
-  };
 
   if (isLoading) {
     return (
@@ -676,75 +606,34 @@ const OwnerDashboard = () => {
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 items-start">
-                <div className="xl:col-span-2 space-y-4 sm:space-y-6">
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-                    <Card padding="md">
-                      <div className="flex items-center gap-2 mb-4">
-                        <TrendingUp size={20} className="text-primary" />
-                        <h3 className="text-lg font-display font-semibold text-foreground">Revenue Trend</h3>
-                      </div>
-                      {revenue_chart_data.length > 0 ? (
-                        <Line data={revenueData} options={chartOptions} />
-                      ) : (
-                        <Placeholder text="No revenue data available" icon={TrendingUp} />
-                      )}
-                    </Card>
-
-                    <Card padding="md">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Calendar size={20} className="text-primary" />
-                        <h3 className="text-lg font-display font-semibold text-foreground">Bookings trend (6 months)</h3>
-                      </div>
-                      {bookings_chart_data.length > 0 ? (
-                        <Bar data={bookingsData} options={chartOptions} />
-                      ) : (
-                        <Placeholder text="No booking data available" icon={Calendar} />
-                      )}
-                    </Card>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-                    <Card padding="md" className="lg:col-span-2">
-                      <h3 className="text-lg font-display font-semibold mb-4 text-foreground">Recent Bookings</h3>
-                      {recent_bookings.length > 0 ? (
-                        <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
-                          {recent_bookings.slice(0, 5).map((booking) => (
-                            <div key={booking.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 sm:gap-0">
-                              <div className="min-w-0">
-                                <p className="font-medium text-foreground truncate">
-                                  {booking.user_name || 'Customer'}
-                                </p>
-                                <p className="text-xs sm:text-sm text-muted-foreground">
-                                  {booking.box_name} &bull; {new Date(booking.date).toLocaleDateString()}
-                                </p>
-                                {booking.time_slot && (
-                                  <p className="text-xs text-muted-foreground">{booking.time_slot}</p>
-                                )}
-                              </div>
-                              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-1">
-                                <span className="text-primary font-medium tabular-nums">₹{booking.amount}</span>
-                                <Badge tone="success">Confirmed</Badge>
-                              </div>
-                            </div>
-                          ))}
+                <Card padding="md" className="xl:col-span-2">
+                  <h3 className="text-lg font-display font-semibold mb-4 text-foreground">Recent Bookings</h3>
+                  {recent_bookings.length > 0 ? (
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      {recent_bookings.slice(0, 5).map((booking) => (
+                        <div key={booking.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 sm:gap-0">
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground truncate">
+                              {booking.user_name || 'Customer'}
+                            </p>
+                            <p className="text-xs sm:text-sm text-muted-foreground">
+                              {booking.box_name} &bull; {new Date(booking.date).toLocaleDateString()}
+                            </p>
+                            {booking.time_slot && (
+                              <p className="text-xs text-muted-foreground">{booking.time_slot}</p>
+                            )}
+                          </div>
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-1">
+                            <span className="text-primary font-medium tabular-nums">₹{booking.amount}</span>
+                            <Badge tone="success">Confirmed</Badge>
+                          </div>
                         </div>
-                      ) : (
-                        <Placeholder text="No recent bookings" icon={Calendar} />
-                      )}
-                    </Card>
-
-                    <Card padding="md">
-                      <h3 className="text-base sm:text-lg font-display font-semibold mb-4 text-foreground">
-                        Sports Distribution
-                      </h3>
-                      {sportsData.labels.length > 0 ? (
-                        <Doughnut data={sportsData} options={doughnutOptions} />
-                      ) : (
-                        <Placeholder text="No sports data available" icon={Activity} />
-                      )}
-                    </Card>
-                  </div>
-                </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <Placeholder text="No recent bookings" icon={Calendar} />
+                  )}
+                </Card>
 
                 <OwnerScheduleCard boxes={all_owner_boxes} onQuickAdd={openAddBookingModal} onViewFull={() => setActiveTab('schedule')} />
               </div>

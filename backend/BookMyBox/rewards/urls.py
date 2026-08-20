@@ -3,10 +3,11 @@ from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 
 from .views import (
-    AdminCashbackRuleViewSet, AdminGrantScratchCardView, AdminRedeemCodeViewSet, AdminRewardsOverviewView,
-    AdminScratchCardAutoGrantView, AdminScratchCardConfigViewSet, AdminSpinWheelSegmentViewSet,
-    OwnerGrantScratchCardView, OwnerRedeemCodeViewSet, OwnerScratchCardAutoGrantView, RedeemCodeView,
-    ScratchCardViewSet, SpinWheelView, WalletTransactionListView, WalletView,
+    ActiveCashbackRuleView, AdminCashbackRuleViewSet, AdminGrantScratchCardView, AdminRedeemCodeViewSet,
+    AdminRewardsOverviewView, AdminScratchCardAutoGrantView, AdminScratchCardConfigViewSet,
+    AdminSpinWheelAutoGrantView, AdminSpinWheelSegmentViewSet, OwnerGrantScratchCardView,
+    OwnerRedeemCodeViewSet, OwnerScratchCardAutoGrantView, RedeemCodeView, ScratchCardViewSet, SpinWheelView,
+    WalletTransactionListView, WalletView,
 )
 
 # All SimpleRouter (no auto ^$ browsable-API root to shadow anything) at
@@ -37,8 +38,10 @@ urlpatterns = [
     path('wallet/', WalletView.as_view(), name='wallet'),
     path('spin/', SpinWheelView.as_view(), name='spin-wheel'),
     path('redeem/', RedeemCodeView.as_view(), name='redeem-code'),
+    path('cashback/active/', ActiveCashbackRuleView.as_view(), name='active-cashback-rule'),
     path('admin/overview/', AdminRewardsOverviewView.as_view(), name='admin-rewards-overview'),
     path('admin/scratch-cards/auto-grant/', AdminScratchCardAutoGrantView.as_view(), name='admin-scratch-auto-grant'),
+    path('admin/spin-wheel/auto-grant/', AdminSpinWheelAutoGrantView.as_view(), name='admin-spin-wheel-auto-grant'),
     path('admin/scratch-cards/grant/', AdminGrantScratchCardView.as_view(), name='admin-scratch-grant'),
     path('owner/scratch-cards/auto-grant/', OwnerScratchCardAutoGrantView.as_view(), name='owner-scratch-auto-grant'),
     path('owner/scratch-cards/grant/', OwnerGrantScratchCardView.as_view(), name='owner-scratch-grant'),

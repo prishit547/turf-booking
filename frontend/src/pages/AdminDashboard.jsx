@@ -26,6 +26,7 @@ import AdminRewardsTab from '../components/rewards/AdminRewardsTab'
 import AdminCommissionTab from '../components/commission/AdminCommissionTab'
 import AdminVerificationTab, { OwnerVerificationBadge } from '../components/verification/AdminVerificationTab'
 import AdminActivityLogTab from '../components/admin/AdminActivityLogTab'
+import AddBoxForm from '../components/boxes/AddBoxForm'
 
 const USERS_PAGE_SIZE = 20
 const BOOKINGS_PAGE_SIZE = 20
@@ -219,6 +220,14 @@ const AdminDashboard = () => {
   const [showCreateCouponModal, setShowCreateCouponModal] = useState(false)
   const [newCoupon, setNewCoupon] = useState({ code: '', discount_type: 'percent', value: '', max_uses: '' })
   const [creatingCoupon, setCreatingCoupon] = useState(false)
+
+  // Lets an admin fix up a pending box's details (e.g. add a Google Maps
+  // link the owner left out) before approving it — reuses the owner's own
+  // AddBoxForm in edit mode, which the backend already permits for admins
+  // (OwnerBoxViewSet.get_queryset() returns every box, not just the
+  // request user's own, when request.user.role == 'admin').
+  const [showEditBoxModal, setShowEditBoxModal] = useState(false)
+  const [editingBox, setEditingBox] = useState(null)
 
   const { user } = useAuth()
   const { pendingBoxes, fetchPendingBoxes, approveBox, rejectBox, requestBoxChanges } = useBox()
@@ -812,6 +821,17 @@ const AdminDashboard = () => {
     setRejectionReason('')
   }
 
+  const openEditBoxModal = (box) => {
+    setEditingBox(box)
+    setShowEditBoxModal(true)
+  }
+
+  const handleEditBoxSuccess = () => {
+    setShowEditBoxModal(false)
+    setEditingBox(null)
+    fetchPendingBoxes()
+  }
+
   const handleRequestChanges = async (boxId) => {
     if (!changesReason.trim()) {
       toast.error('Please explain what needs to change.')
@@ -1222,6 +1242,9 @@ const AdminDashboard = () => {
                         </div>
 
                         <div className="flex flex-wrap gap-3 mt-auto">
+                          <Button variant="outline" fullWidth icon={<Edit size={16} />} onClick={() => openEditBoxModal(box)}>
+                            Edit
+                          </Button>
                           <Button variant="outline" fullWidth icon={<X size={16} />} onClick={() => openRejectModal(box)}>
                             Reject
                           </Button>
@@ -1869,6 +1892,14 @@ const AdminDashboard = () => {
           {activeTab === 'activity-log' && <AdminActivityLogTab />}
         </div>
       </div>
+
+      <AddBoxForm
+        isOpen={showEditBoxModal}
+        onClose={() => { setShowEditBoxModal(false); setEditingBox(null) }}
+        onSuccess={handleEditBoxSuccess}
+        editMode
+        boxData={editingBox}
+      />
 
       {/* Rejection Modal — Modal manages its own AnimatePresence internally,
           so it renders unconditionally rather than behind a && guard. */}
