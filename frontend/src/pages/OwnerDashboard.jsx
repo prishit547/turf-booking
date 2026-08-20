@@ -19,6 +19,8 @@ import ViewBoxModal from '../components/boxes/ViewBoxModal';
 import OwnerRewardsTab from '../components/rewards/OwnerRewardsTab';
 import OwnerVerificationTab from '../components/verification/OwnerVerificationTab';
 import OwnerPayoutDetailsCard from '../components/payouts/OwnerPayoutDetailsCard';
+import { OwnerScheduleCard } from '../components/bookings/OwnerScheduleCard';
+import { OwnerScheduleTab } from '../components/bookings/OwnerScheduleTab';
 import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
 import { Button, Card, Badge, Loader, StatTile, Input, Select, Modal, Pagination } from '../components/ui';
@@ -49,6 +51,7 @@ const FALLBACK_BOX_IMAGE = 'https://images.unsplash.com/photo-1571019613454-1cb2
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'boxes', label: 'My Boxes', icon: Building },
+  { id: 'schedule', label: 'Box Schedule', icon: Clock },
   { id: 'bookings', label: 'Bookings', icon: Calendar },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
   { id: 'payouts', label: 'Payouts', icon: Wallet },
@@ -288,10 +291,14 @@ const OwnerDashboard = () => {
     }
   };
 
-  const openAddBookingModal = () => {
+  // `prefill` lets the new Overview schedule panel jump straight to "create
+  // a booking for this exact free slot" instead of the owner re-picking the
+  // box/date/time it was already showing them.
+  const openAddBookingModal = (prefill = {}) => {
     setAddBookingForm({
       boxId: all_owner_boxes.find((b) => b.status === 'approved')?.id || '',
       date: '', startTime: '', duration: 1, customerName: '', customerPhone: '', paymentStatus: 'Not Required',
+      ...prefill,
     });
     setShowAddBookingModal(true);
   };
@@ -668,72 +675,78 @@ const OwnerDashboard = () => {
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-                <Card padding="md">
-                  <div className="flex items-center gap-2 mb-4">
-                    <TrendingUp size={20} className="text-primary" />
-                    <h3 className="text-lg font-display font-semibold text-foreground">Revenue Trend</h3>
-                  </div>
-                  {revenue_chart_data.length > 0 ? (
-                    <Line data={revenueData} options={chartOptions} />
-                  ) : (
-                    <Placeholder text="No revenue data available" icon={TrendingUp} />
-                  )}
-                </Card>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 items-start">
+                <div className="xl:col-span-2 space-y-4 sm:space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <Card padding="md">
+                      <div className="flex items-center gap-2 mb-4">
+                        <TrendingUp size={20} className="text-primary" />
+                        <h3 className="text-lg font-display font-semibold text-foreground">Revenue Trend</h3>
+                      </div>
+                      {revenue_chart_data.length > 0 ? (
+                        <Line data={revenueData} options={chartOptions} />
+                      ) : (
+                        <Placeholder text="No revenue data available" icon={TrendingUp} />
+                      )}
+                    </Card>
 
-                <Card padding="md">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Calendar size={20} className="text-primary" />
-                    <h3 className="text-lg font-display font-semibold text-foreground">Bookings trend (6 months)</h3>
+                    <Card padding="md">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Calendar size={20} className="text-primary" />
+                        <h3 className="text-lg font-display font-semibold text-foreground">Bookings trend (6 months)</h3>
+                      </div>
+                      {bookings_chart_data.length > 0 ? (
+                        <Bar data={bookingsData} options={chartOptions} />
+                      ) : (
+                        <Placeholder text="No booking data available" icon={Calendar} />
+                      )}
+                    </Card>
                   </div>
-                  {bookings_chart_data.length > 0 ? (
-                    <Bar data={bookingsData} options={chartOptions} />
-                  ) : (
-                    <Placeholder text="No booking data available" icon={Calendar} />
-                  )}
-                </Card>
-              </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
-                <Card padding="md" className="xl:col-span-2">
-                  <h3 className="text-lg font-display font-semibold mb-4 text-foreground">Recent Bookings</h3>
-                  {recent_bookings.length > 0 ? (
-                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
-                      {recent_bookings.slice(0, 5).map((booking) => (
-                        <div key={booking.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 sm:gap-0">
-                          <div className="min-w-0">
-                            <p className="font-medium text-foreground truncate">
-                              {booking.user_name || 'Customer'}
-                            </p>
-                            <p className="text-xs sm:text-sm text-muted-foreground">
-                              {booking.box_name} &bull; {new Date(booking.date).toLocaleDateString()}
-                            </p>
-                            {booking.time_slot && (
-                              <p className="text-xs text-muted-foreground">{booking.time_slot}</p>
-                            )}
-                          </div>
-                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-1">
-                            <span className="text-primary font-medium tabular-nums">₹{booking.amount}</span>
-                            <Badge tone="success">Confirmed</Badge>
-                          </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+                    <Card padding="md" className="lg:col-span-2">
+                      <h3 className="text-lg font-display font-semibold mb-4 text-foreground">Recent Bookings</h3>
+                      {recent_bookings.length > 0 ? (
+                        <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                          {recent_bookings.slice(0, 5).map((booking) => (
+                            <div key={booking.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 sm:gap-0">
+                              <div className="min-w-0">
+                                <p className="font-medium text-foreground truncate">
+                                  {booking.user_name || 'Customer'}
+                                </p>
+                                <p className="text-xs sm:text-sm text-muted-foreground">
+                                  {booking.box_name} &bull; {new Date(booking.date).toLocaleDateString()}
+                                </p>
+                                {booking.time_slot && (
+                                  <p className="text-xs text-muted-foreground">{booking.time_slot}</p>
+                                )}
+                              </div>
+                              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 sm:gap-1">
+                                <span className="text-primary font-medium tabular-nums">₹{booking.amount}</span>
+                                <Badge tone="success">Confirmed</Badge>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <Placeholder text="No recent bookings" icon={Calendar} />
-                  )}
-                </Card>
+                      ) : (
+                        <Placeholder text="No recent bookings" icon={Calendar} />
+                      )}
+                    </Card>
 
-                <Card padding="md">
-                  <h3 className="text-base sm:text-lg font-display font-semibold mb-4 text-foreground">
-                    Sports Distribution
-                  </h3>
-                  {sportsData.labels.length > 0 ? (
-                    <Doughnut data={sportsData} options={doughnutOptions} />
-                  ) : (
-                    <Placeholder text="No sports data available" icon={Activity} />
-                  )}
-                </Card>
+                    <Card padding="md">
+                      <h3 className="text-base sm:text-lg font-display font-semibold mb-4 text-foreground">
+                        Sports Distribution
+                      </h3>
+                      {sportsData.labels.length > 0 ? (
+                        <Doughnut data={sportsData} options={doughnutOptions} />
+                      ) : (
+                        <Placeholder text="No sports data available" icon={Activity} />
+                      )}
+                    </Card>
+                  </div>
+                </div>
+
+                <OwnerScheduleCard boxes={all_owner_boxes} onQuickAdd={openAddBookingModal} onViewFull={() => setActiveTab('schedule')} />
               </div>
             </div>
           )}
@@ -815,6 +828,11 @@ const OwnerDashboard = () => {
                 </Card>
               )}
             </div>
+          )}
+
+          {/* Box Schedule Tab */}
+          {activeTab === 'schedule' && (
+            <OwnerScheduleTab boxes={all_owner_boxes} onQuickAdd={openAddBookingModal} />
           )}
 
           {/* Bookings Tab */}

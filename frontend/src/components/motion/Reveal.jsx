@@ -11,8 +11,13 @@ export function Reveal({ children, delay = 0, y = 24, className = '' }) {
             className={className}
             initial={{ opacity: 0, y }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-80px' }}
-            transition={{ duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
+            // Positive margin extends the trigger zone *below* the viewport, so
+            // a section starts fading in before it's scrolled into view instead
+            // of after — a fast scroll used to outrun the old negative margin
+            // and land on a fully invisible (opacity: 0) section, which read as
+            // a blank/black gap against this dark theme.
+            viewport={{ once: true, margin: '0px 0px 200px 0px' }}
+            transition={{ duration: 0.45, delay, ease: [0.22, 1, 0.36, 1] }}
         >
             {children}
         </motion.div>
@@ -30,7 +35,7 @@ export function WordReveal({ text, className = '' }) {
                     className="inline-block"
                     initial={{ opacity: 0, y: '0.6em', filter: 'blur(6px)' }}
                     animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-                    transition={{ duration: 0.7, delay: 0.12 * i, ease: [0.22, 1, 0.36, 1] }}
+                    transition={{ duration: 0.5, delay: 0.06 * i, ease: [0.22, 1, 0.36, 1] }}
                 >
                     {word}
                     {i < words.length - 1 ? ' ' : ''}

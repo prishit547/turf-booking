@@ -104,7 +104,7 @@ const Home = () => {
           <motion.p
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7, duration: 0.6 }}
+            transition={{ delay: 0.3, duration: 0.5 }}
             className="mt-5 max-w-xl text-lg text-muted-foreground"
           >
             Cricket boxes, football turfs, badminton, basketball and pickleball courts — real-time slots,
@@ -115,7 +115,7 @@ const Home = () => {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.85, duration: 0.6 }}
+            transition={{ delay: 0.4, duration: 0.5 }}
             className="mt-9 rounded-2xl border border-border bg-card/85 p-3 backdrop-blur sm:max-w-3xl"
           >
             <div className="grid gap-2 sm:grid-cols-[1.1fr_1fr_1fr_auto]">

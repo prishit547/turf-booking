@@ -1,11 +1,38 @@
 # boxes/models.py
 
 from decimal import Decimal
+from io import BytesIO
 
+from django.core.files.base import ContentFile
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+
+# Owner uploads (often straight off a phone camera or a stock photo site) can
+# arrive 5-10MB and several thousand px wide, but every box image on this
+# site is only ever displayed as a card thumbnail or a detail hero at most a
+# few hundred px tall — serving the original bloats the homepage/listings
+# grid badly. Downscale + re-encode on save instead of storing as-is.
+MAX_IMAGE_DIMENSION = 1600
+IMAGE_QUALITY = 82
+
+
+def _compress_uploaded_image(image_field):
+    from PIL import Image
+
+    img = Image.open(image_field)
+    if img.mode not in ('RGB', 'L'):
+        img = img.convert('RGB')
+    img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
+
+    buffer = BytesIO()
+    img.save(buffer, format='JPEG', quality=IMAGE_QUALITY, optimize=True)
+    buffer.seek(0)
+
+    name = image_field.name.rsplit('.', 1)[0] + '.jpg'
+    return ContentFile(buffer.read(), name=name)
+
 
 class Box(models.Model):
     # --- ADDED FIELDS for Owner and Approval Workflow ---
@@ -59,6 +86,22 @@ class Box(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # None on a brand-new instance even if `image=` was passed to the
+        # constructor, so the first save() below always treats a
+        # constructor-provided image as new and compresses it.
+        self._original_image_name = self.image.name if (self.pk and self.image) else None
+
+    def save(self, *args, **kwargs):
+        if self.image and self.image.name != self._original_image_name:
+            try:
+                self.image = _compress_uploaded_image(self.image)
+            except Exception:
+                pass  # unsupported/corrupt upload — store the original rather than block the save
+        super().save(*args, **kwargs)
+        self._original_image_name = self.image.name if self.image else None
 
     def __str__(self):
         return self.name
