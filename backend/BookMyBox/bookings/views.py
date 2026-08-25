@@ -47,6 +47,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     queryset = Booking.objects.all()
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsPagination
 
     def get_queryset(self):
         if self.request.user.is_authenticated and self.request.user.role == 'admin':
@@ -67,7 +68,25 @@ class BookingViewSet(viewsets.ModelViewSet):
         # bug, not just noise.
         if self.action in ('retrieve', 'cancel', 'reschedule'):
             own_or_participant |= Q(box__owner=self.request.user)
-        return self.queryset.filter(own_or_participant).distinct().prefetch_related('invites')
+        qs = self.queryset.filter(own_or_participant).distinct().prefetch_related('invites')
+
+        # UserDashboard.jsx's "Upcoming"/"History" split used to fetch every
+        # booking and bucket them client-side — fine unpaginated, but once
+        # the list action pages at 20 rows, a naive single ordering buries
+        # upcoming bookings behind however much history a long-time customer
+        # has. `when` lets the two sections page independently, each with
+        # the ordering that's actually useful for it (upcoming: soonest
+        # first; history: most recent first). Date-only, not time-of-day —
+        # the same coarseness the rest of the app already uses to bucket
+        # "today" as a whole rather than by the hour.
+        if self.action == 'list':
+            when = self.request.query_params.get('when')
+            today = timezone.localdate()
+            if when == 'upcoming':
+                qs = qs.filter(date__gte=today).order_by('date', 'start_time')
+            elif when == 'past':
+                qs = qs.filter(date__lt=today).order_by('-date', '-start_time')
+        return qs
 
     def create(self, request, *args, **kwargs):
         parsed = services.validate_booking_request(request.data)

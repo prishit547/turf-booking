@@ -1,10 +1,13 @@
 # owner_dashboard/views.py
 
+import csv
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.db import models
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Count, DecimalField, FloatField, Q, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
@@ -30,7 +33,13 @@ from user.serializers import OwnerPayoutDetailsSerializer
 from BookMyBox.pagination import StandardResultsPagination
 from .models import Payout, PayoutSchedule
 from .serializers import OwnerDashboardStatsSerializer, PayoutScheduleSerializer, PayoutSerializer
-from .services import compute_owner_earnings
+from .services import (
+    EARNINGS_PERIODS, _add_months, compute_owner_earnings, resolve_period,
+)
+
+# Caps one bulk-cancel request, since each cancellation fans out into a
+# refund + notification.
+MAX_BULK_CANCEL = 100
 
 
 class OwnerDashboardAPIView(APIView):
@@ -145,6 +154,78 @@ class OwnerDashboardAPIView(APIView):
 
         serializer = OwnerDashboardStatsSerializer(instance=data)
         return Response(serializer.data)
+
+
+class OwnerEarningsView(APIView):
+    """Per-box earnings over a selectable reporting window — "what did my
+    cricket box actually make last month, after commission". Every figure it
+    returns is period-scoped and carries its own label, so no amount shown to
+    an owner is ambiguous about the span it covers.
+
+    Deliberately windows on Booking.date (when the slot was played), not
+    created_at — that's what an owner means by "September's earnings", and it
+    matches the Overview revenue chart. The payout ledger still reconciles on
+    created_at (see compute_owner_earnings' docstring); all_time totals are
+    identical either way, which is what the payout tab compares against."""
+    permission_classes = [IsAdminOrOwner]
+
+    def get(self, request, *args, **kwargs):
+        # An admin hitting this without ?owner= sees their own (empty) books
+        # rather than every owner's mixed together, which would be meaningless.
+        owner = request.user
+        if request.user.role == 'admin' and request.query_params.get('owner'):
+            owner = get_object_or_404(User, pk=request.query_params['owner'], role='owner')
+
+        today = timezone.localdate()
+        date_from, date_to, label, key = resolve_period(request.query_params.get('period'), today)
+        earnings = compute_owner_earnings(owner, date_from=date_from, date_to=date_to)
+
+        # Month-by-month trend across the selected window, so the owner can
+        # see the shape of it rather than just one lump sum. Capped at 12
+        # months for all_time so a long-lived account doesn't return a
+        # hundred rows.
+        trend_start = date_from or _add_months(today.replace(day=1), -11)
+        monthly = []
+        cursor = trend_start.replace(day=1)
+        end_month = (date_to or today).replace(day=1)
+        while cursor <= end_month:
+            next_month = _add_months(cursor, 1)
+            month_totals = compute_owner_earnings(
+                owner, date_from=cursor, date_to=next_month - timedelta(days=1),
+            )
+            monthly.append({
+                'month': cursor.strftime('%Y-%m'),
+                'label': cursor.strftime('%b %Y'),
+                'gross': round(float(month_totals['gross_revenue']), 2),
+                'commission': round(float(month_totals['commission']), 2),
+                'net': round(float(month_totals['net_revenue']), 2),
+                'bookings': month_totals['bookings_count'],
+            })
+            cursor = next_month
+
+        return Response({
+            'period': key,
+            'period_label': label,
+            'date_from': date_from.isoformat() if date_from else None,
+            'date_to': (date_to or today).isoformat(),
+            'periods': [{'value': k, 'label': v} for k, v in EARNINGS_PERIODS.items()],
+            'gross_revenue': round(float(earnings['gross_revenue']), 2),
+            'commission': round(float(earnings['commission']), 2),
+            'net_revenue': round(float(earnings['net_revenue']), 2),
+            'bookings_count': earnings['bookings_count'],
+            'by_box': [
+                {
+                    'box_id': r['box_id'], 'box_name': r['box_name'], 'sport': r['sport'],
+                    'rate': round(float(r['rate']) * 100, 2),
+                    'gross': round(float(r['gross']), 2),
+                    'commission': round(float(r['commission']), 2),
+                    'net': round(float(r['net']), 2),
+                    'bookings': r['bookings'],
+                }
+                for r in earnings['by_box']
+            ],
+            'monthly': monthly,
+        })
 
 
 class OwnerAnalyticsView(APIView):
@@ -276,6 +357,77 @@ class OwnerBookingViewSet(viewsets.ReadOnlyModelViewSet):
         except CancellationError as e:
             return Response({"detail": e.detail}, status=e.status_code)
         return Response(self.get_serializer(booking).data)
+
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        """Bookings as CSV for the owner's own accounting. Runs the same
+        filter_queryset() the list endpoint does, so whatever date range /
+        box / status filters the owner has applied in the UI carry over
+        verbatim — but deliberately skips pagination, since a partial export
+        would be worse than useless for bookkeeping."""
+        rows = self.filter_queryset(self.get_queryset())
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="bookings-{timezone.now().date()}.csv"'
+        writer = csv.writer(response)
+        writer.writerow([
+            "Booking ID", "Box", "Date", "Start", "End", "Duration (hrs)", "Customer", "Customer email",
+            "Customer phone", "Source", "Status", "Payment status", "Amount", "Booked on",
+        ])
+        for b in rows.iterator():
+            is_manual = b.booking_source == "owner_manual"
+            writer.writerow([
+                b.id, b.box.name, b.date, b.start_time, b.end_time, b.duration,
+                (b.customer_name or "Walk-in customer") if is_manual else (b.user.full_name or b.user.email),
+                "" if is_manual else b.user.email,
+                b.customer_phone if is_manual else "",
+                b.get_booking_source_display(), b.booking_status, b.payment_status,
+                b.total_amount, b.created_at.strftime("%Y-%m-%d %H:%M"),
+            ])
+        return response
+
+    @action(detail=False, methods=["post"], url_path="bulk-cancel")
+    def bulk_cancel(self, request):
+        """Cancel several bookings in one action — e.g. a box going offline
+        for a day. Deliberately best-effort per booking rather than
+        all-or-nothing: an owner clearing a day shouldn't have the whole
+        batch rejected because one booking is inside its cancellation
+        window, so each is attempted independently and the response reports
+        exactly which ones failed and why."""
+        ids = request.data.get("booking_ids")
+        reason = (request.data.get("reason") or "").strip()
+        if not isinstance(ids, list) or not ids:
+            return Response({"detail": "booking_ids must be a non-empty list."}, status=status.HTTP_400_BAD_REQUEST)
+        if not reason:
+            return Response({"detail": "A cancellation reason is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(ids) > MAX_BULK_CANCEL:
+            return Response(
+                {"detail": f"Please cancel at most {MAX_BULK_CANCEL} bookings at a time."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # get_queryset() already scopes to this owner's boxes, so unknown or
+        # someone else's ids simply don't come back.
+        bookings = list(self.get_queryset().filter(pk__in=ids, booking_status="Confirmed"))
+        cancelled, failed = [], []
+        for booking in bookings:
+            try:
+                cancel_booking(booking, cancelled_by=request.user, reason=reason)
+                cancelled.append(booking.id)
+            except CancellationError as e:
+                failed.append({"id": booking.id, "detail": e.detail})
+
+        skipped = [i for i in ids if i not in cancelled and not any(f["id"] == i for f in failed)]
+        return Response({
+            "cancelled_count": len(cancelled),
+            "cancelled_ids": cancelled,
+            "failed": failed,
+            "skipped_ids": skipped,
+            "detail": (
+                f"{len(cancelled)} booking{'s' if len(cancelled) != 1 else ''} cancelled and refunded."
+                + (f" {len(failed)} could not be cancelled." if failed else "")
+                + (f" {len(skipped)} were already cancelled or not found." if skipped else "")
+            ),
+        })
 
     @action(detail=False, methods=["post"])
     def book(self, request):
@@ -410,6 +562,24 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
             return Payout.objects.select_related("owner").all()
         return Payout.objects.filter(owner=self.request.user)
 
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        """Payout history as CSV — an owner exports their own, an admin
+        exports every recorded payout (get_queryset() already draws that
+        line)."""
+        rows = self.filter_queryset(self.get_queryset())
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="payouts-{timezone.now().date()}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(["Payout ID", "Owner", "Amount", "Payment method", "Transaction ID", "Note", "Recorded on"])
+        for p in rows.iterator():
+            writer.writerow([
+                p.id, p.owner.email, p.amount,
+                p.get_payment_method_display() if p.payment_method else "",
+                p.transaction_id, p.note, p.created_at.strftime("%Y-%m-%d %H:%M"),
+            ])
+        return response
+
     def perform_create(self, serializer):
         if self.request.user.role != "admin":
             raise PermissionDenied("Only admins can record a payout.")
@@ -462,16 +632,38 @@ class PayoutViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.Gen
                 }
                 for row in earnings["by_sport"]
             ],
+            # Per-box so an owner can check the payout they're owed against
+            # each individual venue's contribution, rather than having to
+            # take one combined number on trust.
+            "by_box": [
+                {
+                    "box_id": row["box_id"],
+                    "box_name": row["box_name"],
+                    "sport": row["sport"],
+                    "rate": round(float(row["rate"]) * 100, 2),
+                    "gross": round(float(row["gross"]), 2),
+                    "commission": round(float(row["commission"]), 2),
+                    "net": round(float(row["net"]), 2),
+                    "bookings": row["bookings"],
+                }
+                for row in earnings["by_box"]
+            ],
         }
 
     @action(detail=False, methods=["get"])
     def balance(self, request):
-        """Admin: every owner's balance, highest-owed first. Owner: just
-        their own — same shape either way so the frontend doesn't branch."""
+        """Admin: every owner's balance, highest-owed first — paginated,
+        since this is a custom @action (no automatic pagination like a
+        ModelViewSet.list()) and was returning the entire platform's owners
+        unbounded. Owner: just their own, a single object, never paginated —
+        same response shape either way so the frontend doesn't need to
+        branch on role."""
         if request.user.role == "admin":
             owners = User.objects.filter(role="owner")
             data = sorted((self._balance_for_owner(o) for o in owners), key=lambda d: d["balance_due"], reverse=True)
-            return Response(data)
+            paginator = StandardResultsPagination()
+            page = paginator.paginate_queryset(data, request, view=self)
+            return paginator.get_paginated_response(page)
         return Response(self._balance_for_owner(request.user))
 
 class PayoutScheduleViewSet(viewsets.ModelViewSet):

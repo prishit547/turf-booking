@@ -102,6 +102,26 @@ class RescheduleTests(APITestCase):
         self.assertEqual(booking.start_time, '09:00')
         self.assertTrue(Notification.objects.filter(user=self.user, title__icontains='rescheduled').exists())
 
+    def test_cannot_reschedule_to_a_same_day_slot_whose_start_time_has_already_passed(self):
+        # Regression: reschedule_booking() used to only compare dates, so a
+        # booking could be rescheduled onto a same-day slot that had already
+        # started.
+        now = timezone.localtime()
+        if now.hour < 6:
+            self.skipTest("Can't construct an elapsed same-day slot before this box's 06:00 opening.")
+        booking = self._create_booking()
+
+        self._auth(self.user)
+        response = self.client.post(
+            f'/api/bookings/{booking.id}/reschedule/',
+            {'date': now.date().isoformat(), 'start_time': '06:00'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('already passed', str(response.data))
+        booking.refresh_from_db()
+        self.assertIsNone(booking.rescheduled_at)
+
     def test_stranger_cannot_reschedule(self):
         # A true stranger (not the booker, no accepted invite, not the box
         # owner) isn't even in get_queryset()'s own_or_participant filter for

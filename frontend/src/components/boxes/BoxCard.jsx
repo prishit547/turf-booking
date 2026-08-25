@@ -100,7 +100,7 @@ export const BoxCard = forwardRef(function BoxCard({ box, layout = 'grid' }, ref
                             <MapPin className="h-3.5 w-3.5" /> {box.location}
                         </p>
                     </div>
-                    <RatingStars rating={box.rating || 0} />
+                    <RatingStars rating={box.rating || 0} count={box.review_count} />
                 </div>
 
                 <div className="mt-auto flex items-center justify-between gap-3 pt-2">

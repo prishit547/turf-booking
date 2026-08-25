@@ -21,7 +21,7 @@ function addHours(time, hours) {
  * nested `<button>` inside a disabled one never receives clicks.
  */
 export function SlotGrid({
-    timeSlots, selectedTimeSlot, onSelect, isTimeSlotBooked, isTimeSlotAvailable, loading, duration = 1,
+    timeSlots, selectedTimeSlot, onSelect, isTimeSlotBooked, isTimeSlotAvailable, isTimeSlotPast, loading, duration = 1,
     waitlistedSlots, onToggleWaitlist, waitlistPending,
 }) {
     if (loading) {
@@ -37,8 +37,25 @@ export function SlotGrid({
         <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto sm:grid-cols-3">
             {timeSlots.map((time, i) => {
                 const isBooked = isTimeSlotBooked(time);
+                const isPast = !isBooked && isTimeSlotPast?.(time);
                 const isSelected = selectedTimeSlot === time;
-                const canSelect = !isBooked && isTimeSlotAvailable(time);
+                const canSelect = !isBooked && !isPast && isTimeSlotAvailable(time);
+
+                if (isPast) {
+                    return (
+                        <motion.div
+                            key={time}
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.2, delay: i * 0.015 }}
+                            className="p-2 text-sm rounded-lg border border-border/60 bg-transparent text-muted-foreground/60 flex flex-col items-center gap-0.5 cursor-not-allowed"
+                            title="This time has already passed"
+                        >
+                            <span>{time} - {addHours(time, duration)}</span>
+                            <span className="text-xs font-medium uppercase tracking-wide">Past</span>
+                        </motion.div>
+                    );
+                }
 
                 if (isBooked) {
                     const isWaitlisted = waitlistedSlots?.has(time);
@@ -96,8 +113,10 @@ export function SlotGrid({
     );
 }
 
-/** Static legend row for the slot grid's three visual states. */
-export function SlotLegend() {
+/** Static legend row for the slot grid's visual states. `showPast` adds the
+ * fourth "already elapsed" state — only relevant when the picker is showing
+ * today, so callers viewing a future date can leave it off. */
+export function SlotLegend({ showPast = false }) {
     return (
         <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
             <div className="flex items-center gap-1.5">
@@ -112,6 +131,12 @@ export function SlotLegend() {
                 <div className="w-3 h-3 bg-danger/10 border border-danger/30 rounded" />
                 Booked
             </div>
+            {showPast && (
+                <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-transparent border border-border/60 rounded" />
+                    Past
+                </div>
+            )}
         </div>
     );
 }

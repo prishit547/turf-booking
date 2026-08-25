@@ -389,8 +389,9 @@ export const PeakHoursChart = ({ data, loading = false }) => {
   );
 };
 
-// Monthly Spending Trend with Gradient
-export const MonthlySpendingChart = ({ data, loading = false }) => {
+// Monthly activity trend with gradient. Reports hours played, not money
+// spent — the customer dashboard never tallies a player's spending.
+export const MonthlyActivityChart = ({ data, loading = false }) => {
   const theme = useChartTheme();
 
   if (loading) {
@@ -413,7 +414,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
     labels: data?.labels || [],
     datasets: [
       {
-        label: 'Monthly Spending',
+        label: 'Hours played',
         data: data?.values || [],
         borderColor: theme.colors.secondary,
         backgroundColor: (context) => {
@@ -450,7 +451,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
         intersect: false,
         ...theme.tooltip,
         callbacks: {
-          label: (context) => `Spent: ₹${context.parsed.y.toLocaleString()}`,
+          label: (context) => `${context.parsed.y.toLocaleString()} hrs played`,
         },
       },
     },
@@ -480,7 +481,7 @@ export const MonthlySpendingChart = ({ data, loading = false }) => {
           font: {
             size: 12,
           },
-          callback: (value) => `₹${value.toLocaleString()}`,
+          callback: (value) => `${value.toLocaleString()} hrs`,
         },
       },
     },

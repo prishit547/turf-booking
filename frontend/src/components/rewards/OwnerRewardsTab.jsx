@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import { Plus, Gift, Ticket, UserPlus } from 'lucide-react';
 import { api } from '../../api.jsx';
-import { Button, Card, Badge, Input, Select, Modal } from '../ui';
+import { Button, Card, Badge, Input, Select, Modal, Pagination } from '../ui';
 import { AutoGrantToggle, GrantScratchCardModal } from './AdminRewardsTab';
 
 const SUB_TABS = [
@@ -70,9 +70,13 @@ function ScratchCardsSection() {
  * of the owner's own boxes only, not general wallet cash (see
  * rewards/models.py::RedeemCode.box and bookings/services.py::
  * apply_redeem_code). */
+const PROMO_CODES_PAGE_SIZE = 20;
+
 function PromoCodesSection({ ownerBoxes }) {
   const [selectedBoxId, setSelectedBoxId] = useState(ownerBoxes?.[0]?.id || '');
   const [codes, setCodes] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ value: '', quantity: '10', batch_label: '' });
@@ -82,16 +86,23 @@ function PromoCodesSection({ ownerBoxes }) {
     if (!selectedBoxId && ownerBoxes?.length > 0) setSelectedBoxId(ownerBoxes[0].id);
   }, [ownerBoxes, selectedBoxId]);
 
+  // Switching facility should always land back on page 1 of its own codes.
+  useEffect(() => { setPage(1); }, [selectedBoxId]);
+
   const load = useCallback(() => {
     if (!selectedBoxId) {
       setCodes([]);
+      setCount(0);
       return;
     }
     setLoading(true);
-    api.get('/rewards/owner/redeem-codes/', { params: { box_id: selectedBoxId } })
-      .then((res) => setCodes(res.data.results || res.data))
+    api.get('/rewards/owner/redeem-codes/', { params: { box_id: selectedBoxId, page, page_size: PROMO_CODES_PAGE_SIZE } })
+      .then((res) => {
+        setCodes(res.data.results || res.data);
+        setCount(res.data.count ?? (res.data.results || res.data).length);
+      })
       .finally(() => setLoading(false));
-  }, [selectedBoxId]);
+  }, [selectedBoxId, page]);
   useEffect(() => { load(); }, [load]);
 
   const handleGenerate = async () => {
@@ -101,6 +112,7 @@ function PromoCodesSection({ ownerBoxes }) {
       toast.success(`${form.quantity} codes generated`);
       setShowModal(false);
       setForm({ value: '', quantity: '10', batch_label: '' });
+      setPage(1);
       load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to generate codes');
@@ -160,6 +172,7 @@ function PromoCodesSection({ ownerBoxes }) {
                 </tbody>
               </table>
             </div>
+            <Pagination page={page} pageSize={PROMO_CODES_PAGE_SIZE} count={count} onPageChange={setPage} />
           </Card>
         </>
       )}

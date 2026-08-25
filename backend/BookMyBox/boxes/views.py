@@ -1,4 +1,5 @@
 # boxes/views.py
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from rest_framework import mixins, viewsets, status
@@ -23,7 +24,7 @@ from bookings.models import Booking
 from bookings.services import cancel_booking, CancellationError
 from .models import Box, Review, BlockedDate, CommissionRate, PlatformCommissionSetting, PricingRule
 from .serializers import (
-    BoxSerializer, ReviewSerializer, ReviewOwnerResponseSerializer, OwnerBoxSerializer,
+    BoxSerializer, BoxDetailSerializer, ReviewSerializer, ReviewOwnerResponseSerializer, OwnerBoxSerializer,
     AdminBoxSerializer, AdminReviewSerializer, BlockedDateSerializer, CommissionRateSerializer,
     PlatformCommissionSettingSerializer, PricingRuleSerializer,
 )
@@ -96,6 +97,10 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 # this app (the frontend polls booked_slots every 30s for the same reason).
 PUBLIC_BOX_CACHE_TTL = 15
 
+# Upper bound on a single recurring-block request's span, so one call can't
+# generate an unbounded number of BlockedDate rows.
+MAX_RECURRING_BLOCK_DAYS = 366
+
 
 @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL), name='list')
 @method_decorator(cache_page(PUBLIC_BOX_CACHE_TTL), name='retrieve')
@@ -124,14 +129,37 @@ class PublicBoxViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """Ensure we always return only approved boxes with stable ordering.
 
-        prefetch_related('reviews') matters here specifically because
-        BoxSerializer nests the full review list on every box — without it,
-        every action built on this queryset (list/retrieve/featured/popular/
-        nearby) does one extra reviews query per box serialized, which a
-        stress test measured as the dominant cost of listing 100 boxes
-        (~925ms p50, vs ~220ms to retrieve a single box).
+        BoxSerializer no longer nests the full review list (see its
+        docstring) — review_count is an annotation instead, so listing 100
+        boxes costs one extra COUNT-and-GROUP query total rather than one
+        per-box reviews query (the N+1 a stress test once measured as the
+        dominant cost of listing 100 boxes, ~925ms p50 vs ~220ms to retrieve
+        a single box).
         """
-        return Box.objects.filter(status='approved', owner__is_active=True).order_by('id').prefetch_related('reviews', 'blocked_dates', 'pricing_rules')
+        return Box.objects.filter(status='approved', owner__is_active=True).order_by('id').annotate(
+            review_count_annotated=models.Count('reviews', distinct=True),
+        ).prefetch_related('blocked_dates', 'pricing_rules')
+
+    def get_serializer_class(self):
+        # The per-star rating histogram is only ever rendered on a single
+        # box's own detail page — computing it for every box in a listing
+        # response would be pure waste.
+        if self.action == 'retrieve':
+            return BoxDetailSerializer
+        return BoxSerializer
+
+    @action(detail=True, methods=['get'], pagination_class=StandardResultsPagination)
+    def reviews(self, request, pk=None):
+        """A box's reviews, paginated — BoxSerializer used to nest every
+        review for every box unbounded (see its docstring); a popular box's
+        detail page now fetches this separately instead, and can actually
+        page through a large review count instead of rendering it all at
+        once."""
+        box = self.get_object()
+        queryset = box.reviews.select_related('user').all()
+        page = self.paginate_queryset(queryset)
+        serializer = ReviewSerializer(page, many=True, context={'request': request})
+        return self.get_paginated_response(serializer.data)
 
     # --- ADDED THE TWO MISSING ACTIONS BELOW ---
 
@@ -328,6 +356,104 @@ class OwnerBoxViewSet(viewsets.ModelViewSet):
         else:
             serializer.save()
 
+    @staticmethod
+    def _storage_path(value):
+        """Accept either a stored relative path ("box_images/x.jpg") or the
+        absolute media URL BoxSerializer.get_images() hands the frontend, and
+        return the stored relative form so it can be matched against
+        box.image/box.images."""
+        if not value:
+            return ''
+        path = value.split('/media/', 1)[-1] if '/media/' in value else value
+        return path.lstrip('/')
+
+    @staticmethod
+    def _gallery(box):
+        """The box's images as one ordered list — cover first, then the rest.
+        Mirrors BoxSerializer.get_images()' ordering, which is what the owner
+        actually sees, and papers over the cover living in its own `image`
+        field separate from the `images` list."""
+        gallery = []
+        if box.image:
+            gallery.append(box.image.name)
+        for path in (box.images or []):
+            if path not in gallery:
+                gallery.append(path)
+        return gallery
+
+    def _persist_gallery(self, box, gallery, cover):
+        box.images = gallery
+        box.image.name = cover
+        # Bypasses the compress-on-change guard in Box.save(): these paths
+        # already point at stored (already-compressed) files, so re-running
+        # compression on them would be a pointless second lossy pass.
+        box._original_image_name = cover
+        box.save()
+
+    @action(detail=True, methods=['post'])
+    def add_images(self, request, pk=None):
+        """Append new images to an existing box's gallery. perform_update()
+        above never reads request.FILES (only perform_create does) — without
+        this dedicated action, uploading "new images" from the edit screen
+        silently did nothing. Applies immediately rather than waiting on the
+        wizard's final submit, so the gallery updates as soon as a photo is
+        added."""
+        box = self.get_object()
+        uploaded = request.FILES.getlist('images')
+        if not uploaded:
+            return Response({'detail': 'No images provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        gallery = self._gallery(box)
+        for img in uploaded:
+            gallery.append(default_storage.save(f"box_images/{img.name}", img))
+        self._persist_gallery(box, gallery, box.image.name if box.image else gallery[0])
+        return Response(BoxSerializer(box, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='images/remove')
+    def remove_image(self, request, pk=None):
+        """Delete one image from the gallery, including from storage. If it
+        was the cover photo, the next remaining image is promoted
+        automatically so the box is never left without a cover."""
+        box = self.get_object()
+        gallery = self._gallery(box)
+        path = self._storage_path(request.data.get('path'))
+        if not path or path not in gallery:
+            return Response({'detail': 'Unknown image path.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(gallery) <= 1:
+            return Response({'detail': 'A box must keep at least one image.'}, status=status.HTTP_400_BAD_REQUEST)
+        cover = box.image.name if box.image else gallery[0]
+        gallery.remove(path)
+        default_storage.delete(path)
+        self._persist_gallery(box, gallery, gallery[0] if cover == path else cover)
+        return Response(BoxSerializer(box, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='images/set-cover')
+    def set_cover_image(self, request, pk=None):
+        """Promote an existing gallery image to be the box's cover photo,
+        without needing to delete and re-upload anything."""
+        box = self.get_object()
+        gallery = self._gallery(box)
+        path = self._storage_path(request.data.get('path'))
+        if not path or path not in gallery:
+            return Response({'detail': 'Unknown image path.'}, status=status.HTTP_400_BAD_REQUEST)
+        self._persist_gallery(box, gallery, path)
+        return Response(BoxSerializer(box, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='images/reorder')
+    def reorder_images(self, request, pk=None):
+        """Change the gallery's display order — the customer-facing carousel
+        on BoxDetails.jsx shows them in this order. Which image is the cover
+        is unaffected."""
+        box = self.get_object()
+        gallery = self._gallery(box)
+        new_order = [self._storage_path(p) for p in (request.data.get('images') or [])]
+        if set(new_order) != set(gallery):
+            return Response(
+                {'detail': "images must be a reordering of the box's existing image list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        self._persist_gallery(box, new_order, box.image.name if box.image else new_order[0])
+        return Response(BoxSerializer(box, context={'request': request}).data)
+
     @action(detail=True, methods=['patch'], url_path='reviews/(?P<review_id>[^/.]+)/respond')
     def respond_to_review(self, request, pk=None, review_id=None):
         """Owner reply to a review on their own box — box is already
@@ -354,9 +480,15 @@ class AdminBoxViewSet(viewsets.ViewSet):
     permission_classes = [IsAdminUser]
 
     def list_pending(self, request):
+        # A bare ViewSet action doesn't get GenericAPIView's automatic
+        # pagination, so this used to return the entire approval queue
+        # unbounded — fine while it's small, but a real backlog (a growth
+        # spurt, a lapsed admin) had no way to page through.
         pending = Box.objects.filter(status='pending').order_by('-submitted_at')
-        serializer = AdminBoxSerializer(pending, many=True, context={'request': request})
-        return Response(serializer.data)
+        paginator = StandardResultsPagination()
+        page = paginator.paginate_queryset(pending, request, view=self)
+        serializer = AdminBoxSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
     def approve(self, request, pk=None):
         try:
@@ -538,6 +670,112 @@ class BlockedDateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.
             )
         return response
 
+    @action(detail=False, methods=['post'])
+    def recurring(self, request):
+        """Block the same weekday across a date range in one go (e.g. "every
+        Monday until year end" for maintenance), instead of the owner adding
+        one BlockedDate per week by hand. Same force/cascade contract as
+        create() above: refuses up front if any generated date has confirmed
+        bookings unless force=true, then cancels+refunds them all-or-nothing.
+        Dates already blocked are skipped rather than erroring, so re-running
+        an overlapping range is safe."""
+        box_id = request.data.get('box')
+        weekday = request.data.get('weekday')
+        start_str = request.data.get('start_date')
+        end_str = request.data.get('end_date')
+        reason = request.data.get('reason', '')
+
+        if not Box.objects.filter(pk=box_id, owner=request.user).exists():
+            return Response({'detail': 'Box not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            weekday = int(weekday)
+            if not 0 <= weekday <= 6:
+                raise ValueError
+            start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'weekday (0=Monday..6=Sunday), start_date and end_date (YYYY-MM-DD) are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if end_date < start_date:
+            return Response({'detail': 'end_date must be on or after start_date.'}, status=status.HTTP_400_BAD_REQUEST)
+        if (end_date - start_date).days > MAX_RECURRING_BLOCK_DAYS:
+            return Response(
+                {'detail': 'Please keep a recurring block within a one-year range.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cursor = start_date + timedelta(days=(weekday - start_date.weekday()) % 7)
+        candidate_dates = []
+        while cursor <= end_date:
+            candidate_dates.append(cursor)
+            cursor += timedelta(days=7)
+
+        already_blocked = set(
+            BlockedDate.objects.filter(box_id=box_id, date__in=candidate_dates).values_list('date', flat=True)
+        )
+        new_dates = [d for d in candidate_dates if d not in already_blocked]
+        if not new_dates:
+            return Response(
+                {'detail': 'Every matching date in that range is already blocked.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        conflicting = list(
+            Booking.objects.filter(box_id=box_id, date__in=new_dates, booking_status='Confirmed')
+            .select_related('user').order_by('date', 'start_time')
+        )
+        force = str(request.data.get('force', '')).lower() in ('true', '1', 'yes')
+        if conflicting and not force:
+            return Response({
+                'detail': (
+                    f"{len(new_dates)} date{'s' if len(new_dates) != 1 else ''} would be blocked, but "
+                    f"{len(conflicting)} confirmed booking{'s' if len(conflicting) != 1 else ''} fall on them. "
+                    "Cancelling them will refund the affected customers."
+                ),
+                'conflicting_bookings': [
+                    {
+                        'id': b.id,
+                        'customer_name': (
+                            (b.customer_name or 'Walk-in customer') if b.booking_source == 'owner_manual'
+                            else (b.user.full_name or b.user.email)
+                        ),
+                        'date': b.date.isoformat(),
+                        'start_time': b.start_time,
+                    }
+                    for b in conflicting
+                ],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                for booking in conflicting:
+                    cancel_booking(
+                        booking, cancelled_by=request.user,
+                        reason='Venue closed by owner for this date.',
+                    )
+                BlockedDate.objects.bulk_create(
+                    [BlockedDate(box_id=box_id, date=d, reason=reason) for d in new_dates]
+                )
+        except CancellationError as e:
+            return Response(
+                {'detail': f"Could not block these dates: {e.detail}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        detail = f"Blocked {len(new_dates)} date{'s' if len(new_dates) != 1 else ''}."
+        if already_blocked:
+            detail += f" {len(already_blocked)} already blocked, skipped."
+        if conflicting:
+            detail += f" {len(conflicting)} booking{'s' if len(conflicting) != 1 else ''} cancelled and refunded."
+        return Response({
+            'detail': detail,
+            'created_count': len(new_dates),
+            'skipped_count': len(already_blocked),
+            'cancelled_bookings_count': len(conflicting),
+        }, status=status.HTTP_201_CREATED)
+
 
 class PricingRuleViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
     """Owner-managed peak/off-peak price overrides on their own boxes. Same
@@ -570,6 +808,7 @@ class AdminCommissionRateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin,
     rewritten (see CommissionRate's docstring)."""
     serializer_class = CommissionRateSerializer
     permission_classes = [IsAdminUser]
+    pagination_class = StandardResultsPagination
 
     def get_queryset(self):
         queryset = CommissionRate.objects.select_related('owner').all()
@@ -584,6 +823,29 @@ class AdminCommissionRateViewSet(mixins.ListModelMixin, mixins.CreateModelMixin,
             self.request.user, 'commission_rate.create', target=rate,
             details={'owner': rate.owner.email, 'sport': rate.sport, 'rate': str(rate.rate), 'effective_from': str(rate.effective_from)},
         )
+
+    @action(detail=False, methods=['get'])
+    def current(self, request):
+        """The single most-recently-effective row per (owner, sport) pair —
+        deliberately unpaginated, unlike list() above. list() is the full
+        change history and grows without bound as overrides accumulate over
+        time; this is bounded by how many distinct override configs
+        currently exist, which stays small regardless of history length.
+        Powers the "Current" badge in the admin rate-history table without
+        that table needing every historical row loaded at once to compute it."""
+        latest_per_group = (
+            CommissionRate.objects.values('owner', 'sport')
+            .annotate(latest=models.Max('effective_from'))
+        )
+        if not latest_per_group:
+            queryset = CommissionRate.objects.none()
+        else:
+            match = models.Q()
+            for row in latest_per_group:
+                match |= models.Q(owner_id=row['owner'], sport=row['sport'], effective_from=row['latest'])
+            queryset = CommissionRate.objects.select_related('owner').filter(match)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 class AdminPlatformCommissionView(APIView):

@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Plus, Edit, Eye, TrendingUp, Calendar, DollarSign, Star, Clock, BarChart3,
-  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift, ShieldCheck, UserX,
+  AlertCircle, CheckCircle, Activity, Sparkles, Building, Search, XCircle, Trash2, Wallet, CalendarOff, X, Zap, Gift, ShieldCheck, UserX, Download,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 
@@ -15,15 +15,20 @@ import ViewBoxModal from '../components/boxes/ViewBoxModal';
 import OwnerRewardsTab from '../components/rewards/OwnerRewardsTab';
 import OwnerVerificationTab from '../components/verification/OwnerVerificationTab';
 import OwnerPayoutDetailsCard from '../components/payouts/OwnerPayoutDetailsCard';
+import OwnerEarningsTab from '../components/payouts/OwnerEarningsTab';
 import { OwnerScheduleCard } from '../components/bookings/OwnerScheduleCard';
 import { OwnerScheduleTab } from '../components/bookings/OwnerScheduleTab';
-import { useAuth, api, MEDIA_BASE_URL } from '../api.jsx';
+import { useAuth, api, resolveMediaUrl } from '../api.jsx';
 import { useBox } from '../context/BoxContext';
 import { Button, Card, Badge, Loader, StatTile, Input, Select, Modal, Pagination } from '../components/ui';
 import { PeakHoursChart } from '../components/common/AdvancedCharts';
 import { useDebounce } from '../hooks/useDebounce';
+import { useTabParam } from '../hooks/useTabParam';
 
 const BOOKINGS_PAGE_SIZE = 20
+// Index matches the backend's weekday param (0=Monday..6=Sunday), which
+// follows Python's date.weekday().
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const PAYOUTS_PAGE_SIZE = 20
 
 // Matches Payout.PAYMENT_METHOD_CHOICES (owner_dashboard/models.py). Rows
@@ -46,10 +51,12 @@ const TABS = [
   { id: 'schedule', label: 'Box Schedule', icon: Clock },
   { id: 'bookings', label: 'Bookings', icon: Calendar },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp },
+  { id: 'earnings', label: 'Earnings', icon: DollarSign },
   { id: 'payouts', label: 'Payouts', icon: Wallet },
   { id: 'rewards', label: 'Rewards', icon: Gift },
   { id: 'verification', label: 'Verification', icon: ShieldCheck },
 ];
+const TAB_IDS = TABS.map((t) => t.id);
 
 const BOX_STATUS_TONE = {
   approved: 'success',
@@ -70,7 +77,7 @@ function Placeholder({ text, icon: Icon = AlertCircle }) {
 
 const OwnerDashboard = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useTabParam('overview', TAB_IDS);
   const [showAddBoxModal, setShowAddBoxModal] = useState(false);
   const [showEditBoxModal, setShowEditBoxModal] = useState(false);
   const [showViewBoxModal, setShowViewBoxModal] = useState(false);
@@ -90,6 +97,14 @@ const OwnerDashboard = () => {
   const [bookingsPage, setBookingsPage] = useState(1);
   const [bookingsResult, setBookingsResult] = useState({ results: [], count: 0 });
   const [bookingsLoading, setBookingsLoading] = useState(false);
+  // Bulk selection on the Bookings tab — only Confirmed rows are selectable,
+  // since they're the only ones that can be cancelled.
+  const [selectedBookingIds, setSelectedBookingIds] = useState([]);
+  const [showBulkCancelModal, setShowBulkCancelModal] = useState(false);
+  const [bulkCancelReason, setBulkCancelReason] = useState('');
+  const [bulkCancelling, setBulkCancelling] = useState(false);
+  const [exportingBookings, setExportingBookings] = useState(false);
+  const [exportingPayouts, setExportingPayouts] = useState(false);
   const [cancellingBooking, setCancellingBooking] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
@@ -98,6 +113,14 @@ const OwnerDashboard = () => {
 
   const [boxToDelete, setBoxToDelete] = useState(null);
   const [deletingBox, setDeletingBox] = useState(false);
+
+  // My Boxes grid: all_owner_boxes is already fetched whole (it's also the
+  // data source for filter dropdowns elsewhere on this page, which need the
+  // full list) — paginated client-side over that same array rather than a
+  // separate fetch, so a multi-location owner's grid doesn't turn into an
+  // unbroken wall of cards.
+  const MY_BOXES_PAGE_SIZE = 9;
+  const [myBoxesPage, setMyBoxesPage] = useState(1);
 
   // Blocked-dates modal: whole-day holiday/maintenance blocks per box,
   // opened from a box card's "Manage blocked dates" button.
@@ -113,6 +136,10 @@ const OwnerDashboard = () => {
   // opting into force=true.
   const [blockConflict, setBlockConflict] = useState(null);
   const [forcingBlockedDate, setForcingBlockedDate] = useState(false);
+  // Recurring ("every Monday until X") blocks, so a standing weekly closure
+  // isn't entered one date at a time forever.
+  const [blockMode, setBlockMode] = useState('single');
+  const [recurring, setRecurring] = useState({ weekday: '0', start_date: '', end_date: '' });
 
   // Pricing-rules modal: peak/off-peak price overrides per box, opened from
   // a box card's "Manage pricing" button. Same shape as the blocked-dates
@@ -203,6 +230,19 @@ const OwnerDashboard = () => {
     setBookingsPage(1);
   }, [debouncedBookingSearch, bookingStatusFilter, bookingBoxFilter]);
 
+  // Selection is page-scoped — the ids it holds refer to rows that are no
+  // longer on screen once the page or filters change.
+  useEffect(() => {
+    setSelectedBookingIds([]);
+  }, [bookingsPage, debouncedBookingSearch, bookingStatusFilter, bookingBoxFilter]);
+
+  // Mirrors the per-row `canCancel` rule below: Confirmed, and more than the
+  // server's 2-hour notice window away.
+  const cancellableIds = bookingsResult.results
+    .filter((b) => b.booking_status === 'Confirmed'
+      && new Date(`${b.date}T${b.start_time}:00`).getTime() - Date.now() > 2 * 60 * 60 * 1000)
+    .map((b) => b.id);
+
   const fetchPayoutBalance = useCallback(async () => {
     setPayoutBalanceLoading(true);
     try {
@@ -264,6 +304,72 @@ const OwnerDashboard = () => {
       toast.error(err.response?.data?.detail || 'Failed to cancel booking');
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleBulkCancel = async () => {
+    if (!selectedBookingIds.length || !bulkCancelReason.trim()) return;
+    setBulkCancelling(true);
+    try {
+      const { data } = await api.post('/owner_dashboard/bookings/bulk-cancel/', {
+        booking_ids: selectedBookingIds, reason: bulkCancelReason.trim(),
+      });
+      // Partial success is normal here (a booking inside its cancellation
+      // window is refused individually), so report rather than assume.
+      if (data.failed?.length) {
+        toast.warning(data.detail);
+      } else {
+        toast.success(data.detail);
+      }
+      setShowBulkCancelModal(false);
+      setBulkCancelReason('');
+      setSelectedBookingIds([]);
+      fetchBookings();
+      fetchAllData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to cancel these bookings');
+    } finally {
+      setBulkCancelling(false);
+    }
+  };
+
+  const handleExportBookings = async () => {
+    setExportingBookings(true);
+    try {
+      const params = new URLSearchParams();
+      if (debouncedBookingSearch) params.set('search', debouncedBookingSearch);
+      if (bookingStatusFilter) params.set('status', bookingStatusFilter);
+      if (bookingBoxFilter) params.set('box', bookingBoxFilter);
+      const response = await api.get(`/owner_dashboard/bookings/export/?${params.toString()}`, {
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bookings-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Could not export bookings.');
+    } finally {
+      setExportingBookings(false);
+    }
+  };
+
+  const handleExportPayouts = async () => {
+    setExportingPayouts(true);
+    try {
+      const response = await api.get('/owner_dashboard/payouts/export/', { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `payouts-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Could not export payouts.');
+    } finally {
+      setExportingPayouts(false);
     }
   };
 
@@ -413,6 +519,41 @@ const OwnerDashboard = () => {
     }
   };
 
+  const submitRecurringBlock = async (force = false) => {
+    if (!recurring.start_date || !recurring.end_date) {
+      toast.error('Pick a start and end date for the recurring block.');
+      return;
+    }
+    const setLoading = force ? setForcingBlockedDate : setAddingBlockedDate;
+    setBlockConflict(null);
+    setLoading(true);
+    try {
+      const response = await api.post('/boxes/blocked-dates/recurring/', {
+        box: blockedDatesBox.id,
+        weekday: Number(recurring.weekday),
+        start_date: recurring.start_date,
+        end_date: recurring.end_date,
+        reason: newBlockedReason.trim(),
+        ...(force ? { force: true } : {}),
+      });
+      toast.success(response.data.detail || 'Dates blocked.');
+      setRecurring({ weekday: '0', start_date: '', end_date: '' });
+      setNewBlockedReason('');
+      // The bulk endpoint returns counts, not the rows themselves — refetch
+      // so the list below reflects every date it just created.
+      openBlockedDatesModal(blockedDatesBox);
+    } catch (err) {
+      const data = err.response?.data;
+      if (err.response?.status === 400 && data?.conflicting_bookings?.length) {
+        setBlockConflict(data);
+      } else {
+        toast.error(data?.detail || 'Failed to block these dates.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRemoveBlockedDate = async (id) => {
     try {
       await api.delete(`/boxes/blocked-dates/${id}/`);
@@ -500,8 +641,8 @@ const OwnerDashboard = () => {
 
   // Stat tiles data
   const stats = [
-    { key: 'revenue', tone: 'primary', icon: <DollarSign size={22} />, value: `₹${total_revenue}`, label: 'Total Revenue' },
-    { key: 'bookings', tone: 'success', icon: <Calendar size={22} />, value: total_bookings, label: 'Total Bookings' },
+    { key: 'revenue', tone: 'primary', icon: <DollarSign size={22} />, value: `₹${total_revenue}`, label: 'Gross revenue · all time' },
+    { key: 'bookings', tone: 'success', icon: <Calendar size={22} />, value: total_bookings, label: 'Total bookings · all time' },
     { key: 'active', tone: 'secondary', icon: <CheckCircle size={22} />, value: active_boxes_count, label: 'Active Boxes' },
     { key: 'rating', tone: 'warning', icon: <Star size={22} />, value: `${avg_rating} / 5`, label: 'Avg Rating' },
   ];
@@ -572,7 +713,7 @@ const OwnerDashboard = () => {
         </motion.div>
 
         {/* Tabs */}
-        <nav className="flex flex-wrap gap-2 mt-6 overflow-x-auto no-scrollbar" aria-label="Tabs">
+        <nav className="flex flex-nowrap gap-2 mt-6 overflow-x-auto no-scrollbar" aria-label="Tabs" role="tablist">
           {TABS.map((tab) => {
             const TabIcon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -580,6 +721,8 @@ const OwnerDashboard = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={isActive}
                 className={`flex items-center gap-2 py-2.5 px-4 rounded-full font-medium text-sm border transition-colors duration-150 whitespace-nowrap ${
                   isActive
                     ? 'bg-primary/15 border-primary text-primary'
@@ -651,16 +794,13 @@ const OwnerDashboard = () => {
               </div>
 
               {all_owner_boxes.length > 0 ? (
+                <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                  {all_owner_boxes.map((box) => (
+                  {all_owner_boxes.slice((myBoxesPage - 1) * MY_BOXES_PAGE_SIZE, myBoxesPage * MY_BOXES_PAGE_SIZE).map((box) => (
                     <Card key={box.id} padding="md" interactive className="flex flex-col">
                       <div className="relative mb-4">
                         <img
-                          src={
-                            box.image
-                              ? (box.image.startsWith('http') ? box.image : `${MEDIA_BASE_URL}${box.image}`)
-                              : FALLBACK_BOX_IMAGE
-                          }
+                          src={resolveMediaUrl(box.image) || FALLBACK_BOX_IMAGE}
                           alt={box.name}
                           className="w-full h-40 sm:h-48 object-cover rounded-lg"
                           onError={(e) => {
@@ -711,6 +851,13 @@ const OwnerDashboard = () => {
                     </Card>
                   ))}
                 </div>
+                <Pagination
+                  page={myBoxesPage}
+                  pageSize={MY_BOXES_PAGE_SIZE}
+                  count={all_owner_boxes.length}
+                  onPageChange={setMyBoxesPage}
+                />
+                </>
               ) : (
                 <Card padding="lg" className="text-center">
                   <Placeholder text="No boxes found. Add your first sports box!" icon={Building} />
@@ -753,17 +900,46 @@ const OwnerDashboard = () => {
                     <option value="Cancelled">Cancelled</option>
                     <option value="No-show">No-show</option>
                   </Select>
+                  <Button variant="outline" onClick={handleExportBookings} loading={exportingBookings} icon={<Download size={16} />}>
+                    Export CSV
+                  </Button>
                   <Button onClick={openAddBookingModal} icon={<Plus size={16} />}>
                     Add booking
                   </Button>
                 </div>
               </div>
 
+              {selectedBookingIds.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/40 bg-primary/10 px-4 py-3">
+                  <p className="text-sm text-foreground">
+                    {selectedBookingIds.length} booking{selectedBookingIds.length !== 1 ? 's' : ''} selected
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setSelectedBookingIds([])}>
+                      Clear
+                    </Button>
+                    <Button variant="danger" size="sm" icon={<XCircle size={14} />} onClick={() => setShowBulkCancelModal(true)}>
+                      Cancel selected
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <Card padding="none" className="overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-elevated">
                       <tr>
+                        <th className="py-3 pl-4 pr-1 w-10">
+                          <input
+                            type="checkbox"
+                            aria-label="Select all cancellable bookings on this page"
+                            className="accent-primary"
+                            checked={cancellableIds.length > 0 && selectedBookingIds.length === cancellableIds.length}
+                            onChange={(e) => setSelectedBookingIds(e.target.checked ? cancellableIds : [])}
+                            disabled={cancellableIds.length === 0}
+                          />
+                        </th>
                         {['Customer', 'Box', 'Date & time', 'Amount', 'Status', ''].map((h) => (
                           <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>
                         ))}
@@ -772,11 +948,11 @@ const OwnerDashboard = () => {
                     <tbody className="divide-y divide-border">
                       {bookingsLoading ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-10 text-muted-foreground">Loading bookings...</td>
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">Loading bookings...</td>
                         </tr>
                       ) : bookingsResult.results.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-10 text-muted-foreground">
+                          <td colSpan={7} className="text-center py-10 text-muted-foreground">
                             {debouncedBookingSearch || bookingStatusFilter || bookingBoxFilter
                               ? 'No bookings match your filters' : 'No bookings yet'}
                           </td>
@@ -798,6 +974,18 @@ const OwnerDashboard = () => {
                             onClick={() => navigate(`/booking/${booking.id}`)}
                             className="hover:bg-elevated/60 transition-colors cursor-pointer"
                           >
+                            <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                aria-label={`Select booking ${booking.id}`}
+                                className="accent-primary"
+                                disabled={!canCancel}
+                                checked={selectedBookingIds.includes(booking.id)}
+                                onChange={(e) => setSelectedBookingIds((prev) => (
+                                  e.target.checked ? [...prev, booking.id] : prev.filter((id) => id !== booking.id)
+                                ))}
+                              />
+                            </td>
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-medium shrink-0">
@@ -928,7 +1116,15 @@ const OwnerDashboard = () => {
 
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6">
                     <Card padding="md">
-                      <h3 className="text-lg font-display font-semibold text-foreground mb-4">Revenue by box</h3>
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <h3 className="text-lg font-display font-semibold text-foreground">Revenue by box · all time</h3>
+                        <button type="button" onClick={() => setActiveTab('earnings')} className="shrink-0 text-xs font-medium text-primary hover:underline">
+                          Net earnings by period →
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-4">
+                        Gross revenue, before platform commission. For net earnings by month, see Earnings.
+                      </p>
                       <div className="space-y-3">
                         {analyticsData.per_box_ranking.length > 0 ? analyticsData.per_box_ranking.map((box, i) => {
                           const max = analyticsData.per_box_ranking[0].revenue || 1
@@ -974,6 +1170,8 @@ const OwnerDashboard = () => {
           )}
 
           {/* Payouts Tab */}
+          {activeTab === 'earnings' && <OwnerEarningsTab />}
+
           {activeTab === 'payouts' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -997,19 +1195,72 @@ const OwnerDashboard = () => {
               ) : (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                    <StatTile tone="primary" icon={<DollarSign size={22} />} value={`₹${payoutBalance.gross_revenue.toLocaleString()}`} label="Gross revenue" />
-                    <StatTile tone="secondary" icon={<Activity size={22} />} value={`₹${payoutBalance.commission.toLocaleString()}`} label="Platform commission" />
-                    <StatTile tone="success" icon={<CheckCircle size={22} />} value={`₹${payoutBalance.total_paid.toLocaleString()}`} label="Already paid out" />
-                    <StatTile tone={payoutBalance.balance_due > 0 ? 'warning' : 'neutral'} icon={<Wallet size={22} />} value={`₹${payoutBalance.balance_due.toLocaleString()}`} label="Balance due to you" />
+                    <StatTile tone="primary" icon={<DollarSign size={22} />} value={`₹${payoutBalance.gross_revenue.toLocaleString()}`} label="Gross revenue · all time" />
+                    <StatTile tone="secondary" icon={<Activity size={22} />} value={`₹${payoutBalance.commission.toLocaleString()}`} label="Platform commission · all time" />
+                    <StatTile tone="success" icon={<CheckCircle size={22} />} value={`₹${payoutBalance.total_paid.toLocaleString()}`} label="Already paid out · all time" />
+                    <StatTile tone={payoutBalance.balance_due > 0 ? 'warning' : 'neutral'} icon={<Wallet size={22} />} value={`₹${payoutBalance.balance_due.toLocaleString()}`} label="Balance due to you · now" />
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Balance due is computed live from your completed bookings — it isn&apos;t a stored balance, and doesn&apos;t mean a payout has been logged yet. Payout history below shows what&apos;s actually been recorded as paid.
+                    These are lifetime totals. Balance due is computed live from your completed bookings — it isn&apos;t a stored balance, and doesn&apos;t mean a payout has been logged yet. Payout history below shows what&apos;s actually been recorded as paid. For month-by-month figures, see the <button type="button" onClick={() => setActiveTab('earnings')} className="text-primary hover:underline">Earnings</button> tab.
                   </p>
+
+                  {payoutBalance.by_box?.length > 0 && (
+                    <Card padding="none" className="overflow-hidden">
+                      <div className="px-6 pt-5 pb-1">
+                        <h3 className="text-lg font-display font-semibold text-foreground">Where your balance comes from</h3>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Lifetime earnings per box, so you can check the combined payout figure adds up.
+                        </p>
+                      </div>
+                      <div className="overflow-x-auto mt-4">
+                        <table className="w-full text-sm">
+                          <thead className="bg-elevated">
+                            <tr>
+                              {['Box', 'Bookings', 'Gross', 'Commission', 'Net'].map((h, i) => (
+                                <th key={h} className={`py-3 px-6 font-medium text-foreground whitespace-nowrap ${i === 0 ? 'text-left' : 'text-right'}`}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {payoutBalance.by_box.map((row) => (
+                              <tr key={row.box_id}>
+                                <td className="py-3 px-6">
+                                  <p className="text-foreground font-medium">{row.box_name}</p>
+                                  <span className="text-xs text-muted-foreground">{row.sport} · {row.rate}% commission</span>
+                                </td>
+                                <td className="py-3 px-6 text-right text-muted-foreground tabular-nums">{row.bookings}</td>
+                                <td className="py-3 px-6 text-right text-foreground tabular-nums">₹{row.gross.toLocaleString()}</td>
+                                <td className="py-3 px-6 text-right text-warning tabular-nums">−₹{row.commission.toLocaleString()}</td>
+                                <td className="py-3 px-6 text-right font-medium text-success tabular-nums">₹{row.net.toLocaleString()}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-border bg-elevated/50">
+                              <td className="py-3 px-6 font-display font-semibold text-foreground">Combined · all time</td>
+                              <td className="py-3 px-6" />
+                              <td className="py-3 px-6 text-right font-medium text-foreground tabular-nums">₹{payoutBalance.gross_revenue.toLocaleString()}</td>
+                              <td className="py-3 px-6 text-right font-medium text-warning tabular-nums">−₹{payoutBalance.commission.toLocaleString()}</td>
+                              <td className="py-3 px-6 text-right font-bold text-success tabular-nums">₹{payoutBalance.net_revenue.toLocaleString()}</td>
+                            </tr>
+                            <tr className="bg-elevated/30 text-muted-foreground">
+                              <td className="py-2.5 px-6" colSpan={4}>Less already paid out</td>
+                              <td className="py-2.5 px-6 text-right tabular-nums">−₹{payoutBalance.total_paid.toLocaleString()}</td>
+                            </tr>
+                            <tr className="border-t border-border">
+                              <td className="py-3 px-6 font-display font-semibold text-foreground" colSpan={4}>Balance due to you</td>
+                              <td className="py-3 px-6 text-right font-bold text-primary tabular-nums">₹{payoutBalance.balance_due.toLocaleString()}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
 
                   {payoutBalance.by_sport?.length > 0 && (
                     <Card padding="none" className="overflow-hidden">
                       <div className="px-6 pt-5 pb-1">
-                        <h3 className="text-lg font-display font-semibold text-foreground">Earnings by sport</h3>
+                        <h3 className="text-lg font-display font-semibold text-foreground">Earnings by sport · all time</h3>
                         <p className="text-sm text-muted-foreground mt-1">Exactly what you&apos;re being charged and why — commission can vary by sport.</p>
                       </div>
                       <div className="overflow-x-auto mt-4">
@@ -1040,8 +1291,11 @@ const OwnerDashboard = () => {
               )}
 
               <Card padding="none" className="overflow-hidden">
-                <div className="px-6 pt-5 pb-1">
+                <div className="flex items-center justify-between gap-3 px-6 pt-5 pb-1">
                   <h3 className="text-lg font-display font-semibold text-foreground">Payout history</h3>
+                  <Button variant="outline" size="sm" onClick={handleExportPayouts} loading={exportingPayouts} icon={<Download size={14} />}>
+                    Export CSV
+                  </Button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1109,6 +1363,7 @@ const OwnerDashboard = () => {
         onSuccess={handleEditBoxSuccess}
         editMode={true}
         boxData={selectedBox}
+        onImagesChanged={() => { fetchAllData(); refreshAll(); }}
       />
 
       {/* View Box Modal */}
@@ -1153,23 +1408,68 @@ const OwnerDashboard = () => {
         size="sm"
       >
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <Input
-              type="date"
-              value={newBlockedDate}
-              onChange={(e) => { setNewBlockedDate(e.target.value); setBlockConflict(null); }}
-              className="flex-1"
-            />
-            <Input
-              placeholder="Reason (optional)"
-              value={newBlockedReason}
-              onChange={(e) => { setNewBlockedReason(e.target.value); setBlockConflict(null); }}
-              className="flex-1"
-            />
-            <Button onClick={handleAddBlockedDate} loading={addingBlockedDate} icon={<Plus size={16} />}>
-              Block
-            </Button>
+          <div className="grid grid-cols-2 gap-1.5 rounded-lg bg-elevated p-1">
+            {[{ id: 'single', label: 'One date' }, { id: 'recurring', label: 'Every week' }].map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => { setBlockMode(m.id); setBlockConflict(null); }}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  blockMode === m.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
+
+          {blockMode === 'single' ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Input
+                type="date"
+                value={newBlockedDate}
+                onChange={(e) => { setNewBlockedDate(e.target.value); setBlockConflict(null); }}
+                className="flex-1"
+              />
+              <Input
+                placeholder="Reason (optional)"
+                value={newBlockedReason}
+                onChange={(e) => { setNewBlockedReason(e.target.value); setBlockConflict(null); }}
+                className="flex-1"
+              />
+              <Button onClick={handleAddBlockedDate} loading={addingBlockedDate} icon={<Plus size={16} />}>
+                Block
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Select
+                label="Repeat every"
+                value={recurring.weekday}
+                onChange={(e) => { setRecurring((r) => ({ ...r, weekday: e.target.value })); setBlockConflict(null); }}
+              >
+                {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+              </Select>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  label="From" type="date" value={recurring.start_date}
+                  onChange={(e) => { setRecurring((r) => ({ ...r, start_date: e.target.value })); setBlockConflict(null); }}
+                />
+                <Input
+                  label="Until" type="date" value={recurring.end_date}
+                  onChange={(e) => { setRecurring((r) => ({ ...r, end_date: e.target.value })); setBlockConflict(null); }}
+                />
+              </div>
+              <Input
+                placeholder="Reason (optional)"
+                value={newBlockedReason}
+                onChange={(e) => { setNewBlockedReason(e.target.value); setBlockConflict(null); }}
+              />
+              <Button onClick={() => submitRecurringBlock(false)} loading={addingBlockedDate} icon={<Plus size={16} />} fullWidth>
+                Block every {WEEKDAYS[Number(recurring.weekday)]}
+              </Button>
+            </div>
+          )}
 
           {/* Shown when the plain block above was rejected because this
               date already has Confirmed bookings on it — names exactly who
@@ -1185,18 +1485,18 @@ const OwnerDashboard = () => {
                 {blockConflict.conflicting_bookings.map((b) => (
                   <li key={b.id} className="text-sm text-muted-foreground flex justify-between gap-3 bg-elevated rounded-md px-2.5 py-1.5">
                     <span className="text-foreground font-medium">{b.customer_name}</span>
-                    <span>{b.start_time}</span>
+                    <span>{b.date ? `${b.date} ${b.start_time}` : b.start_time}</span>
                   </li>
                 ))}
               </ul>
               <div className="flex flex-col sm:flex-row gap-2">
                 <Button
                   variant="danger"
-                  onClick={handleForceBlockedDate}
+                  onClick={() => (blockMode === 'recurring' ? submitRecurringBlock(true) : handleForceBlockedDate())}
                   loading={forcingBlockedDate}
                   fullWidth
                 >
-                  Cancel these bookings and block this date anyway
+                  Cancel these bookings and block anyway
                 </Button>
                 <Button variant="outline" onClick={() => setBlockConflict(null)} disabled={forcingBlockedDate}>
                   Back
@@ -1359,6 +1659,41 @@ const OwnerDashboard = () => {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={showBulkCancelModal}
+        onClose={() => { setShowBulkCancelModal(false); setBulkCancelReason(''); }}
+        title={`Cancel ${selectedBookingIds.length} booking${selectedBookingIds.length !== 1 ? 's' : ''}`}
+        size="md"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => { setShowBulkCancelModal(false); setBulkCancelReason(''); }}>Back</Button>
+            <Button variant="danger" onClick={handleBulkCancel} loading={bulkCancelling} disabled={!bulkCancelReason.trim()}>
+              Cancel {selectedBookingIds.length} booking{selectedBookingIds.length !== 1 ? 's' : ''}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <p className="text-muted-foreground">
+            All {selectedBookingIds.length} selected booking{selectedBookingIds.length !== 1 ? 's' : ''} will be cancelled
+            and the customers refunded. Anything already inside its cancellation window will be reported back as skipped.
+          </p>
+          <div className="space-y-1.5">
+            <label htmlFor="bulk-cancel-reason" className="block text-sm font-medium text-foreground">
+              Reason (required — shown to every affected customer)
+            </label>
+            <textarea
+              id="bulk-cancel-reason"
+              value={bulkCancelReason}
+              onChange={(e) => setBulkCancelReason(e.target.value)}
+              rows={3}
+              className="w-full px-4 py-2.5 rounded-lg bg-elevated text-foreground border border-input transition-colors duration-150 outline-none resize-none placeholder-muted-foreground focus:ring-2 focus:ring-primary/40 focus:border-primary"
+              placeholder="e.g. Facility closed for emergency maintenance"
+            />
+          </div>
+        </div>
       </Modal>
 
       {/* Mark No-show Modal — deliberately no reason field (unlike cancel):

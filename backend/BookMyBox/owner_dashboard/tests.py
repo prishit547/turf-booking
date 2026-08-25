@@ -434,7 +434,8 @@ class PayoutBalancePayoutDetailsTests(APITestCase):
         self._auth(self.admin)
         response = self.client.get('/api/owner_dashboard/payouts/balance/')
         self.assertEqual(response.status_code, 200)
-        rows = {row['owner_id']: row for row in response.data}
+        self.assertIn('results', response.data)  # paginated, unlike the single-owner dict shape below
+        rows = {row['owner_id']: row for row in response.data['results']}
 
         with_details = rows[self.owner_with_details.id]
         self.assertIsNotNone(with_details['payout_details'])

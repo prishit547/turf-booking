@@ -150,9 +150,30 @@ class DashboardAnalyticsTests(APITestCase):
     def test_empty_state(self):
         response = self.client.get('/api/dashboard/analytics/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['total_spent'], 0)
+        self.assertEqual(response.data['total_hours_played'], 0)
         self.assertEqual(response.data['cancellation_rate'], 0)
         self.assertEqual(response.data['sport_distribution'], [])
+
+    def test_spending_is_never_exposed_to_the_customer(self):
+        """A player's own dashboard deliberately doesn't tally what they've
+        spent — see the analytics view's comment. Guards against a future
+        change quietly reintroducing it."""
+        box = Box.objects.create(
+            name='Elite Cricket Box', sport='Cricket', sports=['Cricket'], location='Mumbai',
+            price=500, capacity=20, owner=self.owner, status='approved',
+        )
+        Booking.objects.create(
+            user=self.user, box=box, date='2026-08-01', start_time='10:00', end_time='12:00',
+            duration=2, total_amount=1000, booking_status='Confirmed',
+        )
+
+        response = self.client.get('/api/dashboard/analytics/')
+
+        self.assertNotIn('total_spent', response.data)
+        self.assertNotIn('average_cost_per_session', response.data)
+        self.assertNotIn('monthly_spending', response.data)
+        # ...and the activity series that replaced it reports hours, not money.
+        self.assertEqual(response.data['monthly_activity'], [{'month': 'Aug 2026', 'total_hours': 2}])
 
     def test_totals_reflect_confirmed_bookings_only(self):
         box = Box.objects.create(
@@ -170,7 +191,6 @@ class DashboardAnalyticsTests(APITestCase):
 
         response = self.client.get('/api/dashboard/analytics/')
 
-        self.assertEqual(float(response.data['total_spent']), 1000.0)
         self.assertEqual(response.data['total_hours_played'], 2)
         self.assertEqual(response.data['cancellation_rate'], 50.0)  # 1 of 2 total bookings cancelled
 
@@ -190,7 +210,6 @@ class DashboardAnalyticsTests(APITestCase):
 
         response = self.client.get('/api/dashboard/analytics/')
 
-        self.assertEqual(float(response.data['total_spent']), 1000.0)
         self.assertEqual(response.data['total_hours_played'], 2)
         self.assertNotEqual(response.data['sport_distribution'], [])
 

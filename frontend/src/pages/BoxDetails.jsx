@@ -4,13 +4,13 @@ import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Star, MapPin, Users, Wifi, Car, Coffee, Shield, ArrowLeft, Heart, Check, Map as MapIcon, X, ShieldAlert, LayoutDashboard } from 'lucide-react';
 import { useBooking } from '../context/BookingContext';
-import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown } from '../components/ui';
+import { Loader, Card, Button, Select, DateStrip, SlotGrid, SlotLegend, BookingSummaryBar, RatingStars, Modal, Badge, RatingBreakdown, Pagination } from '../components/ui';
 import AddReviewForm from '../components/common/AddReviewForm';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
 import { CashbackMarquee } from '../components/rewards/CashbackMarquee';
 
 import { api, useAuth } from '../api.jsx'
-import { formatLocalDate } from '../utils/date'
+import { formatLocalDate, parseBookingDateTime } from '../utils/date'
 import { getGoogleMapsUrl } from '../utils/googleMaps'
 import googleMapsIcon from '../assets/google_maps_icon.svg'
 import { toast } from 'react-toastify';
@@ -59,6 +59,38 @@ const BoxDetails = () => {
     const [priceEstimate, setPriceEstimate] = useState(null);
     const { reserveSlot, createRecurringBooking, fetchMyWaitlist, joinWaitlist, leaveWaitlist } = useBooking();
     const { isAuthenticated, user } = useAuth();
+
+    // Reviews page independently of the box fetch — box.reviews used to
+    // nest every review unbounded (see BoxSerializer's docstring); a
+    // popular box can genuinely have hundreds, so this is its own paginated
+    // fetch against PublicBoxViewSet.reviews rather than part of the box
+    // payload.
+    const REVIEWS_PAGE_SIZE = 10;
+    const [reviewsList, setReviewsList] = useState([]);
+    const [reviewsCount, setReviewsCount] = useState(0);
+    const [reviewsPage, setReviewsPage] = useState(1);
+    const [reviewsLoading, setReviewsLoading] = useState(true);
+
+    const fetchReviews = useCallback(async (page = 1) => {
+        setReviewsLoading(true);
+        try {
+            const res = await api.get(`/boxes/public/${id}/reviews/?page=${page}&page_size=${REVIEWS_PAGE_SIZE}`);
+            setReviewsList(res.data.results || []);
+            setReviewsCount(res.data.count ?? (res.data.results || []).length);
+        } catch {
+            // Reviews aren't the primary content of this page — fail quietly
+            // rather than blocking booking with a toast.
+        } finally {
+            setReviewsLoading(false);
+        }
+    }, [id]);
+
+    // Navigating client-side between two different boxes' detail pages
+    // (e.g. "Book again") reuses this component — reset back to page 1
+    // rather than carrying over whatever page the previous box was on.
+    useEffect(() => { setReviewsPage(1); }, [id]);
+
+    useEffect(() => { fetchReviews(reviewsPage); }, [reviewsPage, fetchReviews]);
 
     // Slot booking is a player-only action (see bookings/permissions.py's
     // IsCustomerUser, enforced server-side on the create/reserve/confirm
@@ -220,11 +252,21 @@ const BoxDetails = () => {
 
     const isDateBlocked = box?.blocked_dates?.includes(formatLocalDate(selectedDate));
 
+    // An hour that's already elapsed today is never offerable — matches the
+    // server-side check in validate_booking_request (bookings/services.py),
+    // which used to only compare dates and let a same-day past slot through.
+    const isTimeSlotPast = (timeSlot) => {
+        if (!timeSlot) return false;
+        const slotDateTime = parseBookingDateTime(formatLocalDate(selectedDate), timeSlot);
+        return slotDateTime ? slotDateTime.getTime() <= Date.now() : false;
+    };
+
     const isTimeSlotAvailable = (timeSlot) => {
         if (!timeSlot) return true;
         // A whole day the owner has blocked (holiday/maintenance) is never
         // bookable, regardless of individual slot availability.
         if (isDateBlocked) return false;
+        if (isTimeSlotPast(timeSlot)) return false;
         const selectedHour = parseInt(timeSlot.split(':')[0]);
         // A duration that would run past closing time isn't offerable,
         // regardless of what's already booked.
@@ -285,10 +327,11 @@ const BoxDetails = () => {
     };
 
     const handleReviewAdded = (newReview) => {
-        setBox(prevBox => ({
-            ...prevBox,
-            reviews: [newReview, ...(prevBox.reviews || [])]
-        }));
+        // Optimistic: show the new review immediately on page 1, whatever
+        // page was previously showing.
+        setReviewsList((prev) => [newReview, ...prev].slice(0, REVIEWS_PAGE_SIZE));
+        setReviewsCount((prev) => prev + 1);
+        setReviewsPage(1);
         setShowReviewModal(false);
         setTimeout(() => {
             const fetchBoxDetails = async () => {
@@ -312,6 +355,7 @@ const BoxDetails = () => {
                 }
             };
             fetchBoxDetails();
+            fetchReviews(1);
         }, 1000);
     };
 
@@ -460,7 +504,7 @@ const BoxDetails = () => {
             aggregateRating: {
                 '@type': 'AggregateRating',
                 ratingValue: box.rating,
-                reviewCount: box.reviews?.length || 0,
+                reviewCount: box.review_count || 0,
             },
         } : {}),
         ...(box.price ? {
@@ -532,7 +576,7 @@ const BoxDetails = () => {
                             </button>
                         </div>
                     </div>
-                    <RatingStars rating={box.rating || 0} count={box.reviews?.length} className="text-base" />
+                    <RatingStars rating={box.rating || 0} count={box.review_count} className="text-base" />
                 </header>
 
                 <p className="mt-5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
@@ -619,6 +663,7 @@ const BoxDetails = () => {
                                         onSelect={setSelectedTimeSlot}
                                         isTimeSlotBooked={isTimeSlotBooked}
                                         isTimeSlotAvailable={isTimeSlotAvailable}
+                                        isTimeSlotPast={isTimeSlotPast}
                                         loading={slotsLoading}
                                         duration={duration}
                                         waitlistedSlots={waitlistedSlots}
@@ -627,15 +672,15 @@ const BoxDetails = () => {
                                     />
                                 </div>
                                 <div className="mt-4">
-                                    <SlotLegend />
+                                    <SlotLegend showPast={formatLocalDate(selectedDate) === formatLocalDate(new Date())} />
                                 </div>
                             </>
                         )}
 
                         <h2 className="mt-12 font-display text-2xl uppercase">Reviews</h2>
-                        {box.reviews?.length > 0 && (
+                        {box.rating_breakdown && reviewsCount > 0 && (
                             <div className="mt-4 rounded-2xl border border-border bg-card p-5">
-                                <RatingBreakdown reviews={box.reviews} />
+                                <RatingBreakdown counts={box.rating_breakdown} />
                             </div>
                         )}
                         <div className="mt-4 space-y-3">
@@ -644,41 +689,47 @@ const BoxDetails = () => {
                                     Add review
                                 </Button>
                             )}
-                            {(!box.reviews || box.reviews.length === 0) && (
+                            {reviewsLoading && reviewsList.length === 0 ? (
+                                <Loader text="Loading reviews..." className="py-6" />
+                            ) : reviewsCount === 0 ? (
                                 <p className="rounded-2xl border border-dashed border-border p-6 text-sm text-muted-foreground">
                                     No reviews yet — be the first to play here.
                                 </p>
+                            ) : (
+                                <>
+                                    {reviewsList.map((review) => (
+                                        <article key={review.id} className="rounded-2xl border border-border bg-card p-5">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="font-display text-sm uppercase">{review.user}</p>
+                                                <RatingStars rating={review.rating} />
+                                            </div>
+                                            <p className="mt-2 text-sm text-muted-foreground">{review.comment}</p>
+                                            <p className="mt-2 text-xs text-muted-foreground">{review.date}</p>
+                                            {review.images?.length > 0 && (
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    {review.images.map((imgUrl, i) => (
+                                                        <button
+                                                            key={i}
+                                                            type="button"
+                                                            onClick={() => setLightbox(imgUrl)}
+                                                            className="h-16 w-16 rounded-lg overflow-hidden border border-border"
+                                                        >
+                                                            <img src={imgUrl} alt={`Review photo ${i + 1}`} className="h-full w-full object-cover" />
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {review.owner_response && (
+                                                <div className="mt-3 ml-4 pl-3 border-l-2 border-primary/40">
+                                                    <p className="text-xs font-medium text-primary mb-1">Response from the owner</p>
+                                                    <p className="text-sm text-muted-foreground">{review.owner_response}</p>
+                                                </div>
+                                            )}
+                                        </article>
+                                    ))}
+                                    <Pagination page={reviewsPage} pageSize={REVIEWS_PAGE_SIZE} count={reviewsCount} onPageChange={setReviewsPage} />
+                                </>
                             )}
-                            {Array.isArray(box.reviews) && box.reviews.map((review) => (
-                                <article key={review.id} className="rounded-2xl border border-border bg-card p-5">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <p className="font-display text-sm uppercase">{review.user}</p>
-                                        <RatingStars rating={review.rating} />
-                                    </div>
-                                    <p className="mt-2 text-sm text-muted-foreground">{review.comment}</p>
-                                    <p className="mt-2 text-xs text-muted-foreground">{review.date}</p>
-                                    {review.images?.length > 0 && (
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                            {review.images.map((imgUrl, i) => (
-                                                <button
-                                                    key={i}
-                                                    type="button"
-                                                    onClick={() => setLightbox(imgUrl)}
-                                                    className="h-16 w-16 rounded-lg overflow-hidden border border-border"
-                                                >
-                                                    <img src={imgUrl} alt={`Review photo ${i + 1}`} className="h-full w-full object-cover" />
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {review.owner_response && (
-                                        <div className="mt-3 ml-4 pl-3 border-l-2 border-primary/40">
-                                            <p className="text-xs font-medium text-primary mb-1">Response from the owner</p>
-                                            <p className="text-sm text-muted-foreground">{review.owner_response}</p>
-                                        </div>
-                                    )}
-                                </article>
-                            ))}
                         </div>
                     </section>
 
@@ -693,9 +744,9 @@ const BoxDetails = () => {
                             </dl>
                         </div>
 
-                        <div className="rounded-2xl border border-border bg-card p-5">
-                            <h3 className="font-display text-sm uppercase tracking-wide text-muted-foreground">Amenities</h3>
-                            {box.amenities?.length > 0 ? (
+                        {box.amenities?.length > 0 && (
+                            <div className="rounded-2xl border border-border bg-card p-5">
+                                <h3 className="font-display text-sm uppercase tracking-wide text-muted-foreground">Amenities</h3>
                                 <ul className="mt-3 grid grid-cols-2 gap-2 text-sm">
                                     {box.amenities.map((a) => {
                                         const IconComponent = amenityIcons[a] || Check;
@@ -706,10 +757,8 @@ const BoxDetails = () => {
                                         );
                                     })}
                                 </ul>
-                            ) : (
-                                <p className="mt-3 text-sm text-muted-foreground">No amenities listed</p>
-                            )}
-                        </div>
+                            </div>
+                        )}
 
                         {box.rules && (
                             <div className="rounded-2xl border border-border bg-card p-5">

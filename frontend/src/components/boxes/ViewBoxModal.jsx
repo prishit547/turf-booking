@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { MapPin, Users, Star, DollarSign, Clock, CheckCircle, XCircle, Calendar, MessageSquare } from 'lucide-react';
 import { toast } from 'react-toastify';
-import { api, MEDIA_BASE_URL } from '../../api';
+import { api, MEDIA_BASE_URL, resolveMediaUrl } from '../../api';
 import { Modal, Badge, Button, RatingStars } from '../ui';
 
 /**
@@ -122,7 +122,7 @@ const ViewBoxModal = ({ isOpen, onClose, box, onBoxUpdated }) => {
         {box.image && (
           <div className="mb-6">
             <img
-              src={box.image.startsWith('http') ? box.image : `${MEDIA_BASE_URL}${box.image}`}
+              src={resolveMediaUrl(box.image)}
               alt={box.name}
               className="w-full h-64 object-cover rounded-lg"
               onError={(e) => {

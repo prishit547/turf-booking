@@ -1,12 +1,28 @@
+import { useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Facebook, Twitter, Instagram } from 'lucide-react'
 import { Logo } from './Header'
+import { useBox } from '../../context/BoxContext'
 
-const cities = ['Mumbai', 'Bengaluru', 'Pune', 'Delhi', 'Ahmedabad', 'Hyderabad']
+const SOCIAL_LINKS = [{ Icon: Facebook, label: 'Facebook' }, { Icon: Twitter, label: 'Twitter' }, { Icon: Instagram, label: 'Instagram' }]
 const sportsList = ['Cricket', 'Football', 'Tennis', 'Badminton']
 
 const Footer = () => {
   const currentYear = new Date().getFullYear()
+  const { locations, fetchBoxLocations } = useBox()
+
+  useEffect(() => {
+    fetchBoxLocations()
+  }, [fetchBoxLocations])
+
+  // Cities are derived from boxes that actually exist, not a static wishlist
+  // — a hardcoded list here used to advertise cities (Delhi, Hyderabad) with
+  // zero real listings, so following the link always landed on an empty
+  // results page.
+  const cities = useMemo(
+    () => [...new Set(locations.map((l) => l.split(',')[0].trim()))].filter(Boolean),
+    [locations]
+  )
 
   return (
     <footer className="border-t border-border bg-card/40">
@@ -17,10 +33,11 @@ const Footer = () => {
             Book sports boxes by the hour. Live availability, instant confirmation, no phone calls.
           </p>
           <div className="mt-5 flex gap-3">
-            {[Facebook, Twitter, Instagram].map((Icon, i) => (
+            {SOCIAL_LINKS.map(({ Icon, label }) => (
               <a
-                key={i}
+                key={label}
                 href="#"
+                aria-label={label}
                 className="grid h-9 w-9 place-items-center rounded-full border border-border text-muted-foreground transition hover:border-primary/60 hover:text-primary"
               >
                 <Icon className="h-4 w-4" />

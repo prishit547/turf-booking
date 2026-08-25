@@ -163,7 +163,11 @@ const Header = () => {
             </Link>
             <button
               type="button"
-              className="md:hidden"
+              // -m-3 offsets the p-3 so the visible icon doesn't shift or
+              // grow, but the actual tap target grows from a 20x20px icon
+              // (below the 24x24 WCAG minimum) to a full 44x44px — this is
+              // the primary nav control on mobile, so it matters most here.
+              className="md:hidden -m-3 p-3"
               aria-label="Toggle menu"
               onClick={() => setIsMenuOpen((v) => !v)}
             >

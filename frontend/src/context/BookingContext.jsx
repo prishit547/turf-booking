@@ -7,9 +7,9 @@ const BookingContext = createContext();
 const bookingReducer = (state, action) => {
     switch (action.type) {
         case 'SET_BOOKINGS': {
-            // Ensure payload is always an array
-            const newBookings = Array.isArray(action.payload) ? action.payload : [];
-            return { ...state, bookings: newBookings, error: null };
+            // Ensure payload.bookings is always an array
+            const newBookings = Array.isArray(action.payload.bookings) ? action.payload.bookings : [];
+            return { ...state, bookings: newBookings, count: action.payload.count, error: null };
         }
         case 'ADD_BOOKING':
             // Ensure state.bookings is an array before spreading
@@ -39,8 +39,11 @@ const bookingReducer = (state, action) => {
     }
 };
 
+export const BOOKINGS_PAGE_SIZE = 20;
+
 const initialState = {
     bookings: [], // Correctly initialized as an empty array
+    count: 0, // Total bookings across all pages, for the Pagination control
     loading: false,
     error: null
 };
@@ -48,17 +51,20 @@ const initialState = {
 export const BookingProvider = ({ children }) => {
     const [state, dispatch] = useReducer(bookingReducer, initialState);
 
-    // Memoize fetchBookings
-    const fetchBookings = useCallback(async (userId) => {
+    // Memoize fetchBookings. `page` defaults to 1 so every existing call
+    // site (which only ever wanted "my bookings") keeps working unchanged.
+    const fetchBookings = useCallback(async (userId, page = 1) => {
         dispatch({ type: 'SET_LOADING', payload: true });
         dispatch({ type: 'SET_ERROR', payload: null });
         try {
-            const response = await api.get(`/bookings?userId=${userId}`);
+            const response = await api.get(`/bookings?userId=${userId}&page=${page}&page_size=${BOOKINGS_PAGE_SIZE}`);
 
             let bookingsData = [];
+            let count = null;
             // Common patterns for nested array responses from APIs
             if (response.data && Array.isArray(response.data.results)) { // For Django REST Framework pagination
                 bookingsData = response.data.results;
+                count = response.data.count;
             } else if (response.data && Array.isArray(response.data.data)) { // Another common pattern
                 bookingsData = response.data.data;
             } else if (Array.isArray(response.data)) { // If the API returns the array directly
@@ -68,8 +74,11 @@ export const BookingProvider = ({ children }) => {
                 // If it's not an array, default to an empty array to prevent filter errors
                 bookingsData = [];
             }
-            
-            dispatch({ type: 'SET_BOOKINGS', payload: bookingsData });
+            // A non-paginated response shape (e.g. an unmocked test double)
+            // still needs a count for the Pagination control to size itself.
+            if (count === null) count = bookingsData.length;
+
+            dispatch({ type: 'SET_BOOKINGS', payload: { bookings: bookingsData, count } });
 
         } catch (error) {
             console.error('Error fetching bookings:', error.response?.data || error.message);

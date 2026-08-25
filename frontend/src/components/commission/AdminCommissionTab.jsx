@@ -2,7 +2,7 @@ import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'react-toastify';
 import { Plus, Download } from 'lucide-react';
 import { api } from '../../api.jsx';
-import { Button, Card, Badge, Input, Select, Modal, Loader } from '../ui';
+import { Button, Card, Badge, Input, Select, Modal, Loader, Pagination } from '../ui';
 
 function PlatformDefaultRateCard() {
   const [rate, setRate] = useState('');
@@ -68,10 +68,20 @@ function PlatformDefaultRateCard() {
   );
 }
 
+const COMMISSION_RATES_PAGE_SIZE = 20;
+
 function RateConfigSection() {
   const [owners, setOwners] = useState([]);
   const [boxes, setBoxes] = useState([]);
   const [rates, setRates] = useState([]);
+  const [ratesCount, setRatesCount] = useState(0);
+  const [ratesPage, setRatesPage] = useState(1);
+  // The full change history (`rates`, above) pages independently of this —
+  // it's bounded by how many distinct override configs currently exist,
+  // not by how many times any of them has ever changed, so fetching it
+  // whole to badge "Current" rows in the paged history table below stays
+  // cheap regardless of history length. See AdminCommissionRateViewSet.current.
+  const [currentRateIds, setCurrentRateIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ owner: '', sport: '', rate: '', effective_from: new Date().toISOString().slice(0, 10) });
@@ -80,20 +90,24 @@ function RateConfigSection() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [ownersRes, boxesRes, ratesRes] = await Promise.all([
+      const [ownersRes, boxesRes, ratesRes, currentRes] = await Promise.all([
         api.get('/user/users/?role=owner&page_size=200'),
         api.get('/boxes/owner/'),
-        api.get('/boxes/admin/commission-rates/'),
+        api.get(`/boxes/admin/commission-rates/?page=${ratesPage}&page_size=${COMMISSION_RATES_PAGE_SIZE}`),
+        api.get('/boxes/admin/commission-rates/current/'),
       ]);
       setOwners(ownersRes.data.results || ownersRes.data);
       setBoxes(boxesRes.data.results || boxesRes.data);
-      setRates(ratesRes.data.results || ratesRes.data);
+      const rateResults = ratesRes.data.results || ratesRes.data;
+      setRates(rateResults);
+      setRatesCount(ratesRes.data.count ?? rateResults.length);
+      setCurrentRateIds(new Set((currentRes.data.results || currentRes.data).map((r) => r.id)));
     } catch {
       toast.error('Failed to load commission configuration');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ratesPage]);
   useEffect(() => { load(); }, [load]);
 
   const sportsForSelectedOwner = useMemo(() => {
@@ -107,22 +121,6 @@ function RateConfigSection() {
     return Array.from(sports);
   }, [boxes, form.owner]);
 
-  // Purely a display-layer grouping over the already-fetched `rates` array —
-  // finds the latest effective_from per (owner, sport) pair so that row can
-  // be badged "Current" in the table below. No new fetch, no edit-in-place;
-  // the underlying create-only/versioned-row design is untouched.
-  const currentRateIds = useMemo(() => {
-    const latestByGroup = new Map();
-    rates.forEach((r) => {
-      const key = `${r.owner}::${r.sport}`;
-      const existing = latestByGroup.get(key);
-      if (!existing || r.effective_from > existing.effective_from) {
-        latestByGroup.set(key, r);
-      }
-    });
-    return new Set(Array.from(latestByGroup.values()).map((r) => r.id));
-  }, [rates]);
-
   const handleCreate = async () => {
     if (form.rate === '' || Number(form.rate) < 0 || Number(form.rate) > 100) {
       toast.error('Enter a rate between 0 and 100');
@@ -134,6 +132,8 @@ function RateConfigSection() {
       toast.success('Commission rate saved');
       setShowModal(false);
       setForm({ owner: '', sport: '', rate: '', effective_from: new Date().toISOString().slice(0, 10) });
+      // A new override is the most recent row — jump back to page 1 to see it.
+      setRatesPage(1);
       load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to save commission rate');
@@ -159,7 +159,7 @@ function RateConfigSection() {
               <tr>{['Owner', 'Sport', 'Rate', 'Effective from', 'Created'].map((h) => <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rates.length === 0 ? (
+              {ratesCount === 0 ? (
                 <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">No overrides yet — every owner uses the platform default rate</td></tr>
               ) : rates.map((r) => (
                 <tr key={r.id} className="hover:bg-elevated/60">
@@ -178,6 +178,7 @@ function RateConfigSection() {
             </tbody>
           </table>
         </div>
+        <Pagination page={ratesPage} pageSize={COMMISSION_RATES_PAGE_SIZE} count={ratesCount} onPageChange={setRatesPage} />
       </Card>
 
       <Modal
@@ -210,24 +211,56 @@ function RateConfigSection() {
   );
 }
 
+const COMMISSION_REPORT_PAGE_SIZE = 20;
+
 function CommissionReportSection() {
   const [balances, setBalances] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [expandedOwner, setExpandedOwner] = useState(null);
 
   useEffect(() => {
-    api.get('/owner_dashboard/payouts/balance/').then((res) => setBalances(res.data)).catch(() => toast.error('Failed to load commission report')).finally(() => setLoading(false));
-  }, []);
+    setLoading(true);
+    api.get(`/owner_dashboard/payouts/balance/?page=${page}&page_size=${COMMISSION_REPORT_PAGE_SIZE}`)
+      .then((res) => {
+        const results = res.data.results || res.data;
+        setBalances(results);
+        setCount(res.data.count ?? results.length);
+      })
+      .catch(() => toast.error('Failed to load commission report'))
+      .finally(() => setLoading(false));
+  }, [page]);
 
-  const handleExport = () => {
-    const rows = ['owner_email,gross_revenue,commission,net_revenue,balance_due', ...balances.map((b) => `${b.owner_email},${b.gross_revenue},${b.commission},${b.net_revenue},${b.balance_due}`)];
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'commission-report.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+  // Walks every page rather than exporting whatever's currently on screen —
+  // this is a platform-wide report, so a real owner base easily exceeds one
+  // page.
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      let all = [];
+      let nextPage = 1;
+      for (;;) {
+        const res = await api.get(`/owner_dashboard/payouts/balance/?page=${nextPage}&page_size=100`);
+        const results = res.data.results || res.data;
+        all = all.concat(results);
+        if (!res.data.next) break;
+        nextPage += 1;
+      }
+      const rows = ['owner_email,gross_revenue,commission,net_revenue,balance_due', ...all.map((b) => `${b.owner_email},${b.gross_revenue},${b.commission},${b.net_revenue},${b.balance_due}`)];
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'commission-report.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to export commission report');
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (loading) return <Loader text="Loading commission report..." className="py-10" />;
@@ -236,7 +269,7 @@ function CommissionReportSection() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h3 className="text-xl font-display font-semibold text-foreground">Commission report</h3>
-        <Button variant="outline" onClick={handleExport} icon={<Download size={16} />} disabled={balances.length === 0}>Export CSV</Button>
+        <Button variant="outline" onClick={handleExport} icon={<Download size={16} />} loading={exporting} disabled={count === 0}>Export CSV</Button>
       </div>
       <Card padding="none" className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -245,7 +278,7 @@ function CommissionReportSection() {
               <tr>{['Owner', 'Gross revenue', 'Commission earned', 'Net revenue', 'Balance due', ''].map((h) => <th key={h} className="text-left py-3 px-4 font-medium text-foreground whitespace-nowrap">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {balances.length === 0 ? (
+              {count === 0 ? (
                 <tr><td colSpan={6} className="text-center py-10 text-muted-foreground">No owner revenue yet</td></tr>
               ) : balances.map((b) => (
                 <Fragment key={b.owner_id}>
@@ -302,6 +335,7 @@ function CommissionReportSection() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageSize={COMMISSION_REPORT_PAGE_SIZE} count={count} onPageChange={setPage} />
       </Card>
     </div>
   );

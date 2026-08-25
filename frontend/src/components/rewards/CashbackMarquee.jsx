@@ -43,9 +43,14 @@ export function CashbackMarquee({ amount, className = '' }) {
 
   return (
     <div className={`overflow-hidden rounded-xl border border-primary/30 bg-primary/10 py-2 ${className}`}>
-      <div className="marquee-track flex w-max">
+      {/* The scrolling track is purely decorative repetition (8 visual
+          copies so the loop has no gap) — a screen reader has no notion of
+          "scrolling past", so without this the same promo would be read out
+          up to 8 times in a row. One real, silent announcement replaces it. */}
+      <p className="sr-only">{message}</p>
+      <div className="marquee-track flex w-max" aria-hidden="true">
         {[0, 1].map((dup) => (
-          <div key={dup} className="flex shrink-0 items-center gap-10 pr-10" aria-hidden={dup === 1}>
+          <div key={dup} className="flex shrink-0 items-center gap-10 pr-10">
             {chunk.map((m, i) => (
               <span key={i} className="flex items-center gap-2 whitespace-nowrap text-sm font-medium text-primary">
                 <Sparkles className="h-4 w-4 shrink-0" /> {m}

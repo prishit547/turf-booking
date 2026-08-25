@@ -1,26 +1,19 @@
 import { Star } from 'lucide-react';
 
 /**
- * Per-star count histogram for a box's reviews — tallies `reviews` (each
- * with a 1-5 `rating`) client-side, since the full review list is already
- * delivered on `box.reviews` and a new endpoint would just duplicate that
- * data. Same bar-row visual as the "Top performing cities" pattern in the
- * admin/owner dashboards, for consistency.
+ * Per-star count histogram for a box's reviews. `counts` is the
+ * server-computed `{"1": n, ..., "5": n}` breakdown (BoxDetailSerializer's
+ * rating_breakdown) rather than a full review list tallied client-side —
+ * the review list itself is paginated now (see BoxDetails.jsx), so an
+ * accurate histogram can no longer assume every review is already loaded.
  */
-export function RatingBreakdown({ reviews }) {
-    const counts = [5, 4, 3, 2, 1].reduce((acc, star) => {
-        acc[star] = 0;
-        return acc;
-    }, {});
-    reviews.forEach((review) => {
-        if (counts[review.rating] !== undefined) counts[review.rating] += 1;
-    });
-    const total = reviews.length;
+export function RatingBreakdown({ counts }) {
+    const total = [5, 4, 3, 2, 1].reduce((sum, star) => sum + (counts?.[star] ?? 0), 0);
 
     return (
         <div className="space-y-2">
             {[5, 4, 3, 2, 1].map((star) => {
-                const count = counts[star];
+                const count = counts?.[star] ?? 0;
                 const percentage = total > 0 ? (count / total) * 100 : 0;
                 return (
                     <div key={star} className="flex items-center gap-3 text-sm">

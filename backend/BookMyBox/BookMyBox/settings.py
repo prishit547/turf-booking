@@ -326,6 +326,18 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.trycloudflare\.com$",
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in env('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://*.trycloudflare.com').split(',')
+    if origin.strip()
+]
+
 CORS_ALLOW_ALL_ORIGINS = False  # Never enable in production
 CORS_ALLOW_CREDENTIALS = True  # Allow cookies to be sent
 CORS_ALLOW_HEADERS = [

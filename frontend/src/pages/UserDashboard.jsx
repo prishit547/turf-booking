@@ -4,12 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth, api } from '../api.jsx'; // Import 'api' from your Auth context file
 import { useBooking } from '../context/BookingContext';
-import { parseBookingDateTime } from '../utils/date';
 import { toast } from 'react-toastify';
 import {
   Calendar,
   Clock,
-  CreditCard,
   Trophy,
   Heart,
   Users,
@@ -30,13 +28,14 @@ import {
   EnhancedSportDistribution,
   BookingActivityChart,
   PeakHoursChart,
-  MonthlySpendingChart,
+  MonthlyActivityChart,
 } from '../components/common/AdvancedCharts';
-import { Button, Card, Badge, Modal, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle } from '../components/ui';
+import { Button, Card, Badge, Modal, Loader, StatTile, StatusPill, SkeletonLine, SkeletonBlock, SkeletonCircle, Pagination } from '../components/ui';
 import AchievementBadge from '../components/common/Badge';
 import GamificationStats from '../components/common/GamificationStats';
 import UserRewardsTab from '../components/rewards/UserRewardsTab';
 import InviteBookingModal from '../components/bookings/InviteBookingModal';
+import { useTabParam } from '../hooks/useTabParam';
 
 
 // Register Chart.js components
@@ -63,6 +62,7 @@ const TABS = [
   { id: 'achievements', label: 'Achievements', icon: Trophy },
   { id: 'favorites', label: 'Favorites', icon: Heart },
 ];
+const TAB_IDS = TABS.map((t) => t.id);
 
 const BOOKING_STATUS_TONE = {
   Confirmed: 'success',
@@ -73,10 +73,10 @@ const BOOKING_STATUS_TONE = {
 
 const UserDashboard = () => {
   const { user, logout } = useAuth();
-  const { bookings, loading, error, fetchBookings, cancelBooking } = useBooking();
+  const { bookings, loading, fetchBookings, cancelBooking } = useBooking();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useTabParam('overview', TAB_IDS);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [achievements, setAchievements] = useState([]);
   const [userGameStats, setUserGameStats] = useState(null);
@@ -92,6 +92,57 @@ const UserDashboard = () => {
   // upcoming booking card (not shown to invited participants — see
   // isOwnBooking below).
   const [inviteModalBooking, setInviteModalBooking] = useState(null);
+
+  // Bookings tab: Upcoming and History page independently against
+  // GET /bookings/?when=upcoming|past (see BookingViewSet.get_queryset) —
+  // a single flat paged list would otherwise bury upcoming bookings behind
+  // however much history a long-time customer has, since both sections used
+  // to be sliced client-side from one array that's no longer fetched whole.
+  const BOOKINGS_TAB_PAGE_SIZE = 10;
+  const [upcomingBookings, setUpcomingBookings] = useState([]);
+  const [upcomingCount, setUpcomingCount] = useState(0);
+  const [upcomingPage, setUpcomingPage] = useState(1);
+  const [upcomingLoading, setUpcomingLoading] = useState(true);
+  const [pastBookings, setPastBookings] = useState([]);
+  const [pastCount, setPastCount] = useState(0);
+  const [pastPage, setPastPage] = useState(1);
+  const [pastLoading, setPastLoading] = useState(true);
+
+  const fetchUpcomingBookings = useCallback(async (page = 1) => {
+    if (!user?.id) return;
+    setUpcomingLoading(true);
+    try {
+      const res = await api.get(`/bookings/?when=upcoming&page=${page}&page_size=${BOOKINGS_TAB_PAGE_SIZE}`);
+      setUpcomingBookings(res.data.results || []);
+      setUpcomingCount(res.data.count ?? (res.data.results || []).length);
+    } catch {
+      toast.error('Failed to load upcoming bookings');
+    } finally {
+      setUpcomingLoading(false);
+    }
+  }, [user?.id]);
+
+  const fetchPastBookings = useCallback(async (page = 1) => {
+    if (!user?.id) return;
+    setPastLoading(true);
+    try {
+      const res = await api.get(`/bookings/?when=past&page=${page}&page_size=${BOOKINGS_TAB_PAGE_SIZE}`);
+      setPastBookings(res.data.results || []);
+      setPastCount(res.data.count ?? (res.data.results || []).length);
+    } catch {
+      toast.error('Failed to load booking history');
+    } finally {
+      setPastLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (activeTab === 'bookings') fetchUpcomingBookings(upcomingPage);
+  }, [activeTab, upcomingPage, fetchUpcomingBookings]);
+
+  useEffect(() => {
+    if (activeTab === 'bookings') fetchPastBookings(pastPage);
+  }, [activeTab, pastPage, fetchPastBookings]);
 
   // Fetch Analytics Data (memoized)
   const fetchAnalytics = useCallback(async () => {
@@ -177,7 +228,11 @@ const UserDashboard = () => {
   }, [user, fetchFavorites]);
 
 
-  // useEffect to call all dashboard data fetches
+  // useEffect to call all dashboard data fetches. fetchBookings here powers
+  // only the Overview tab's small "Recent activity" widget (page 1) — the
+  // Bookings tab itself fetches Upcoming/History independently below, each
+  // with its own pager, since a single flat paged list would bury upcoming
+  // bookings behind however much history a long-time customer has.
   useEffect(() => {
     if (user && user.id) {
       fetchBookings(user.id);
@@ -224,7 +279,8 @@ const UserDashboard = () => {
       if (success) {
         toast.success('Booking cancelled successfully!');
         if (user && user.id) {
-          fetchBookings(user.id); // Re-fetch bookings
+          fetchUpcomingBookings(upcomingPage);
+          fetchPastBookings(pastPage);
           fetchAnalytics(); // Re-fetch analytics to update spent
         }
       } else {
@@ -242,19 +298,6 @@ const UserDashboard = () => {
       </div>
     );
   }
-
-  // Filter bookings for upcoming (bookings with an unparseable date/time are
-  // excluded from both lists rather than sorting unpredictably)
-  const upcomingBookings = bookings.filter(b => {
-    const bookingDateTime = parseBookingDateTime(b.date, b.start_time);
-    return bookingDateTime && bookingDateTime > new Date();
-  }).sort((a, b) => parseBookingDateTime(a.date, a.start_time) - parseBookingDateTime(b.date, b.start_time));
-
-  // Filter bookings for past bookings
-  const pastBookings = bookings.filter(b => {
-    const bookingDateTime = parseBookingDateTime(b.date, b.start_time);
-    return bookingDateTime && bookingDateTime <= new Date();
-  }).sort((a, b) => parseBookingDateTime(b.date, b.start_time) - parseBookingDateTime(a.date, a.start_time));
 
   return (
     <div className="min-h-screen bg-background py-8">
@@ -291,7 +334,7 @@ const UserDashboard = () => {
         </motion.div>
 
         {/* Tabs */}
-        <nav className="flex flex-wrap gap-2 mt-6 overflow-x-auto no-scrollbar" aria-label="Tabs">
+        <nav className="flex flex-nowrap gap-2 mt-6 overflow-x-auto no-scrollbar" aria-label="Tabs" role="tablist">
           {TABS.map((tab) => {
             const TabIcon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -299,6 +342,8 @@ const UserDashboard = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={isActive}
                 className={`flex items-center gap-2 py-2.5 px-4 rounded-full font-medium text-sm border transition-colors duration-150 whitespace-nowrap ${
                   isActive
                     ? 'bg-primary/15 border-primary text-primary'
@@ -331,13 +376,6 @@ const UserDashboard = () => {
                   icon={<Clock size={22} />}
                   value={analyticsData?.this_month_bookings || 0}
                   label="This month's bookings"
-                  loading={analyticsLoading}
-                />
-                <StatTile
-                  tone="secondary"
-                  icon={<CreditCard size={22} />}
-                  value={`₹${(analyticsData?.total_spent || 0).toFixed(2)}`}
-                  label="Total spent"
                   loading={analyticsLoading}
                 />
                 <StatTile
@@ -440,11 +478,9 @@ const UserDashboard = () => {
             <div className="space-y-6">
               <h2 className="text-2xl font-display font-semibold text-foreground mb-4">My Bookings</h2>
 
-              {loading ? (
+              {(upcomingLoading || pastLoading) && upcomingBookings.length === 0 && pastBookings.length === 0 ? (
                 <Loader text="Loading your bookings..." className="py-10" />
-              ) : error ? (
-                <div className="text-center py-10 text-danger">Error: {error}</div>
-              ) : bookings.length === 0 ? (
+              ) : upcomingCount === 0 && pastCount === 0 ? (
                 <Card padding="lg" className="text-center">
                   <p className="text-lg text-muted-foreground mb-4">You don&apos;t have any bookings yet.</p>
                   <Button onClick={() => navigate('/boxes')} size="lg">
@@ -453,17 +489,21 @@ const UserDashboard = () => {
                 </Card>
               ) : (
                 <>
-                  <div>
-                    <h3 className="text-lg font-display font-semibold text-foreground mb-3 flex items-center">
+                  <Card padding="none" className="overflow-hidden">
+                    <h3 className="text-lg font-display font-semibold text-foreground p-5 pb-0 flex items-center">
                       <CheckCircle size={20} className="mr-2 text-success" />
-                      Upcoming ({upcomingBookings.length})
+                      Upcoming ({upcomingCount})
                     </h3>
-                    {upcomingBookings.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
-                        No upcoming bookings.
+                    {upcomingLoading ? (
+                      <Loader text="Loading..." className="py-8" />
+                    ) : upcomingBookings.length === 0 ? (
+                      <div className="p-5">
+                        <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
+                          No upcoming bookings.
+                        </div>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-3 p-5">
                         {upcomingBookings.map((booking) => {
                           const isOwnBooking = user?.id && String(booking.user_id) === String(user.id);
                           const acceptedInvites = (booking.invites || []).filter((i) => i.status === 'accepted');
@@ -524,19 +564,24 @@ const UserDashboard = () => {
                         })}
                       </div>
                     )}
-                  </div>
+                    <Pagination page={upcomingPage} pageSize={BOOKINGS_TAB_PAGE_SIZE} count={upcomingCount} onPageChange={setUpcomingPage} />
+                  </Card>
 
-                  <div>
-                    <h3 className="text-lg font-display font-semibold text-foreground mb-3 flex items-center">
+                  <Card padding="none" className="overflow-hidden">
+                    <h3 className="text-lg font-display font-semibold text-foreground p-5 pb-0 flex items-center">
                       <Clock size={20} className="mr-2 text-muted-foreground" />
-                      History ({pastBookings.length})
+                      History ({pastCount})
                     </h3>
-                    {pastBookings.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
-                        No past bookings.
+                    {pastLoading ? (
+                      <Loader text="Loading..." className="py-8" />
+                    ) : pastBookings.length === 0 ? (
+                      <div className="p-5">
+                        <div className="rounded-2xl border border-dashed border-border p-8 text-center text-muted-foreground">
+                          No past bookings.
+                        </div>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-3 p-5">
                         {pastBookings.map((booking) => {
                           const boxId = booking.box?.id || booking.box_id
                           return (
@@ -567,7 +612,8 @@ const UserDashboard = () => {
                         })}
                       </div>
                     )}
-                  </div>
+                    <Pagination page={pastPage} pageSize={BOOKINGS_TAB_PAGE_SIZE} count={pastCount} onPageChange={setPastPage} />
+                  </Card>
                 </>
               )}
             </div>
@@ -615,9 +661,9 @@ const UserDashboard = () => {
                     />
                     <StatTile
                       tone="secondary"
-                      icon={<CreditCard size={22} />}
-                      value={`₹${(analyticsData?.average_cost_per_session ?? 0).toFixed(0)}`}
-                      label="Avg cost / session"
+                      icon={<Activity size={22} />}
+                      value={analyticsData?.this_month_bookings ?? 0}
+                      label="Bookings this month"
                     />
                     <StatTile
                       tone="danger"
@@ -629,23 +675,23 @@ const UserDashboard = () => {
 
                   {/* Charts Grid */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Monthly Spending Trend */}
+                    {/* Monthly Activity Trend */}
                     <Card padding="md">
                       <div className="flex items-center gap-2 mb-4">
                         <TrendingUp size={20} className="text-primary" />
                         <h3 className="text-lg font-display font-semibold text-foreground">
-                          Monthly Spending Trend
+                          Monthly Activity Trend
                         </h3>
                       </div>
-                      <MonthlySpendingChart
+                      <MonthlyActivityChart
                         data={{
-                          labels: analyticsData?.monthly_spending?.map(item => item.month) || [],
-                          values: analyticsData?.monthly_spending?.map(item => item.total_spent) || [],
+                          labels: analyticsData?.monthly_activity?.map(item => item.month) || [],
+                          values: analyticsData?.monthly_activity?.map(item => item.total_hours) || [],
                         }}
                         loading={analyticsLoading}
                       />
                       <div className="mt-3 text-sm text-muted-foreground">
-                        Track your investment in sports activities over time
+                        Hours you&apos;ve played each month
                       </div>
                     </Card>
 
@@ -721,12 +767,6 @@ const UserDashboard = () => {
                         <p className="font-medium text-foreground">Most Active Sport</p>
                         <p className="text-primary">
                           {analyticsData?.sport_distribution?.[0]?.sport || 'N/A'}
-                        </p>
-                      </div>
-                      <div className="bg-elevated p-4 rounded-lg">
-                        <p className="font-medium text-foreground">Total Investment</p>
-                        <p className="text-success">
-                          ₹{(analyticsData?.total_spent || 0).toLocaleString()}
                         </p>
                       </div>
                       <div className="bg-elevated p-4 rounded-lg">
@@ -945,7 +985,7 @@ const UserDashboard = () => {
         booking={inviteModalBooking}
         isOpen={!!inviteModalBooking}
         onClose={closeInviteModal}
-        onInvited={() => { if (user?.id) fetchBookings(user.id); }}
+        onInvited={() => { if (user?.id) fetchUpcomingBookings(upcomingPage); }}
       />
     </div>
   );

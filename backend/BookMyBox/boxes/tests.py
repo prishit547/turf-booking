@@ -169,6 +169,34 @@ class ReviewAPITests(APITestCase):
         response = self.client.post(url, {'rating': 5, 'comment': 'Great!'}, format='json')
         self.assertEqual(response.status_code, 403)
 
+    def test_box_list_and_detail_expose_review_count_not_full_review_list(self):
+        # Regression: BoxSerializer used to nest every review for every box
+        # unbounded, shipped even on the browse-boxes list where nothing
+        # renders it.
+        self._auth()
+        self.client.post(f'/api/boxes/public/{self.box.id}/add_review/', {'rating': 5, 'comment': 'Great!'}, format='json')
+
+        list_response = self.client.get('/api/boxes/public/')
+        listed_box = next(b for b in list_response.data['results'] if b['id'] == self.box.id)
+        self.assertEqual(listed_box['review_count'], 1)
+        self.assertNotIn('reviews', listed_box)
+        self.assertNotIn('rating_breakdown', listed_box)  # detail-only, not on list()
+
+        detail_response = self.client.get(f'/api/boxes/public/{self.box.id}/')
+        self.assertEqual(detail_response.data['review_count'], 1)
+        self.assertEqual(detail_response.data['rating_breakdown'], {'1': 0, '2': 0, '3': 0, '4': 0, '5': 1})
+        self.assertNotIn('reviews', detail_response.data)
+
+    def test_box_reviews_endpoint_is_paginated(self):
+        self._auth()
+        self.client.post(f'/api/boxes/public/{self.box.id}/add_review/', {'rating': 5, 'comment': 'Great!'}, format='json')
+
+        response = self.client.get(f'/api/boxes/public/{self.box.id}/reviews/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['comment'], 'Great!')
+
 
 class ResolveBoxPriceTests(APITestCase):
     """Unit tests for boxes/pricing.py's resolve_box_price() — no HTTP,
@@ -342,6 +370,22 @@ class AdminCommissionRateAPITests(APITestCase):
             'owner': self.owner.id, 'sport': 'Cricket', 'rate': 12.5,
         }, format='json')
         self.assertEqual(response.status_code, 403)
+
+    def test_commission_rates_list_is_paginated(self):
+        self._auth()
+        response = self.client.get('/api/boxes/admin/commission-rates/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('results', response.data)
+
+    def test_current_returns_only_latest_row_per_owner_sport(self):
+        self._auth()
+        older = CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('10'), effective_from=date(2020, 1, 1))
+        newer = CommissionRate.objects.create(owner=self.owner, sport='Cricket', rate=Decimal('15'), effective_from=date(2025, 1, 1))
+        response = self.client.get('/api/boxes/admin/commission-rates/current/')
+        self.assertEqual(response.status_code, 200)
+        ids = [r['id'] for r in response.data]
+        self.assertIn(newer.id, ids)
+        self.assertNotIn(older.id, ids)
 
 
 class PricingRuleAPITests(APITestCase):
@@ -743,3 +787,32 @@ class BoxApprovalAuditLogTests(APITestCase):
         self.assertIsNotNone(log)
         self.assertEqual(log.actor, self.admin)
         self.assertEqual(log.details.get('reason'), 'Bad photos')
+
+
+class PendingBoxesPaginationTests(APITestCase):
+    """Regression: AdminBoxViewSet.list_pending is a bare ViewSet action, so
+    it never got the automatic pagination a ModelViewSet.list() gets — it
+    used to return the entire approval queue unbounded."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email='admin-pending@example.com', username='admin-pending@example.com',
+            password='testpass123', role='admin',
+        )
+        self.owner = User.objects.create_user(
+            email='owner-pending@example.com', username='owner-pending@example.com',
+            password='testpass123', role='owner', business_name='Pending Sports',
+        )
+        for i in range(3):
+            Box.objects.create(
+                name=f'Pending Box {i}', sport='Tennis', sports=['Tennis'], location='Pune',
+                price=300, capacity=10, owner=self.owner, status='pending',
+            )
+        self.client.force_authenticate(user=self.admin)
+
+    def test_pending_boxes_list_is_paginated(self):
+        response = self.client.get('/api/boxes/admin/pending/?page_size=2')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], 3)
+        self.assertEqual(len(response.data['results']), 2)

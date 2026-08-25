@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from '../api.jsx';
 
-// Mirrors API_BASE_URL exactly (this app talks to the backend via an
-// absolute URL, not Vite's dev proxy — see frontend/.env's VITE_API_BASE_URL)
-// but swapped to a ws(s):// scheme and with the /api suffix dropped, since
-// the Channels route lives at /ws/bookings/slot/... on the same host.
-const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api\/?$/, '');
+function getWsBaseUrl() {
+    if (API_BASE_URL && (API_BASE_URL.startsWith('http://') || API_BASE_URL.startsWith('https://'))) {
+        return API_BASE_URL.replace(/^http/, 'ws').replace(/\/api\/?$/, '');
+    }
+    if (typeof window !== 'undefined' && window.location) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${window.location.host}`;
+    }
+    return 'ws://localhost:8000';
+}
 
 const IDLE_STATE = { status: 'idle', position: null, expiresAt: null, message: null };
 
@@ -44,7 +49,7 @@ export function useSlotReservation({
         const params = new URLSearchParams({ token: accessToken });
         if (holdToken) params.set('hold_token', holdToken);
         const socket = new WebSocket(
-            `${WS_BASE_URL}/ws/bookings/slot/${boxId}/${date}/${startTime}/${duration}/?${params.toString()}`
+            `${getWsBaseUrl()}/ws/bookings/slot/${boxId}/${date}/${startTime}/${duration}/?${params.toString()}`
         );
         socketRef.current = socket;
 

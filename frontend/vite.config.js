@@ -20,7 +20,8 @@ export default defineConfig({
     },
   },
   server: {
-    // Let Vite choose an available port automatically
+    host: '0.0.0.0',
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000', // Your Django server's address
@@ -30,6 +31,16 @@ export default defineConfig({
       '/ws': {
         target: 'ws://127.0.0.1:8000', // Channels WebSocket endpoint (slot reservation status)
         ws: true,
+      },
+      '/media': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/admin': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
       },
     },
   },

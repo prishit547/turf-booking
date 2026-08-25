@@ -10,8 +10,6 @@ import { BoxCard } from '../components/boxes/BoxCard';
 import { FilterPanel, defaultFilters } from '../components/boxes/FilterPanel';
 import BoxListingsMap from '../components/maps/BoxListingsMap';
 
-const LOCATIONS = ['Ahmedabad', 'Kolkata', 'Goa', 'Jaipur', 'Lucknow', 'Bhopal', 'Indore', 'Chandigarh', 'Hyderabad', 'Chennai', 'Bengaluru', 'Pune', 'Delhi', 'Mumbai'];
-
 const BoxListings = () => {
     const [searchParams] = useSearchParams();
     const [searchTerm, setSearchTerm] = useState('');
@@ -53,6 +51,15 @@ const BoxListings = () => {
         boxes.forEach((b) => (b.amenities || []).forEach((a) => set.add(a)));
         return [...set].sort();
     }, [boxes]);
+
+    // Derived from boxes that actually exist, not a static wishlist of
+    // cities — a hardcoded list here used to offer 14 cities when only a
+    // handful ever had a real listing, so most selections landed on a dead
+    // "no results" page with a misleading suggestion to loosen price/rating.
+    const locationOptions = useMemo(
+        () => [...new Set(boxes.map((b) => (b.location || '').split(',')[0].trim()).filter(Boolean))].sort(),
+        [boxes]
+    );
 
     const results = useMemo(() => {
         const q = debouncedSearchTerm.trim().toLowerCase();
@@ -111,7 +118,7 @@ const BoxListings = () => {
                             className="rounded-full border border-border bg-card px-4 py-2 text-sm"
                         >
                             <option value="all">All locations</option>
-                            {LOCATIONS.map((l) => (
+                            {locationOptions.map((l) => (
                                 <option key={l} value={l}>{l}</option>
                             ))}
                         </select>
@@ -195,7 +202,9 @@ const BoxListings = () => {
                             <div className="rounded-2xl border border-dashed border-border p-12 text-center">
                                 <h2 className="font-display text-xl">No boxes match that combination</h2>
                                 <p className="mt-2 text-sm text-muted-foreground">
-                                    Loosen the price or rating filter — there are plenty of slots nearby.
+                                    {location !== 'all'
+                                        ? `There's no box in ${location} yet — try another city, or clear the location filter.`
+                                        : 'Loosen the price or rating filter — there are plenty of slots nearby.'}
                                 </p>
                                 <button
                                     type="button"

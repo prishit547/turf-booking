@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import { Wallet, Gift, Sparkles, Ticket, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { api } from '../../api.jsx';
-import { Button, Card, Badge, Input, Loader, StatTile } from '../ui';
+import { Button, Card, Badge, Input, Loader, StatTile, Pagination } from '../ui';
 import RewardWinModal from './RewardWinModal';
 
 const TXN_TONE = {
@@ -49,9 +49,14 @@ function ScratchCardTile({ card, onReveal, revealing }) {
   );
 }
 
+const TXN_PAGE_SIZE = 10;
+
 export default function UserRewardsTab() {
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [txnCount, setTxnCount] = useState(0);
+  const [txnPage, setTxnPage] = useState(1);
+  const [txnLoading, setTxnLoading] = useState(true);
   const [scratchCards, setScratchCards] = useState([]);
   const [spinInfo, setSpinInfo] = useState({ available: 0, segments: [], enabled: true });
   const [loading, setLoading] = useState(true);
@@ -66,14 +71,12 @@ export default function UserRewardsTab() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [walletRes, txnRes, cardsRes, spinRes] = await Promise.all([
+      const [walletRes, cardsRes, spinRes] = await Promise.all([
         api.get('/rewards/wallet/'),
-        api.get('/rewards/wallet/transactions/'),
         api.get('/rewards/scratch-cards/'),
         api.get('/rewards/spin/'),
       ]);
       setWallet(walletRes.data);
-      setTransactions(txnRes.data.results || txnRes.data);
       setScratchCards(cardsRes.data.results || cardsRes.data);
       setSpinInfo(spinRes.data);
     } catch {
@@ -85,6 +88,23 @@ export default function UserRewardsTab() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Its own fetch/effect (rather than folding into loadAll) so paging the
+  // ledger doesn't re-fetch the wallet balance/scratch cards/spin info too.
+  const fetchTransactions = useCallback(async (page = 1) => {
+    setTxnLoading(true);
+    try {
+      const txnRes = await api.get(`/rewards/wallet/transactions/?page=${page}&page_size=${TXN_PAGE_SIZE}`);
+      setTransactions(txnRes.data.results || txnRes.data);
+      setTxnCount(txnRes.data.count ?? (txnRes.data.results || txnRes.data).length);
+    } catch {
+      toast.error('Could not load your transaction history.');
+    } finally {
+      setTxnLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchTransactions(txnPage); }, [txnPage, fetchTransactions]);
+
   const handleScratch = async (card) => {
     setRevealingId(card.id);
     try {
@@ -94,8 +114,10 @@ export default function UserRewardsTab() {
       setWinModal({ isOpen: true, amount: res.data.prize_amount, title: 'You won!' });
       const walletRes = await api.get('/rewards/wallet/');
       setWallet(walletRes.data);
-      const txnRes = await api.get('/rewards/wallet/transactions/');
-      setTransactions(txnRes.data.results || txnRes.data);
+      // A fresh win lands at the top of the ledger (ordered -created_at) —
+      // jump back to page 1 so it's actually visible.
+      setTxnPage(1);
+      fetchTransactions(1);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Could not scratch this card.');
     } finally {
@@ -121,6 +143,8 @@ export default function UserRewardsTab() {
         toast.success(`You won ₹${res.data.prize_amount} on the spin wheel!`);
         setWinModal({ isOpen: true, amount: res.data.prize_amount, title: 'You won!' });
         loadAll();
+        setTxnPage(1);
+        fetchTransactions(1);
         setSpinning(false);
       }, 4100);
     } catch (err) {
@@ -138,6 +162,8 @@ export default function UserRewardsTab() {
       toast.success(`₹${res.data.value} added to your wallet!`);
       setRedeemInput('');
       loadAll();
+      setTxnPage(1);
+      fetchTransactions(1);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Invalid code.');
     } finally {
@@ -266,7 +292,9 @@ export default function UserRewardsTab() {
           answer: every mechanic above writes into this same ledger. */}
       <div>
         <h3 className="font-display font-semibold text-lg text-foreground mb-3">Transaction History</h3>
-        {transactions.length === 0 ? (
+        {txnLoading && transactions.length === 0 ? (
+          <div className="py-8 flex justify-center"><Loader text="Loading..." /></div>
+        ) : txnCount === 0 ? (
           <Card padding="md"><p className="text-sm text-muted-foreground">No wallet activity yet.</p></Card>
         ) : (
           <Card padding="none" className="overflow-hidden">
@@ -289,6 +317,7 @@ export default function UserRewardsTab() {
                 </div>
               ))}
             </div>
+            <Pagination page={txnPage} pageSize={TXN_PAGE_SIZE} count={txnCount} onPageChange={setTxnPage} />
           </Card>
         )}
       </div>

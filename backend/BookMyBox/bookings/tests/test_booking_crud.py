@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -76,6 +77,88 @@ class BookingAPITests(APITestCase):
             format='json'
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_cannot_book_a_same_day_slot_whose_start_time_has_already_passed(self):
+        # Regression: validate_booking_request() used to only compare dates,
+        # so a same-day slot could be booked (and paid for) after its own
+        # start time had already gone by.
+        self._auth()
+        now = timezone.localtime()
+        if now.hour < 6:
+            self.skipTest("Can't construct an elapsed same-day slot before this box's 06:00 opening.")
+        response = self.client.post(
+            '/api/bookings/',
+            {
+                'boxId': self.box.id,
+                'date': now.date().isoformat(),
+                'startTime': '06:00',
+                'duration': 1,
+            },
+            format='json'
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already passed', str(response.data))
+
+    def test_can_still_book_a_same_day_slot_that_has_not_started_yet(self):
+        self._auth()
+        now = timezone.localtime()
+        if now.hour >= 22:
+            self.skipTest("Can't construct a same-day future slot this late (box closes at 23:00).")
+        future_hour = now.hour + 1
+        response = self.client.post(
+            '/api/bookings/',
+            {
+                'boxId': self.box.id,
+                'date': now.date().isoformat(),
+                'startTime': f'{future_hour:02d}:00',
+                'duration': 1,
+            },
+            format='json'
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_bookings_list_is_paginated(self):
+        # Regression: BookingViewSet had no pagination_class, so the
+        # customer's own booking list relied on the global 100/page default
+        # with no way for the frontend to request page 2+.
+        self._auth()
+        for i in range(3):
+            self.client.post(
+                '/api/bookings/',
+                {'boxId': self.box.id, 'date': f'2030-01-{15+i}', 'startTime': '10:00', 'duration': 1},
+                format='json',
+            )
+        response = self.client.get('/api/bookings/?page_size=2')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], 3)
+        self.assertEqual(len(response.data['results']), 2)
+
+    def test_when_upcoming_and_past_split_and_order_correctly(self):
+        self._auth()
+        past_booking = Booking.objects.create(
+            user=self.user, box=self.box, date='2020-01-10', start_time='10:00', end_time='11:00',
+            duration=1, total_amount=500, booking_status='Completed',
+        )
+        future_near = self.client.post(
+            '/api/bookings/',
+            {'boxId': self.box.id, 'date': '2030-01-15', 'startTime': '10:00', 'duration': 1},
+            format='json',
+        ).data
+        future_far = self.client.post(
+            '/api/bookings/',
+            {'boxId': self.box.id, 'date': '2030-06-15', 'startTime': '10:00', 'duration': 1},
+            format='json',
+        ).data
+
+        upcoming = self.client.get('/api/bookings/?when=upcoming').data
+        self.assertEqual(upcoming['count'], 2)
+        # Soonest first.
+        self.assertEqual([b['id'] for b in upcoming['results']], [future_near['id'], future_far['id']])
+
+        past = self.client.get('/api/bookings/?when=past').data
+        self.assertEqual(past['count'], 1)
+        self.assertEqual(past['results'][0]['id'], past_booking.id)
 
     def test_cannot_book_unapproved_box(self):
         self.box.status = 'pending'

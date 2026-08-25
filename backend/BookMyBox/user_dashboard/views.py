@@ -36,7 +36,6 @@ class DashboardAnalyticsView(APIView):
         confirmed_bookings = all_bookings.filter(booking_status__in=ACTIVE_STATUSES)
 
         # --- Calculate Stats ---
-        total_spent = confirmed_bookings.aggregate(total=Sum('total_amount'))['total'] or 0
         total_hours_played = confirmed_bookings.aggregate(total=Sum('duration'))['total'] or 0
         total_bookings_count = all_bookings.count()
         cancelled_bookings_count = all_bookings.filter(booking_status='Cancelled').count()
@@ -46,9 +45,6 @@ class DashboardAnalyticsView(APIView):
         # This month's bookings
         now = datetime.now()
         this_month_bookings = confirmed_bookings.filter(date__year=now.year, date__month=now.month).count()
-        
-        # Average cost per session
-        avg_cost_per_session = (total_spent / confirmed_bookings.count()) if confirmed_bookings.count() > 0 else 0
 
         # --- Sport Distribution (for Doughnut Chart) ---
         sport_distribution_data = confirmed_bookings.values('box__sport').annotate(count=Count('id')).order_by('-count')
@@ -58,11 +54,14 @@ class DashboardAnalyticsView(APIView):
             for item in sport_distribution_data
         ]
 
-        # --- Monthly Spending (for Line Chart) ---
-        monthly_spending_data = confirmed_bookings.annotate(month=TruncMonth('date')).values('month').annotate(total_spent=Sum('total_amount')).order_by('month')
-        monthly_spending = [
-            {'month': item['month'].strftime('%b %Y'), 'total_spent': item['total_spent']}
-            for item in monthly_spending_data
+        # --- Monthly Activity (for Line Chart) ---
+        # Deliberately hours played, not money spent: the customer-facing
+        # dashboard frames a player's history around how much they've played,
+        # never around how much they've paid.
+        monthly_activity_data = confirmed_bookings.annotate(month=TruncMonth('date')).values('month').annotate(total_hours=Sum('duration')).order_by('month')
+        monthly_activity = [
+            {'month': item['month'].strftime('%b %Y'), 'total_hours': item['total_hours'] or 0}
+            for item in monthly_activity_data
         ]
 
         # --- Activity by Day of Week (for Bar Chart) ---
@@ -95,15 +94,16 @@ class DashboardAnalyticsView(APIView):
         )['avg']
 
         # Assemble the final data object
+        # total_spent / average_cost_per_session are deliberately NOT exposed
+        # here: a player's own dashboard shouldn't tally up what they've spent.
+        # The owner and admin earnings views are where money is reported.
         data = {
-            'total_spent': total_spent,
             'this_month_bookings': this_month_bookings,
             'total_hours_played': total_hours_played,
             'average_rating': round(user_reviews_avg, 1),
-            'average_cost_per_session': avg_cost_per_session,
             'cancellation_rate': cancellation_rate,
             'sport_distribution': sport_distribution,
-            'monthly_spending': monthly_spending,
+            'monthly_activity': monthly_activity,
             'activity_by_day': activity_by_day,
             'peak_booking_hours': peak_booking_hours,
         }

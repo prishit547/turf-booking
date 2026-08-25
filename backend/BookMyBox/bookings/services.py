@@ -181,8 +181,17 @@ def reschedule_booking(booking, *, rescheduled_by, new_date, new_start_time_str)
     if timezone.now() > booking_dt - timedelta(hours=2):
         raise RescheduleError('Rescheduling is not allowed within 2 hours of the booking time.')
 
-    if new_date < timezone.now().date():
+    now = timezone.localtime()
+    if new_date < now.date():
         raise RescheduleError('Cannot reschedule to a slot in the past.')
+    if new_date == now.date():
+        try:
+            new_start_dt = timezone.make_aware(datetime.combine(new_date, parse_time(new_start_time_str)))
+        except ValidationError as e:
+            reason = e.detail[0] if isinstance(e.detail, list) and e.detail else e.detail
+            raise RescheduleError(str(reason))
+        if new_start_dt <= now:
+            raise RescheduleError('Cannot reschedule to a time slot that has already passed.')
 
     try:
         end_time_str = compute_end_time_str(new_date, new_start_time_str, booking.duration)
@@ -304,8 +313,19 @@ def validate_booking_request(data):
     except ValueError:
         raise ValidationError("Invalid date format. Use YYYY-MM-DD.")
 
-    if booking_date < timezone.now().date():
+    now = timezone.localtime()
+    if booking_date < now.date():
         raise ValidationError("Cannot book a slot in the past.")
+    if booking_date == now.date():
+        # Same convention as mark_completed_bookings_task: booking date/time
+        # strings are wall-clock in the server's configured timezone, so
+        # "now" for this comparison is localtime(), not a bare date. Without
+        # this, a same-day slot whose start time has already gone by is
+        # still bookable and payable — the date check above alone only
+        # catches yesterday and earlier.
+        start_dt = timezone.make_aware(datetime.combine(booking_date, parse_time(start_time_str)))
+        if start_dt <= now:
+            raise ValidationError("This time slot has already passed.")
 
     end_time_str = compute_end_time_str(booking_date, start_time_str, duration_hours)
 

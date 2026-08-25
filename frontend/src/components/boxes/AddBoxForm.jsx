@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { MapPin, DollarSign, FileText, Check, UploadCloud } from 'lucide-react';
 import { useBox } from '../../context/BoxContext';
-import { MEDIA_BASE_URL } from '../../api';
 import { Modal, Button, Input } from '../ui';
 import LocationPickerMap from '../maps/LocationPickerMap';
+import BoxImageManager from './BoxImageManager';
 
-const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = null }) => {
+const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = null, onImagesChanged }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState({
     name: '',
@@ -29,6 +29,11 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // Edit-mode gallery state, kept separate from formData.images (which only
+  // ever holds pending File uploads for a brand-new box). These mirror what
+  // the per-image endpoints return so the grid updates without a refetch.
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [coverImage, setCoverImage] = useState('');
 
   const { addBox, updateBox } = useBox();
 
@@ -37,7 +42,11 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
     if (editMode && boxData) {
       setFormData({
         name: boxData.name || '',
-        sports: boxData.sports || [],
+        // A handful of older boxes only ever had the legacy singular `sport`
+        // field populated, never the `sports` list this form actually
+        // edits — fall back to it so editing one of those boxes doesn't
+        // silently wipe its sport out from under it.
+        sports: boxData.sports?.length ? boxData.sports : (boxData.sport ? [boxData.sport] : []),
         location: boxData.location || '',
         price: boxData.price || '',
         capacity: boxData.capacity || '',
@@ -53,6 +62,8 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         longitude: boxData.longitude || '',
         google_maps_url: boxData.google_maps_url || ''
       });
+      setGalleryImages(boxData.images || []);
+      setCoverImage(boxData.image || '');
     } else if (!editMode) {
       // Reset form for add mode
       setFormData({
@@ -124,7 +135,13 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         if (!formData.description.trim()) newErrors.description = 'Description is required';
         break;
       case 2:
-        if (formData.sports.length === 0) newErrors.sports = 'Select at least one sport';
+        // Only require a sport selection for a brand-new box — a handful of
+        // older approved boxes were saved with this empty before it was
+        // enforced, and hard-blocking their edit screen over it (to fix an
+        // unrelated field, e.g. price) would trap them. editMode's own
+        // fallback above pre-fills from the legacy `sport` field where
+        // possible, so this mostly guards true legacy gaps.
+        if (!editMode && formData.sports.length === 0) newErrors.sports = 'Select at least one sport';
         if (!formData.price || formData.price <= 0) newErrors.price = 'A valid price is required';
         if (!formData.capacity || formData.capacity <= 0) newErrors.capacity = 'A valid capacity is required';
         if (!formData.opening_time) newErrors.opening_time = 'Opening time is required';
@@ -135,7 +152,9 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
         break;
       case 3:
         if (!formData.location.trim()) newErrors.location = 'Location is required';
-        if (formData.amenities.length === 0) newErrors.amenities = 'Select at least one amenity';
+        // Same reasoning as the sports check above — don't block editing an
+        // existing box over a legacy empty amenities list.
+        if (!editMode && formData.amenities.length === 0) newErrors.amenities = 'Select at least one amenity';
         // Only require images if not in edit mode or if there's no existing image
         if (!editMode && formData.images.length === 0) {
           newErrors.images = 'Please upload at least one image for your facility.';
@@ -412,42 +431,48 @@ const AddBoxForm = ({ isOpen, onClose, onSuccess, editMode = false, boxData = nu
               {errors.amenities && <p className="text-sm text-danger mt-1">{errors.amenities}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">Facility Images *</label>
+              <label className="block text-sm font-medium text-foreground mb-2">
+                Facility Images {editMode ? '' : '*'}
+              </label>
 
-              {/* Show existing image in edit mode */}
-              {editMode && boxData?.image && (
-                <div className="mb-4">
-                  <p className="text-sm text-muted-foreground mb-2">Current Image:</p>
-                  <img
-                    src={boxData.image.startsWith('http') ? boxData.image : `${MEDIA_BASE_URL}${boxData.image}`}
-                    alt="Current box image"
-                    className="h-32 w-full object-cover rounded-md"
-                    onError={(e) => {
-                      e.target.src = 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+              {editMode && boxData?.id ? (
+                <>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Changes here save straight away — you don&apos;t need to finish the wizard.
+                  </p>
+                  <BoxImageManager
+                    boxId={boxData.id}
+                    images={galleryImages}
+                    coverPath={coverImage}
+                    onChange={(updated) => {
+                      setGalleryImages(updated.images || []);
+                      setCoverImage(updated.image || '');
+                      onImagesChanged?.();
                     }}
                   />
-                  <p className="text-sm text-muted-foreground mt-1">Upload new images to replace the current image</p>
-                </div>
-              )}
-
-              <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 ${errors.images ? 'border-danger' : 'border-input'} border-dashed rounded-md`}>
-                <div className="space-y-1 text-center">
-                  <UploadCloud className="mx-auto h-12 w-12 text-muted-foreground" />
-                  <label htmlFor="file-upload" className="relative cursor-pointer bg-transparent rounded-md font-medium text-primary hover:text-primary/80">
-                    <span>{editMode ? 'Upload new files' : 'Upload files'}</span>
-                    <input id="file-upload" type="file" className="sr-only" multiple onChange={handleImageChange} accept="image/*" />
-                  </label>
-                </div>
-              </div>
-              {errors.images && <p className="text-sm text-danger mt-1">{errors.images}</p>}
-              {formData.images.length > 0 && (
-                <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 gap-4">
-                  {formData.images.map((file, i) => (
-                    <div key={i} className="relative">
-                      <img src={URL.createObjectURL(file)} alt="preview" className="h-24 w-full object-cover rounded-md" />
+                </>
+              ) : (
+                <>
+                  <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 ${errors.images ? 'border-danger' : 'border-input'} border-dashed rounded-md`}>
+                    <div className="space-y-1 text-center">
+                      <UploadCloud className="mx-auto h-12 w-12 text-muted-foreground" />
+                      <label htmlFor="file-upload" className="relative cursor-pointer bg-transparent rounded-md font-medium text-primary hover:text-primary/80">
+                        <span>Upload files</span>
+                        <input id="file-upload" type="file" className="sr-only" multiple onChange={handleImageChange} accept="image/*" />
+                      </label>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                  {errors.images && <p className="text-sm text-danger mt-1">{errors.images}</p>}
+                  {formData.images.length > 0 && (
+                    <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 gap-4">
+                      {formData.images.map((file, i) => (
+                        <div key={i} className="relative">
+                          <img src={URL.createObjectURL(file)} alt="preview" className="h-24 w-full object-cover rounded-md" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div className="space-y-1.5">

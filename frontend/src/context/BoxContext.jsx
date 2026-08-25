@@ -27,6 +27,7 @@ export const BoxProvider = ({ children }) => {
     const [nearbyBoxes, setNearbyBoxes] = useState([]);
     const [ownerBoxes, setOwnerBoxes] = useState([]);
     const [pendingBoxes, setPendingBoxes] = useState([]);
+    const [pendingBoxesCount, setPendingBoxesCount] = useState(0);
     const [locations, setLocations] = useState([]);
     const [loadingMap, setLoadingMap] = useState(EMPTY_STATE_MAP);
     const [errorMap, setErrorMap] = useState(EMPTY_ERROR_MAP);
@@ -217,12 +218,17 @@ export const BoxProvider = ({ children }) => {
         }
     }, [fetchOwnerBoxes, setLoadingFor, setErrorFor]);
 
-    const fetchPendingBoxes = useCallback(async () => {
+    // `page` defaults to 1 so existing callers (approve/reject/request-
+    // changes below, all of which just want "refresh the queue") keep
+    // working unchanged; the Box Approvals tab passes its own current page.
+    const fetchPendingBoxes = useCallback(async (page = 1) => {
         setLoadingFor('pending', true);
         setErrorFor('pending', null);
         try {
-            const response = await api.get('/boxes/admin/pending/');
-            setPendingBoxes(response.data.results || response.data || []);
+            const response = await api.get(`/boxes/admin/pending/?page=${page}`);
+            const results = response.data.results || response.data || [];
+            setPendingBoxes(results);
+            setPendingBoxesCount(response.data.count ?? results.length);
         } catch (err) {
             console.error('Error fetching pending boxes:', err);
             setErrorFor('pending', 'Could not load pending boxes.');
@@ -370,6 +376,7 @@ export const BoxProvider = ({ children }) => {
         nearbyBoxes,
         ownerBoxes,
         pendingBoxes,
+        pendingBoxesCount,
         locations,
         loading,
         error,
@@ -401,7 +408,7 @@ export const BoxProvider = ({ children }) => {
             fetchPopularBoxes();
             fetchOwnerBoxes();
         }
-    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, locations, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, fetchBoxLocations, addBox, updateBox, deleteBox, approveBox, rejectBox, requestBoxChanges, filters]);
+    }), [boxes, featuredBoxes, popularBoxes, nearbyBoxes, ownerBoxes, pendingBoxes, pendingBoxesCount, locations, loading, error, loadingMap, errorMap, fetchBoxes, fetchFeaturedBoxes, fetchPopularBoxes, fetchNearbyBoxes, fetchOwnerBoxes, fetchPendingBoxes, fetchBoxLocations, addBox, updateBox, deleteBox, approveBox, rejectBox, requestBoxChanges, filters]);
 
     return (
         <BoxContext.Provider value={contextValue}>

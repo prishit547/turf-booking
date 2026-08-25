@@ -3,6 +3,7 @@
 import re
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import models
 from django.utils import timezone
 from rest_framework import serializers
 from .models import Box, Review, BlockedDate, CommissionRate, PlatformCommissionSetting, PricingRule
@@ -113,10 +114,16 @@ class ReviewOwnerResponseSerializer(serializers.ModelSerializer):
         model = Review
         fields = ['owner_response']
 
-# --- NO CHANGES to the existing BoxSerializer for public view ---
 class BoxSerializer(serializers.ModelSerializer):
     images = serializers.SerializerMethodField()
-    reviews = ReviewSerializer(many=True, read_only=True)
+    # A box's full review list used to be nested here in full — fine for a
+    # handful of reviews, but unbounded and shipped on *every* box fetch
+    # (including the browse-boxes list, where it was pure dead weight since
+    # nothing there renders reviews). BoxDetails.jsx now fetches reviews
+    # from their own paginated endpoint (PublicReviewViewSet) instead; this
+    # only exposes the cheap count every box view already needed for the
+    # star rating's "(N)" label.
+    review_count = serializers.SerializerMethodField()
     blocked_dates = serializers.SerializerMethodField()
     pricing_rules = PricingRuleSerializer(many=True, read_only=True)
     min_price = serializers.SerializerMethodField()
@@ -132,10 +139,18 @@ class BoxSerializer(serializers.ModelSerializer):
             'id', 'name', 'sport', 'sports', 'location', 'price', 'rating',
             'capacity', 'opening_time', 'closing_time', 'image', 'images',
             'amenities', 'description', 'full_description', 'rules',
-            'latitude', 'longitude', 'google_maps_url', 'reviews', 'status', 'rejection_reason', 'blocked_dates',
+            'latitude', 'longitude', 'google_maps_url', 'review_count', 'status', 'rejection_reason', 'blocked_dates',
             'pricing_rules', 'min_price', 'owner_id',
         ]
         read_only_fields = ['status', 'rejection_reason']
+
+    def get_review_count(self, obj):
+        # Prefer the queryset-level annotation (PublicBoxViewSet.get_queryset)
+        # so listing many boxes costs one query total, not one COUNT per box;
+        # falls back to a direct count for any other call site that hands
+        # this serializer an unannotated instance.
+        annotated = getattr(obj, 'review_count_annotated', None)
+        return annotated if annotated is not None else obj.reviews.count()
 
     def get_blocked_dates(self, obj):
         return [d.date.isoformat() for d in obj.blocked_dates.all()]
@@ -167,12 +182,36 @@ class BoxSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(path)
             return path
 
+        # The cover lives in `image` while the gallery lives in `images`, and
+        # the two overlap once a cover has been picked from the gallery — so
+        # dedupe by stored path rather than emitting the cover twice.
+        seen = set()
         if obj.image:
+            seen.add(obj.image.name)
             urls.append(make_url(obj.image.url if hasattr(obj.image, 'url') else str(obj.image)))
         if obj.images:
             for img_path in obj.images:
+                if img_path in seen:
+                    continue
+                seen.add(img_path)
                 urls.append(make_url(img_path))
         return urls
+
+
+class BoxDetailSerializer(BoxSerializer):
+    """BoxSerializer plus the per-star histogram BoxDetails.jsx's rating
+    breakdown needs — split out so a box *listing* (many boxes per request)
+    never pays for it, only a single box's own detail/retrieve view does."""
+    rating_breakdown = serializers.SerializerMethodField()
+
+    class Meta(BoxSerializer.Meta):
+        fields = BoxSerializer.Meta.fields + ['rating_breakdown']
+
+    def get_rating_breakdown(self, obj):
+        counts = {str(i): 0 for i in range(1, 6)}
+        for row in obj.reviews.values('rating').annotate(count=models.Count('id')):
+            counts[str(row['rating'])] = row['count']
+        return counts
 
 # --- ADDED: A new serializer for owners to create/update their boxes ---
 class OwnerBoxSerializer(serializers.ModelSerializer):

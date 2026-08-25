@@ -2,11 +2,30 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 import axios from 'axios';
 
 // Backend API base URL (configure via VITE_API_BASE_URL in your .env file)
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 // Base URL for media files (defaults to API_BASE_URL without the /api suffix)
-const rawMediaBase = import.meta.env.VITE_MEDIA_BASE_URL || API_BASE_URL.replace(/\/api\/?$/, '');
+const rawMediaBase = import.meta.env.VITE_MEDIA_BASE_URL || (API_BASE_URL.startsWith('http') ? API_BASE_URL.replace(/\/api\/?$/, '') : '');
 export const MEDIA_BASE_URL = rawMediaBase.replace(/\/$/, ''); 
+
+export function resolveMediaUrl(path) {
+  if (!path) return '';
+  if (path.startsWith('http://localhost:8000') || path.startsWith('http://127.0.0.1:8000') || path.startsWith('http://0.0.0.0:8000')) {
+    try {
+      const url = new URL(path);
+      return `${MEDIA_BASE_URL}${url.pathname}`;
+    } catch {
+      return path;
+    }
+  }
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
+  if (path.startsWith('/')) {
+    return `${MEDIA_BASE_URL}${path}`;
+  }
+  return `${MEDIA_BASE_URL}/${path}`;
+}
 
 export const api = axios.create({
   baseURL: API_BASE_URL,

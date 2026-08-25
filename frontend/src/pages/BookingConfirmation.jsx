@@ -7,7 +7,7 @@ import { toast } from 'react-toastify';
 import { Card, Button, Loader, StatusPill, DateStrip, SlotGrid } from '../components/ui';
 import { useBooking } from '../context/BookingContext';
 import { api, useAuth } from '../api.jsx';
-import { formatLocalDate } from '../utils/date';
+import { formatLocalDate, parseBookingDateTime } from '../utils/date';
 import InviteBookingModal from '../components/bookings/InviteBookingModal';
 
 const PARTICLE_COUNT = 12;
@@ -256,8 +256,15 @@ const BookingConfirmation = () => {
     const reschedDateString = formatLocalDate(reschedDate);
     const isReschedDateBlocked = booking.box?.blocked_dates?.includes(reschedDateString);
     const isReschedSlotBooked = (t) => reschedBookedSlots.includes(t);
+    // Same convention as BoxDetails.jsx's picker and the server-side check
+    // in reschedule_booking() — an elapsed hour today isn't a valid target.
+    const isReschedSlotPast = (t) => {
+        const slotDateTime = parseBookingDateTime(reschedDateString, t);
+        return slotDateTime ? slotDateTime.getTime() <= Date.now() : false;
+    };
     const isReschedSlotAvailable = (t) => {
         if (isReschedDateBlocked) return false;
+        if (isReschedSlotPast(t)) return false;
         const hour = parseInt(t.split(':')[0]);
         if (hour + booking.duration > reschedClosingHour) return false;
         for (let i = 0; i < booking.duration; i++) {
@@ -475,6 +482,7 @@ const BookingConfirmation = () => {
                                             onSelect={setReschedTime}
                                             isTimeSlotBooked={isReschedSlotBooked}
                                             isTimeSlotAvailable={isReschedSlotAvailable}
+                                            isTimeSlotPast={isReschedSlotPast}
                                             loading={reschedSlotsLoading}
                                             duration={booking.duration}
                                         />

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import { Plus, Wallet, Gift, Sparkles, Ticket, Download, UserPlus } from 'lucide-react';
 import { api } from '../../api.jsx';
-import { Button, Card, Badge, Input, Modal, Loader, StatTile } from '../ui';
+import { Button, Card, Badge, Input, Modal, Loader, StatTile, Pagination } from '../ui';
 import { useDebounce } from '../../hooks/useDebounce';
 
 const SUB_TABS = [
@@ -508,17 +508,27 @@ function SpinWheelSection() {
   );
 }
 
+const REDEEM_CODES_PAGE_SIZE = 20;
+
 function RedeemCodesSection() {
   const [codes, setCodes] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ value: '', quantity: '10', batch_label: '' });
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
-    api.get('/rewards/admin/redeem-codes/').then((res) => setCodes(res.data.results || res.data)).finally(() => setLoading(false));
-  }, []);
+    api.get(`/rewards/admin/redeem-codes/?page=${page}&page_size=${REDEEM_CODES_PAGE_SIZE}`)
+      .then((res) => {
+        setCodes(res.data.results || res.data);
+        setCount(res.data.count ?? (res.data.results || res.data).length);
+      })
+      .finally(() => setLoading(false));
+  }, [page]);
   useEffect(() => { load(); }, [load]);
 
   const handleGenerate = async () => {
@@ -528,6 +538,8 @@ function RedeemCodesSection() {
       toast.success(`${form.quantity} codes generated`);
       setShowModal(false);
       setForm({ value: '', quantity: '10', batch_label: '' });
+      // A fresh batch is the most recent rows — jump back to page 1 to see it.
+      setPage(1);
       load();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to generate codes');
@@ -536,15 +548,34 @@ function RedeemCodesSection() {
     }
   };
 
-  const handleExport = () => {
-    const rows = ['code,value,batch_label,is_used', ...codes.map((c) => `${c.code},${c.value},${c.batch_label},${c.is_used}`)];
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'redeem-codes.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+  // Walks every page rather than exporting whatever's currently on screen —
+  // a single "Generate batch" can mint up to 1000 codes, far more than one
+  // page, so exporting just `codes` used to silently drop most of a batch.
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      let all = [];
+      let nextPage = 1;
+      for (;;) {
+        const res = await api.get(`/rewards/admin/redeem-codes/?page=${nextPage}&page_size=100`);
+        const results = res.data.results || res.data;
+        all = all.concat(results);
+        if (!res.data.next) break;
+        nextPage += 1;
+      }
+      const rows = ['code,value,batch_label,is_used', ...all.map((c) => `${c.code},${c.value},${c.batch_label},${c.is_used}`)];
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'redeem-codes.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to export codes');
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -552,7 +583,7 @@ function RedeemCodesSection() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h3 className="text-xl font-display font-semibold text-foreground">Redeem codes</h3>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleExport} icon={<Download size={16} />} disabled={codes.length === 0}>Export CSV</Button>
+          <Button variant="outline" onClick={handleExport} icon={<Download size={16} />} loading={exporting} disabled={count === 0}>Export CSV</Button>
           <Button onClick={() => setShowModal(true)} icon={<Plus size={16} />}>Generate batch</Button>
         </div>
       </div>
@@ -579,6 +610,7 @@ function RedeemCodesSection() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageSize={REDEEM_CODES_PAGE_SIZE} count={count} onPageChange={setPage} />
       </Card>
 
       <Modal

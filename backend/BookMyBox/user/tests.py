@@ -797,7 +797,7 @@ class OwnerVerificationTests(APITestCase):
         )
         self._auth(self.admin)
         before = self.client.get('/api/boxes/admin/pending/')
-        row = next(r for r in before.data if r['id'] == box.id)
+        row = next(r for r in before.data['results'] if r['id'] == box.id)
         self.assertEqual(row['owner_verification_status'], 'not_submitted')
 
         self._auth(self.owner)
@@ -810,7 +810,7 @@ class OwnerVerificationTests(APITestCase):
         self.client.post(f'/api/user/admin/verifications/{verification.id}/approve/')
 
         after = self.client.get('/api/boxes/admin/pending/')
-        row = next(r for r in after.data if r['id'] == box.id)
+        row = next(r for r in after.data['results'] if r['id'] == box.id)
         self.assertEqual(row['owner_verification_status'], 'approved')
 
 

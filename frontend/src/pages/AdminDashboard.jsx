@@ -22,6 +22,7 @@ import { Button, Card, Badge, Modal, Loader, StatTile, Input, Select, Pagination
 import { PeakHoursChart } from '../components/common/AdvancedCharts'
 import { useChartTheme } from '../utils/chartTheme'
 import { useDebounce } from '../hooks/useDebounce'
+import { useTabParam } from '../hooks/useTabParam'
 import AdminRewardsTab from '../components/rewards/AdminRewardsTab'
 import AdminCommissionTab from '../components/commission/AdminCommissionTab'
 import AdminVerificationTab, { OwnerVerificationBadge } from '../components/verification/AdminVerificationTab'
@@ -32,6 +33,7 @@ const USERS_PAGE_SIZE = 20
 const BOOKINGS_PAGE_SIZE = 20
 const REVIEWS_PAGE_SIZE = 20
 const PAYOUTS_PAGE_SIZE = 20
+const COUPONS_PAGE_SIZE = 20
 
 // Matches Payout.PAYMENT_METHOD_CHOICES (owner_dashboard/models.py). Rows
 // recorded before this field existed have payment_method === '' and fall
@@ -76,6 +78,7 @@ const TABS = [
   { id: 'reports', label: 'Reports', icon: FileText },
   { id: 'activity-log', label: 'Activity Log', icon: History },
 ]
+const TAB_IDS = TABS.map((t) => t.id)
 
 const ROLE_TONE = { Owner: 'secondary', Admin: 'danger', User: 'primary' }
 const USER_STATUS_TONE = { Active: 'success', Inactive: 'danger', Suspended: 'danger' }
@@ -126,7 +129,7 @@ const exportToCsv = (filename, rows) => {
 }
 
 const AdminDashboard = () => {
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useTabParam('overview', TAB_IDS)
   const [searchTerm, setSearchTerm] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
   const [bookingSearch, setBookingSearch] = useState('')
@@ -192,6 +195,8 @@ const AdminDashboard = () => {
 
   // Payouts tab: per-owner balance summary + a "record payout" action.
   const [payoutsBalance, setPayoutsBalance] = useState([])
+  const [payoutsBalanceCount, setPayoutsBalanceCount] = useState(0)
+  const [payoutsBalancePage, setPayoutsBalancePage] = useState(1)
   const [payoutsLoading, setPayoutsLoading] = useState(false)
   const [payoutTarget, setPayoutTarget] = useState(null)
   const [payoutAmount, setPayoutAmount] = useState('')
@@ -216,6 +221,8 @@ const AdminDashboard = () => {
 
   // Coupons tab: create/list/deactivate discount codes.
   const [coupons, setCoupons] = useState([])
+  const [couponsCount, setCouponsCount] = useState(0)
+  const [couponsPage, setCouponsPage] = useState(1)
   const [couponsLoading, setCouponsLoading] = useState(false)
   const [showCreateCouponModal, setShowCreateCouponModal] = useState(false)
   const [newCoupon, setNewCoupon] = useState({ code: '', discount_type: 'percent', value: '', max_uses: '' })
@@ -230,15 +237,16 @@ const AdminDashboard = () => {
   const [editingBox, setEditingBox] = useState(null)
 
   const { user } = useAuth()
-  const { pendingBoxes, fetchPendingBoxes, approveBox, rejectBox, requestBoxChanges } = useBox()
+  const { pendingBoxes, pendingBoxesCount, fetchPendingBoxes, approveBox, rejectBox, requestBoxChanges } = useBox()
   const chartTheme = useChartTheme()
   const debouncedUserSearch = useDebounce(searchTerm, 300)
   const debouncedBookingSearch = useDebounce(bookingSearch, 300)
   const debouncedReviewSearch = useDebounce(reviewSearch, 300)
+  const [approvalsPage, setApprovalsPage] = useState(1)
 
   useEffect(() => {
-    fetchPendingBoxes()
-  }, [fetchPendingBoxes])
+    fetchPendingBoxes(approvalsPage)
+  }, [fetchPendingBoxes, approvalsPage])
 
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true)
@@ -332,15 +340,18 @@ const AdminDashboard = () => {
   const fetchPayoutsBalance = useCallback(async () => {
     setPayoutsLoading(true)
     try {
-      const response = await api.get('/owner_dashboard/payouts/balance/')
-      setPayoutsBalance(response.data)
+      const params = new URLSearchParams({ page: payoutsBalancePage })
+      const response = await api.get(`/owner_dashboard/payouts/balance/?${params.toString()}`)
+      const results = response.data.results || response.data
+      setPayoutsBalance(results)
+      setPayoutsBalanceCount(response.data.count ?? results.length)
     } catch (err) {
       console.error('Error fetching payout balances:', err)
       toast.error('Failed to load payout balances')
     } finally {
       setPayoutsLoading(false)
     }
-  }, [])
+  }, [payoutsBalancePage])
 
   const fetchPayoutSchedules = useCallback(async () => {
     try {
@@ -447,15 +458,17 @@ const AdminDashboard = () => {
   const fetchCoupons = useCallback(async () => {
     setCouponsLoading(true)
     try {
-      const response = await api.get('/bookings/admin/coupons/')
+      const params = new URLSearchParams({ page: couponsPage, page_size: COUPONS_PAGE_SIZE })
+      const response = await api.get(`/bookings/admin/coupons/?${params.toString()}`)
       setCoupons(response.data.results || response.data)
+      setCouponsCount(response.data.count ?? (response.data.results || response.data).length)
     } catch (err) {
       console.error('Error fetching coupons:', err)
       toast.error('Failed to load coupons')
     } finally {
       setCouponsLoading(false)
     }
-  }, [])
+  }, [couponsPage])
 
   useEffect(() => {
     if (activeTab === 'coupons') fetchCoupons()
@@ -474,6 +487,7 @@ const AdminDashboard = () => {
       toast.success('Coupon created')
       setShowCreateCouponModal(false)
       setNewCoupon({ code: '', discount_type: 'percent', value: '', max_uses: '' })
+      setCouponsPage(1)
       fetchCoupons()
     } catch (err) {
       toast.error(err.response?.data?.code?.[0] || err.response?.data?.detail || 'Failed to create coupon')
@@ -789,7 +803,7 @@ const AdminDashboard = () => {
     const result = await approveBox(boxId)
     if (result.success) {
       toast.success('Box approved successfully')
-      fetchPendingBoxes()
+      fetchPendingBoxes(approvalsPage)
       fetchAdminData()
     } else {
       toast.error(result.error || 'Failed to approve box')
@@ -803,7 +817,7 @@ const AdminDashboard = () => {
       setShowApprovalModal(false)
       setSelectedBox(null)
       setRejectionReason('')
-      fetchPendingBoxes()
+      fetchPendingBoxes(approvalsPage)
       fetchAdminData()
     } else {
       toast.error(result.error || 'Failed to reject box')
@@ -829,7 +843,7 @@ const AdminDashboard = () => {
   const handleEditBoxSuccess = () => {
     setShowEditBoxModal(false)
     setEditingBox(null)
-    fetchPendingBoxes()
+    fetchPendingBoxes(approvalsPage)
   }
 
   const handleRequestChanges = async (boxId) => {
@@ -841,7 +855,7 @@ const AdminDashboard = () => {
     if (result.success) {
       toast.success('Changes requested — the owner has been notified')
       closeChangesModal()
-      fetchPendingBoxes()
+      fetchPendingBoxes(approvalsPage)
       fetchAdminData()
     } else {
       toast.error(result.error || 'Failed to request changes')
@@ -879,7 +893,7 @@ const AdminDashboard = () => {
 
   const quickActions = [
     { icon: Shield, title: 'User management', text: 'Manage user accounts and permissions', tab: 'users' },
-    { icon: CheckCircle, title: 'Box approvals', text: 'Review and approve new facilities', tab: 'approvals', count: pendingBoxes.length },
+    { icon: CheckCircle, title: 'Box approvals', text: 'Review and approve new facilities', tab: 'approvals', count: pendingBoxesCount },
     { icon: DollarSign, title: 'Revenue reports', text: 'View platform financial analytics', tab: 'reports' },
     { icon: TrendingUp, title: 'Platform analytics', text: 'Comprehensive usage statistics', tab: 'analytics' },
   ]
@@ -959,10 +973,10 @@ const AdminDashboard = () => {
               <span className="w-2 h-2 rounded-full bg-primary" />
               Platform admin
             </div>
-            {pendingBoxes.length > 0 && (
+            {pendingBoxesCount > 0 && (
               <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
                 <AlertTriangle size={16} />
-                {pendingBoxes.length} pending approval{pendingBoxes.length > 1 ? 's' : ''}
+                {pendingBoxesCount} pending approval{pendingBoxesCount > 1 ? 's' : ''}
               </div>
             )}
           </div>
@@ -1003,10 +1017,10 @@ const AdminDashboard = () => {
             loading={loadingAdmin}
           />
           <StatTile
-            tone={pendingBoxes.length > 0 ? 'warning' : 'neutral'}
+            tone={pendingBoxesCount > 0 ? 'warning' : 'neutral'}
             icon={<AlertTriangle size={22} />}
-            value={pendingBoxes.length}
-            label={pendingBoxes.length > 0 ? 'Pending approvals — needs attention' : 'Pending approvals — all clear'}
+            value={pendingBoxesCount}
+            label={pendingBoxesCount > 0 ? 'Pending approvals — needs attention' : 'Pending approvals — all clear'}
           />
         </div>
 
@@ -1034,15 +1048,17 @@ const AdminDashboard = () => {
         </div>
 
         {/* Tabs */}
-        <nav className="flex flex-wrap gap-2 mt-8 overflow-x-auto no-scrollbar" aria-label="Tabs">
+        <nav className="flex flex-nowrap gap-2 mt-8 overflow-x-auto no-scrollbar" aria-label="Tabs" role="tablist">
           {TABS.map((tab) => {
             const TabIcon = tab.icon
             const isActive = activeTab === tab.id
-            const showCount = tab.id === 'approvals' && pendingBoxes.length > 0
+            const showCount = tab.id === 'approvals' && pendingBoxesCount > 0
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={isActive}
                 className={`flex items-center gap-2 py-2.5 px-4 rounded-full font-medium text-sm border transition-colors duration-150 whitespace-nowrap ${
                   isActive
                     ? 'bg-primary/15 border-primary text-primary'
@@ -1050,7 +1066,7 @@ const AdminDashboard = () => {
                 }`}
               >
                 <TabIcon size={18} />
-                <span>{tab.label}{showCount ? ` (${pendingBoxes.length})` : ''}</span>
+                <span>{tab.label}{showCount ? ` (${pendingBoxesCount})` : ''}</span>
               </button>
             )
           })}
@@ -1074,7 +1090,7 @@ const AdminDashboard = () => {
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
                 <Card padding="md" className="xl:col-span-2">
                   <h4 className="font-display font-semibold text-lg mb-4 text-foreground">Recent platform activity</h4>
-                  {recentActivity.length > 0 || pendingBoxes.length > 0 ? (
+                  {recentActivity.length > 0 || pendingBoxesCount > 0 ? (
                     <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
                       {recentActivity.map((event) => (
                         <div key={event.id || `${event.type}-${event.time}`} className="flex items-center justify-between gap-3 p-4">
@@ -1085,12 +1101,12 @@ const AdminDashboard = () => {
                           <span className="text-xs text-muted-foreground shrink-0">{formatTimeAgo(event.time)}</span>
                         </div>
                       ))}
-                      {pendingBoxes.length > 0 && (
+                      {pendingBoxesCount > 0 && (
                         <div className="flex items-center justify-between gap-3 p-4">
                           <div className="flex items-center gap-3 min-w-0">
                             <Badge tone="warning" variant="solid" className="w-2 h-2 p-0 shrink-0" />
                             <span className="text-sm text-foreground truncate">
-                              {pendingBoxes.length} box{pendingBoxes.length > 1 ? 'es' : ''} pending approval
+                              {pendingBoxesCount} box{pendingBoxesCount > 1 ? 'es' : ''} pending approval
                             </span>
                           </div>
                           <Button variant="ghost" size="sm" onClick={() => setActiveTab('approvals')}>Review now</Button>
@@ -1166,11 +1182,11 @@ const AdminDashboard = () => {
               <div className="flex items-center justify-between gap-4">
                 <h3 className="text-2xl font-display font-semibold text-foreground">Box approval queue</h3>
                 <span className="text-sm text-muted-foreground">
-                  {pendingBoxes.length} pending approval{pendingBoxes.length !== 1 ? 's' : ''}
+                  {pendingBoxesCount} pending approval{pendingBoxesCount !== 1 ? 's' : ''}
                 </span>
               </div>
 
-              {pendingBoxes.length === 0 ? (
+              {pendingBoxesCount === 0 ? (
                 <Card padding="lg" className="text-center">
                   <CheckCircle size={56} className="mx-auto text-success mb-4" />
                   <h3 className="text-xl font-display font-semibold text-foreground mb-2">All caught up</h3>
@@ -1260,6 +1276,7 @@ const AdminDashboard = () => {
                   ))}
                 </div>
               )}
+              <Pagination page={approvalsPage} pageSize={20} count={pendingBoxesCount} onPageChange={setApprovalsPage} />
             </div>
           )}
 
@@ -1574,7 +1591,7 @@ const AdminDashboard = () => {
                         <tr>
                           <td colSpan={8} className="text-center py-10 text-muted-foreground">Loading balances...</td>
                         </tr>
-                      ) : payoutsBalance.length === 0 ? (
+                      ) : payoutsBalanceCount === 0 ? (
                         <tr>
                           <td colSpan={8} className="text-center py-10 text-muted-foreground">No owners yet</td>
                         </tr>
@@ -1621,6 +1638,7 @@ const AdminDashboard = () => {
                     </tbody>
                   </table>
                 </div>
+                <Pagination page={payoutsBalancePage} pageSize={20} count={payoutsBalanceCount} onPageChange={setPayoutsBalancePage} />
               </Card>
 
               <Card padding="none" className="overflow-hidden">
@@ -1722,6 +1740,7 @@ const AdminDashboard = () => {
                     </tbody>
                   </table>
                 </div>
+                <Pagination page={couponsPage} pageSize={COUPONS_PAGE_SIZE} count={couponsCount} onPageChange={setCouponsPage} />
               </Card>
             </div>
           )}
@@ -1899,6 +1918,7 @@ const AdminDashboard = () => {
         onSuccess={handleEditBoxSuccess}
         editMode
         boxData={editingBox}
+        onImagesChanged={fetchPendingBoxes}
       />
 
       {/* Rejection Modal — Modal manages its own AnimatePresence internally,

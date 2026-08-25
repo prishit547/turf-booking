@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'react-toastify';
 import { User, Mail, Phone, MapPin, Calendar, Camera, Edit2, Save, X, Info, Dumbbell, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react';
-import { useAuth, MEDIA_BASE_URL, api } from '../api.jsx' // Correct path to your api.jsx
+import { useAuth, MEDIA_BASE_URL, api, resolveMediaUrl } from '../api.jsx' // Correct path to your api.jsx
 import { formatLocalDate } from '../utils/date'
 import { Button, Card, Badge, Input, Loader } from '../components/ui';
 
@@ -362,7 +362,7 @@ const Profile = () => {
                 <div className="relative">
                   {user?.avatar ? (
                     <img
-                      src={`${MEDIA_BASE_URL}${user.avatar}`}
+                      src={resolveMediaUrl(user.avatar)}
                       alt=""
                       className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover"
                     />
