@@ -54,10 +54,10 @@ const CancellationPolicy = () => {
       <Helmet>
         <title>Cancellation Policy | BoxNplay</title>
         <meta name="description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
-        <link rel="canonical" href={`${window.location.origin}/cancellation-policy`} />
+        <link rel="canonical" href="https://boxnplay.com/cancellation-policy" />
         <meta property="og:title" content="Cancellation Policy | BoxNplay" />
         <meta property="og:description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
-        <meta property="og:url" content={`${window.location.origin}/cancellation-policy`} />
+        <meta property="og:url" content="https://boxnplay.com/cancellation-policy" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Cancellation Policy | BoxNplay" />
         <meta name="twitter:description" content="Learn when you can cancel a booking on BoxNplay, how refunds to your wallet work, and how owner- or admin-initiated cancellations are handled." />
@@ -161,7 +161,7 @@ const CancellationPolicy = () => {
                     <a href="mailto:Info@boxnplay.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
                       Info@boxnplay.com
                     </a>{' '}
-                    or call +91 98253 27667. For the broader rules around bookings and payments, see our{' '}
+                    or call +91 98253 27612. For the broader rules around bookings and payments, see our{' '}
                     <Link to="/terms" className="text-primary hover:text-primary/80 underline underline-offset-2">Terms of Service</Link>.
                   </p>
                 </div>

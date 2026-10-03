@@ -96,7 +96,7 @@ const Footer = () => {
               </Link>
             </li>
             <li>Info@boxnplay.com</li>
-            <li>+91 98253 27667</li>
+            <li>+91 98253 27612</li>
           </ul>
         </div>
       </div>

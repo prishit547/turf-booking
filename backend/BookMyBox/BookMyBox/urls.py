@@ -42,6 +42,8 @@ urlpatterns = [
     # API health and info endpoints
     path('api/health/', api_views.health_check, name='health_check'),
     path('api/sitemap.xml', api_views.sitemap_xml, name='sitemap_xml'),
+    path('sitemap.xml', api_views.sitemap_xml, name='root_sitemap_xml'),
+    path('robots.txt', api_views.robots_txt, name='robots_txt'),
     path('api/', api_views.api_info, name='api_info'),
     
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

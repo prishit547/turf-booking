@@ -90,10 +90,10 @@ const PrivacyPolicy = () => {
       <Helmet>
         <title>Privacy Policy | BoxNplay</title>
         <meta name="description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
-        <link rel="canonical" href={`${window.location.origin}/privacy`} />
+        <link rel="canonical" href="https://boxnplay.com/privacy" />
         <meta property="og:title" content="Privacy Policy | BoxNplay" />
         <meta property="og:description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
-        <meta property="og:url" content={`${window.location.origin}/privacy`} />
+        <meta property="og:url" content="https://boxnplay.com/privacy" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Privacy Policy | BoxNplay" />
         <meta name="twitter:description" content="Read BoxNplay's Privacy Policy to learn what personal information we collect when you browse, book, or list sports facilities, and how we use it." />
@@ -180,7 +180,7 @@ const PrivacyPolicy = () => {
                     <a href="mailto:Info@boxnplay.com" className="text-primary hover:text-primary/80 underline underline-offset-2">
                       Info@boxnplay.com
                     </a>{' '}
-                    or call +91 98253 27667 for anything related to your personal data, including access, correction, or
+                    or call +91 98253 27612 for anything related to your personal data, including access, correction, or
                     deletion requests. See also our{' '}
                     <Link to="/terms" className="text-primary hover:text-primary/80 underline underline-offset-2">Terms of Service</Link>.
                   </p>

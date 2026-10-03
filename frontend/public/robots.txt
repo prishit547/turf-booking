@@ -1,4 +1,31 @@
+# BoxNplay Robots.txt
+# https://boxnplay.com
+
 User-agent: *
 Allow: /
+Allow: /boxes
+Allow: /boxes/*
+Allow: /turfs
+Allow: /explore
+Allow: /about
+Allow: /contact
+Allow: /terms
+Allow: /privacy
+Allow: /cancellation-policy
+Allow: /login
+Allow: /signup
 
-Sitemap: /api/sitemap.xml
+# Disallow private user/owner/admin endpoints
+Disallow: /admin-dashboard/
+Disallow: /owner-dashboard/
+Disallow: /user-dashboard/
+Disallow: /profile
+Disallow: /checkout
+Disallow: /booking/
+Disallow: /reset-password/
+Disallow: /invites/
+Disallow: /onboarding
+Disallow: /api/
+
+# Sitemaps
+Sitemap: https://boxnplay.com/sitemap.xml

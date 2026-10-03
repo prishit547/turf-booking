@@ -110,14 +110,14 @@ const About = () => {
     <div className="min-h-screen">
       <Helmet>
         <title>About Us | BoxNplay</title>
-        <meta name="description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
-        <link rel="canonical" href={`${window.location.origin}/about`} />
+        <meta name="description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton, and other sports venues." />
+        <link rel="canonical" href="https://boxnplay.com/about" />
         <meta property="og:title" content="About Us | BoxNplay" />
-        <meta property="og:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
-        <meta property="og:url" content={`${window.location.origin}/about`} />
+        <meta property="og:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton, and other sports venues." />
+        <meta property="og:url" content="https://boxnplay.com/about" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="About Us | BoxNplay" />
-        <meta name="twitter:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton and other sports venues." />
+        <meta name="twitter:description" content="Learn about BoxNplay, India's sports facility booking platform connecting players with premium cricket, football, badminton, and other sports venues." />
       </Helmet>
       {/* Hero */}
       <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">

@@ -489,43 +489,62 @@ const BoxDetails = () => {
     const googleMapsUrl = getGoogleMapsUrl({
         googleMapsUrl: box.google_maps_url, latitude: box.latitude, longitude: box.longitude, location: box.location,
     });
-    const images = box.images?.length ? box.images : [box.image];
-    const metaDescription = (box.description || `Book ${box.name} in ${box.location} by the hour on BoxNplay.`).slice(0, 160);
-    const pageUrl = `${window.location.origin}/boxes/${box.id}`;
+    const images = box.images?.length ? box.images : (box.image ? [box.image] : []);
+    const metaDescription = (box.description || `Book ${box.name} (${box.sport}) in ${box.location} by the hour on BoxNplay. Live slot availability, instant confirmation, no phone calls needed.`).slice(0, 160);
+    const pageUrl = `https://boxnplay.com/boxes/${box.id}`;
     const structuredData = {
         '@context': 'https://schema.org',
         '@type': 'SportsActivityLocation',
         name: box.name,
         description: metaDescription,
         url: pageUrl,
-        address: box.location,
+        address: {
+            '@type': 'PostalAddress',
+            streetAddress: box.location,
+            addressLocality: box.location.split(',')[0]?.trim() || 'Ahmedabad',
+            addressCountry: 'IN',
+        },
+        telephone: '+91-98253-27612',
+        ...(box.latitude && box.longitude ? {
+            geo: {
+                '@type': 'GeoCoordinates',
+                latitude: box.latitude,
+                longitude: box.longitude,
+            },
+        } : {}),
         ...(images[0] ? { image: images[0] } : {}),
+        ...(box.opening_time && box.closing_time ? {
+            openingHours: `Mo-Su ${box.opening_time}-${box.closing_time}`,
+        } : {}),
         ...(box.rating ? {
             aggregateRating: {
                 '@type': 'AggregateRating',
                 ratingValue: box.rating,
-                reviewCount: box.review_count || 0,
+                reviewCount: box.review_count || 1,
             },
         } : {}),
         ...(box.price ? {
             priceRange: `₹${box.price}/hr`,
+            currenciesAccepted: 'INR',
+            paymentAccepted: 'Cash, UPI, Wallet',
         } : {}),
     };
 
     return (
         <div className="min-h-screen pb-28">
             <Helmet>
-                <title>{box.name} - {box.location} | BoxNplay</title>
+                <title>{box.name} - {box.sport} in {box.location} | BoxNplay</title>
                 <meta name="description" content={metaDescription} />
                 <link rel="canonical" href={pageUrl} />
-                <meta property="og:title" content={`${box.name} - ${box.location}`} />
+                <meta property="og:title" content={`${box.name} - ${box.sport} in ${box.location} | BoxNplay`} />
                 <meta property="og:description" content={metaDescription} />
                 <meta property="og:url" content={pageUrl} />
                 {images[0] && <meta property="og:image" content={images[0]} />}
                 <meta property="og:type" content="business.business" />
                 <meta name="twitter:card" content="summary_large_image" />
-                <meta name="twitter:title" content={`${box.name} - ${box.location}`} />
+                <meta name="twitter:title" content={`${box.name} - ${box.sport} in ${box.location} | BoxNplay`} />
                 <meta name="twitter:description" content={metaDescription} />
+                {images[0] && <meta name="twitter:image" content={images[0]} />}
                 <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
             </Helmet>
             <div className="mx-auto max-w-6xl px-4 py-6">

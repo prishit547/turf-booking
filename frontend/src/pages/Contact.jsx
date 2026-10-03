@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Phone, MapPin, Clock, Send, MessageCircle, Sparkles, ArrowRight, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
+import { Mail, Phone, Clock, Send, MessageCircle, Sparkles, ArrowRight, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
 import { api } from '../api';
 import { animations, useScrollAnimation } from '../utils/animations';
 import { Button, Card, Input, Select, Badge } from '../components/ui';
@@ -143,20 +143,14 @@ const Contact = () => {
     {
       icon: Phone,
       title: 'Call Us',
-      details: '+91 98253 27667',
+      details: '+91 98253 27612',
       description: 'Mon-Fri from 8am to 6pm'
     },
     {
-      icon: MapPin,
-      title: 'Visit Us',
-      details: 'D/89 Ananya Society, Ahmedabad, Gujarat - 380050',
-      description: 'Come say hello at our office'
-    },
-    {
       icon: Clock,
-      title: 'Working Hours',
+      title: 'Support Hours',
       details: 'Mon-Fri: 8am-6pm, Sat: 9am-4pm',
-      description: 'We\'re here to help'
+      description: "We're here to help"
     }
   ];
 
@@ -184,10 +178,10 @@ const Contact = () => {
       <Helmet>
         <title>Contact Us | BoxNplay</title>
         <meta name="description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
-        <link rel="canonical" href={`${window.location.origin}/contact`} />
+        <link rel="canonical" href="https://boxnplay.com/contact" />
         <meta property="og:title" content="Contact Us | BoxNplay" />
         <meta property="og:description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
-        <meta property="og:url" content={`${window.location.origin}/contact`} />
+        <meta property="og:url" content="https://boxnplay.com/contact" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Contact Us | BoxNplay" />
         <meta name="twitter:description" content="Get in touch with BoxNplay for support with bookings, facility listings, or general questions about our sports box booking platform." />
@@ -216,7 +210,7 @@ const Contact = () => {
       <section className="py-16 px-4 sm:px-6 lg:px-8 bg-secondary/40">
         <div className="max-w-7xl mx-auto">
           <motion.div
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+            className="grid grid-cols-1 md:grid-cols-3 gap-6"
             variants={animations.staggerContainer}
             initial="initial"
             whileInView="animate"
@@ -382,7 +376,7 @@ const Contact = () => {
               </Card>
             </motion.div>
 
-            {/* Map & Additional Info */}
+            {/* Additional Info Sidebar */}
             <motion.div
               initial={{ opacity: 0, x: 30 }}
               whileInView={{ opacity: 1, x: 0 }}
@@ -390,31 +384,48 @@ const Contact = () => {
               transition={{ duration: 0.6 }}
               className="space-y-6"
             >
-              {/* Map placeholder */}
-              <Card padding="none" className="overflow-hidden">
-                <div className="h-72 bg-background flex items-center justify-center">
-                  <div className="text-center px-6">
-                    <MapPin size={48} className="text-primary mx-auto mb-4" strokeWidth={1.5} />
-                    <h3 className="font-display font-semibold text-xl text-foreground mb-1.5">Visit Our Office</h3>
-                    <p className="text-muted-foreground text-sm mb-4">Ahmedabad, Gujarat</p>
-                    <Badge tone="primary">Interactive map coming soon</Badge>
+              {/* Direct Support Card */}
+              <Card>
+                <div className="flex items-center mb-5">
+                  <div className="w-11 h-11 rounded-xl bg-primary/15 text-primary flex items-center justify-center mr-4 shrink-0">
+                    <Phone size={20} strokeWidth={1.75} />
                   </div>
+                  <div>
+                    <h3 className="font-display font-semibold text-lg text-foreground">Direct Support</h3>
+                    <p className="text-xs text-muted-foreground">Reach our team directly</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <a
+                    href="tel:+919825327612"
+                    className="flex items-center justify-between p-3.5 bg-elevated/60 rounded-lg text-foreground hover:text-primary transition-colors text-sm font-medium border border-border/50"
+                  >
+                    <span>+91 98253 27612</span>
+                    <Badge tone="primary" size="sm">Call Now</Badge>
+                  </a>
+                  <a
+                    href="mailto:Info@boxnplay.com"
+                    className="flex items-center justify-between p-3.5 bg-elevated/60 rounded-lg text-foreground hover:text-primary transition-colors text-sm font-medium border border-border/50"
+                  >
+                    <span>Info@boxnplay.com</span>
+                    <Badge tone="secondary" size="sm">Email Us</Badge>
+                  </a>
                 </div>
               </Card>
 
-              {/* Office Hours */}
+              {/* Support Hours */}
               <Card>
                 <div className="flex items-center mb-6">
                   <div className="w-11 h-11 rounded-xl bg-turf/15 text-turf flex items-center justify-center mr-4 shrink-0">
                     <Clock size={20} strokeWidth={1.75} />
                   </div>
-                  <h3 className="font-display font-semibold text-lg text-foreground">Office Hours</h3>
+                  <h3 className="font-display font-semibold text-lg text-foreground">Support Hours</h3>
                 </div>
                 <div className="space-y-2">
                   {[
                     { days: 'Monday - Friday', hours: '8:00 AM - 6:00 PM' },
                     { days: 'Saturday', hours: '9:00 AM - 4:00 PM' },
-                    { days: 'Sunday', hours: 'Closed' }
+                    { days: 'Sunday', hours: 'Online Support Only' }
                   ].map((schedule) => (
                     <div
                       key={schedule.days}

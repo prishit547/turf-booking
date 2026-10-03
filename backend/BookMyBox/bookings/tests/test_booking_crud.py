@@ -104,7 +104,7 @@ class BookingAPITests(APITestCase):
         now = timezone.localtime()
         if now.hour >= 22:
             self.skipTest("Can't construct a same-day future slot this late (box closes at 23:00).")
-        future_hour = now.hour + 1
+        future_hour = max(now.hour + 1, int(self.box.opening_time.split(':')[0]))
         response = self.client.post(
             '/api/bookings/',
             {

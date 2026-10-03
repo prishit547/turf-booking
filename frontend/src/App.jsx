@@ -61,6 +61,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
 function App() {
   const { user } = useAuth();
   const location = useLocation();
+  const canonicalUrl = `https://boxnplay.com${location.pathname}`;
 
   return (
       <div className="min-h-screen bg-background">
@@ -69,26 +70,52 @@ function App() {
             of none at all. Pages that render their own <Helmet> (Home,
             BoxListings, BoxDetails) override these per-key automatically. */}
         <Helmet>
-          <meta name="description" content="Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
+          <meta name="description" content="Book sports boxes and cricket turfs by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
+          <meta name="keywords" content="turf booking, sports box booking, cricket turf, football ground, badminton court, box cricket, sports venue ahmedabad, boxnplay" />
           <meta property="og:site_name" content="BoxNplay" />
           <meta property="og:type" content="website" />
-          <link rel="canonical" href={`${window.location.origin}${location.pathname}`} />
+          <meta property="og:locale" content="en_IN" />
+          <link rel="canonical" href={canonicalUrl} />
           <meta name="twitter:card" content="summary_large_image" />
-          <meta name="twitter:title" content="BoxNplay - Book Sports Boxes by the Hour" />
-          <meta name="twitter:description" content="Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
+          <meta name="twitter:title" content="BoxNplay - Book Sports Boxes & Turfs by the Hour" />
+          <meta name="twitter:description" content="Book sports boxes and cricket turfs by the hour on BoxNplay. Live availability, instant confirmation, no phone calls." />
           <script type="application/ld+json">
             {JSON.stringify({
               '@context': 'https://schema.org',
-              '@type': 'Organization',
-              name: 'BoxNplay',
-              url: window.location.origin,
-              description: 'Book sports boxes by the hour on BoxNplay. Live availability, instant confirmation, no phone calls.',
-              email: 'Info@boxnplay.com',
-              contactPoint: {
-                '@type': 'ContactPoint',
-                email: 'Info@boxnplay.com',
-                contactType: 'customer support',
-              },
+              '@graph': [
+                {
+                  '@type': 'Organization',
+                  '@id': 'https://boxnplay.com/#organization',
+                  name: 'BoxNplay',
+                  url: 'https://boxnplay.com',
+                  logo: 'https://boxnplay.com/favicon.svg',
+                  description: 'Book sports boxes, cricket turfs, football grounds, and badminton courts by the hour on BoxNplay.',
+                  email: 'Info@boxnplay.com',
+                  telephone: '+91-98253-27612',
+                  contactPoint: {
+                    '@type': 'ContactPoint',
+                    telephone: '+91-98253-27612',
+                    email: 'Info@boxnplay.com',
+                    contactType: 'customer support',
+                    areaServed: 'IN',
+                    availableLanguage: ['English', 'Hindi', 'Gujarati'],
+                  },
+                },
+                {
+                  '@type': 'WebSite',
+                  '@id': 'https://boxnplay.com/#website',
+                  name: 'BoxNplay',
+                  url: 'https://boxnplay.com',
+                  potentialAction: {
+                    '@type': 'SearchAction',
+                    target: {
+                      '@type': 'EntryPoint',
+                      urlTemplate: 'https://boxnplay.com/boxes?search={search_term_string}',
+                    },
+                    'query-input': 'required name=search_term_string',
+                  },
+                },
+              ],
             })}
           </script>
         </Helmet>
@@ -121,13 +148,34 @@ function App() {
             <Route path="/reset-password/:token" element={<ResetPassword />} />
             <Route path="/invites/:token" element={<InviteClaim />} />
             <Route path="/onboarding" element={<OnboardingPage />} />
+
+            {/* Core Box / Turf Listings & Details + SEO Aliases */}
             <Route path="/boxes" element={<BoxListings />} />
+            <Route path="/turfs" element={<BoxListings />} />
+            <Route path="/explore" element={<BoxListings />} />
+            <Route path="/venues" element={<BoxListings />} />
             <Route path="/boxes/:id" element={<BoxDetails />} />
+            <Route path="/turf/:id" element={<BoxDetails />} />
+            <Route path="/box/:id" element={<BoxDetails />} />
+
+            {/* Informational Pages + Friendly Aliases */}
             <Route path="/about" element={<About />} />
+            <Route path="/about-us" element={<Navigate to="/about" replace />} />
             <Route path="/contact" element={<Contact />} />
+            <Route path="/contact-us" element={<Navigate to="/contact" replace />} />
             <Route path="/terms" element={<Terms />} />
+            <Route path="/terms-of-service" element={<Navigate to="/terms" replace />} />
+            <Route path="/terms-and-conditions" element={<Navigate to="/terms" replace />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
+            <Route path="/privacy-policy" element={<Navigate to="/privacy" replace />} />
             <Route path="/cancellation-policy" element={<CancellationPolicy />} />
+            <Route path="/cancellation" element={<Navigate to="/cancellation-policy" replace />} />
+
+            {/* Venue Partner / Onboarding Quick Links */}
+            <Route path="/list-your-venue" element={<Navigate to="/signup?role=owner" replace />} />
+            <Route path="/list-venue" element={<Navigate to="/signup?role=owner" replace />} />
+            <Route path="/partner" element={<Navigate to="/signup?role=owner" replace />} />
+            <Route path="/owner" element={<Navigate to="/dashboard" replace />} />
 
             <Route path="/profile" element={
               <ProtectedRoute>
@@ -142,6 +190,11 @@ function App() {
             } />
 
             <Route path="/booking/:bookingId" element={
+              <ProtectedRoute>
+                <BookingConfirmation />
+              </ProtectedRoute>
+            } />
+            <Route path="/booking-confirmation/:bookingId" element={
               <ProtectedRoute>
                 <BookingConfirmation />
               </ProtectedRoute>

@@ -91,15 +91,15 @@ const BoxListings = () => {
     return (
         <div className="min-h-screen">
             <Helmet>
-                <title>Browse Sports Boxes - BoxNplay</title>
-                <meta name="description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
-                <link rel="canonical" href={`${window.location.origin}/boxes`} />
-                <meta property="og:title" content="Browse Sports Boxes - BoxNplay" />
-                <meta property="og:description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
-                <meta property="og:url" content={`${window.location.origin}/boxes`} />
+                <title>Browse Sports Boxes & Cricket Turfs - BoxNplay</title>
+                <meta name="description" content="Browse cricket, football, badminton, and other sports boxes by location, sport, price, and rating. Book instantly online on BoxNplay." />
+                <link rel="canonical" href="https://boxnplay.com/boxes" />
+                <meta property="og:title" content="Browse Sports Boxes & Cricket Turfs - BoxNplay" />
+                <meta property="og:description" content="Browse cricket, football, badminton, and other sports boxes by location, sport, price, and rating. Book instantly online on BoxNplay." />
+                <meta property="og:url" content="https://boxnplay.com/boxes" />
                 <meta name="twitter:card" content="summary_large_image" />
-                <meta name="twitter:title" content="Browse Sports Boxes - BoxNplay" />
-                <meta name="twitter:description" content="Browse cricket, football, badminton and other sports boxes by location, sport, price and rating. Book instantly online." />
+                <meta name="twitter:title" content="Browse Sports Boxes & Cricket Turfs - BoxNplay" />
+                <meta name="twitter:description" content="Browse cricket, football, badminton, and other sports boxes by location, sport, price, and rating. Book instantly online on BoxNplay." />
             </Helmet>
             <div className="mx-auto max-w-7xl px-4 py-8">
                 <header className="flex flex-wrap items-end justify-between gap-4">

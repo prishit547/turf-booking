@@ -64,7 +64,7 @@ export function SiteFooter() {
               </Link>
             </li>
             <li>support@bookmybox.app</li>
-            <li>+91 80 4567 1234</li>
+            <li>+91 98253 27612</li>
           </ul>
         </div>
       </div>

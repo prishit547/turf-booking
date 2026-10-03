@@ -63,16 +63,17 @@ const Home = () => {
   return (
     <div className="min-h-screen">
       <Helmet>
-        <title>BoxNplay - Book Sports Boxes by the Hour</title>
-        <meta name="description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
-        <link rel="canonical" href={`${window.location.origin}/`} />
-        <meta property="og:title" content="BoxNplay - Book Sports Boxes by the Hour" />
-        <meta property="og:description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
-        <meta property="og:url" content={`${window.location.origin}/`} />
-        <meta property="og:image" content={`${window.location.origin}${heroBanner}`} />
+        <title>BoxNplay - Book Sports Boxes & Cricket Turfs by the Hour</title>
+        <meta name="description" content="Find and book cricket, football, badminton, and other sports boxes near you on BoxNplay. Live availability, instant confirmation, no phone calls." />
+        <link rel="canonical" href="https://boxnplay.com/" />
+        <meta property="og:title" content="BoxNplay - Book Sports Boxes & Cricket Turfs by the Hour" />
+        <meta property="og:description" content="Find and book cricket, football, badminton, and other sports boxes near you on BoxNplay. Live availability, instant confirmation, no phone calls." />
+        <meta property="og:url" content="https://boxnplay.com/" />
+        <meta property="og:image" content={`https://boxnplay.com${heroBanner}`} />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="BoxNplay - Book Sports Boxes by the Hour" />
-        <meta name="twitter:description" content="Find and book cricket, football, badminton and other sports boxes near you. Live availability, instant confirmation, no phone calls." />
+        <meta name="twitter:title" content="BoxNplay - Book Sports Boxes & Cricket Turfs by the Hour" />
+        <meta name="twitter:description" content="Find and book cricket, football, badminton, and other sports boxes near you on BoxNplay. Live availability, instant confirmation, no phone calls." />
+        <meta name="twitter:image" content={`https://boxnplay.com${heroBanner}`} />
       </Helmet>
       {/* Hero */}
       <section ref={heroRef} className="relative overflow-hidden">

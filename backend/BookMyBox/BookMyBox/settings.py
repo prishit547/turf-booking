@@ -44,7 +44,7 @@ SECRET_KEY = env('SECRET_KEY', required=True)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = env('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = env('ALLOWED_HOSTS', 'localhost,127.0.0.1,boxnplay.com,www.boxnplay.com,api.boxnplay.com').split(',')
 
 # Lightweight guard against accidentally deploying with DEBUG=True: warn (not
 # hard-crash, so local dev workflows aren't disrupted) if DEBUG is on and
@@ -322,7 +322,7 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in env('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
+    for origin in env('CORS_ALLOWED_ORIGINS', 'https://boxnplay.com,https://www.boxnplay.com,http://localhost:5173,http://127.0.0.1:5173').split(',')
     if origin.strip()
 ]
 
@@ -334,7 +334,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
-    for origin in env('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,https://*.trycloudflare.com').split(',')
+    for origin in env('CSRF_TRUSTED_ORIGINS', 'https://boxnplay.com,https://www.boxnplay.com,https://api.boxnplay.com,http://localhost:5173,http://127.0.0.1:5173,https://*.trycloudflare.com').split(',')
     if origin.strip()
 ]
 

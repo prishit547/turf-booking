@@ -21,6 +21,7 @@ from BookMyBox.rate_limit import check_rate_limit
 from BookMyBox.pagination import StandardResultsPagination
 from BookMyBox.tasks import send_email_task
 from . import broadcasting, reservation, services
+from .email_services import send_owner_booking_notification
 from .filters import AdminBookingFilter
 from .models import Booking, BookingInvite, Coupon, WaitlistEntry
 from .permissions import IsCustomerUser
@@ -104,6 +105,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             f"{request.user.full_name or request.user.email} booked {booking.box.name} on "
             f"{booking.date} at {booking.start_time}.",
         )
+        send_owner_booking_notification(booking)
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -153,6 +155,9 @@ class BookingViewSet(viewsets.ModelViewSet):
                 f"{request.user.full_name or request.user.email} booked {box.name} weekly — "
                 f"{len(created)} of {weeks} weeks confirmed starting {base_date}.",
             )
+            first_booking = Booking.objects.filter(recurring_group_id=group_id).order_by('date').first()
+            if first_booking:
+                send_owner_booking_notification(first_booking)
 
         return Response(
             {'created': created, 'failed': failed, 'group_id': str(group_id)},
@@ -537,6 +542,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             f"{request.user.full_name or request.user.email} booked {booking.box.name} on "
             f"{booking.date} at {booking.start_time}.",
         )
+        send_owner_booking_notification(booking)
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
